@@ -160,11 +160,23 @@ namespace FigForge
 
         void ManifestPicker()
         {
+            // Import straight from a FigForge export .zip — no manual unzip.
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Import a .zip…", GUILayout.Height(22)))
+                    ImportZip();
+                if (_manifestPaths.Count > 0 &&
+                    GUILayout.Button("Reveal folder", EditorStyles.miniButton, GUILayout.Width(96)))
+                    EditorUtility.RevealInFinder(_manifestPaths[_selected]);
+            }
+
             if (_manifestPaths.Count == 0)
             {
-                EditorGUILayout.HelpBox("No FigForge manifest found under Assets/. Unzip an export here, or use the MCP 'export_unity' tool, then press Rescan.", MessageType.Info);
+                EditorGUILayout.HelpBox("Import a FigForge export .zip above, drop an extracted folder under Assets/, or use the MCP 'export_unity' tool — then press Rescan.", MessageType.Info);
+                Divider();
                 return;
             }
+
             EditorGUI.BeginChangeCheck();
             _selected = EditorGUILayout.Popup("Manifest", _selected,
                 _manifestPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / manifest.json").ToArray());
@@ -175,6 +187,20 @@ namespace FigForge
                     $"{_manifest.screen?.name}  ·  {_manifest.elements.Count} elements  ·  {_manifest.assets.Count} sprites  ·  scale {_manifest.screen?.exportScale}×",
                     EditorStyles.miniLabel);
             Divider();
+        }
+
+        void ImportZip()
+        {
+            var zip = EditorUtility.OpenFilePanel("Select a FigForge export (.zip)", "", "zip");
+            if (string.IsNullOrEmpty(zip)) return;
+
+            var dest = $"Assets/FigForge/Imports/{SafeName(Path.GetFileNameWithoutExtension(zip))}";
+            var manifestPath = ZipImporter.ExtractToAssets(zip, dest);
+            if (string.IsNullOrEmpty(manifestPath)) return;
+
+            RefreshManifests();
+            var idx = _manifestPaths.IndexOf(manifestPath);
+            if (idx >= 0) { _selected = idx; LoadSelected(); }
         }
 
         void CanvasSection()
