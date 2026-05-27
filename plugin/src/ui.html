@@ -75,6 +75,13 @@
   }
   .icon-btn:hover { color: var(--text); background: var(--bg-hover); }
 
+  /* minimized: collapse to a slim status bar — keep only logo, MCP dot, restore */
+  body.minimized main,
+  body.minimized #sizeSeg,
+  body.minimized #version,
+  body.minimized #mcpLabel { display: none; }
+  body.minimized header { border-bottom: none; }
+
   main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   .panel { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 

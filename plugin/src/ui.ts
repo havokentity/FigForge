@@ -21,18 +21,24 @@ let selectedId: string | null = null;
 // ---------------------------------------------------------------------------
 // Header chrome
 // ---------------------------------------------------------------------------
+let lastPreset = 'M';
 document.querySelectorAll('#sizeSeg button').forEach((b) =>
   b.addEventListener('click', () => {
     document.querySelectorAll('#sizeSeg button').forEach((x) => x.classList.remove('active'));
     b.classList.add('active');
-    post({ type: 'resize-ui', preset: (b as HTMLElement).dataset.size });
+    lastPreset = (b as HTMLElement).dataset.size!;
+    post({ type: 'resize-ui', preset: lastPreset });
   })
 );
 
 let minimized = false;
-$('#minBtn').addEventListener('click', () => {
+const minBtn = $('#minBtn');
+minBtn.addEventListener('click', () => {
   minimized = !minimized;
-  post({ type: 'resize-ui', preset: minimized ? 'mini' : 'M' });
+  document.body.classList.toggle('minimized', minimized);
+  minBtn.textContent = minimized ? '⤢' : '—';
+  minBtn.title = minimized ? 'Restore' : 'Minimize';
+  post({ type: 'resize-ui', preset: minimized ? 'mini' : lastPreset });
 });
 
 $('#reloadBtn').addEventListener('click', () => post({ type: 'reload' }));
