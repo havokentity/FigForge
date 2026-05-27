@@ -95,6 +95,13 @@ importer reads. Change one side, change the other. Everything else is detail.
 Plus, in the plugin itself: exclude layers, merge a container to one PNG,
 force-rasterize text, search the tree, and live-preview any node.
 
+> [!TIP]
+> **Two Unity backends.** The importer can build classic **uGUI** (GameObjects +
+> `RectTransform`/`Image`/TMP) *or* **UI Toolkit** — a generated `.uxml` + `.uss`
+> (absolute/stretch layout, native borders & rounded corners, baked gradients,
+> image backgrounds, `<Button>` for canonical layers, optional in-scene
+> `UIDocument`). Flip it with the **UI backend** dropdown.
+
 ---
 
 ## ✦ What happens to a frame

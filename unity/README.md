@@ -17,7 +17,14 @@ Dependencies (auto-resolved): uGUI, TextMeshPro, Newtonsoft JSON, 2D Sprite.
    MCP `export_unity` tool, then **Rescan**.
 2. Pick the manifest, configure, **Build**.
 
-## What it builds
+## Backends
+
+Pick one with the **UI backend** dropdown:
+
+- **uGUI** — GameObjects with `RectTransform` + `Image`/`TextMeshProUGUI` under a `Canvas`.
+- **UI Toolkit** — a generated `.uxml` + `.uss` (absolute/stretch layout, native border/rounded corners, baked gradients, image backgrounds, `<Button>` for canonical layers). Optionally drops a `UIDocument` + `PanelSettings` into the scene; multi-page pages live under a `UIScreenManager`.
+
+## What it builds (uGUI)
 
 - Constraint-driven `RectTransform` anchors (stretch / pin / proportional), not everything centered.
 - Sprite images, **solid + gradient fills**, **real stroke borders**, **rotation**, and procedural **rounded panels** for fill-only rounded containers.
