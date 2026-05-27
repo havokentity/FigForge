@@ -109,7 +109,7 @@ Register it with your MCP client (run it from your Unity project root so
 ### 3. Unity importer
 
 - **Git URL:** Package Manager → **Add package from git URL…** →
-  `https://github.com/<owner>/<repo>.git?path=unity`
+  `https://github.com/havokentity/FigForge.git?path=unity`
 - **Tarball:** Package Manager → **Add package from tarball…** →
   `figforge-unity-importer-<ver>.tgz` from a release.
 - **From disk:** **Add package from disk…** → `unity/package.json`.
