@@ -1,100 +1,139 @@
-# FigForge
+<div align="center">
 
-> Draw it in Figma. Forge it into Unity uGUI — by hand-off or by AI.
+# ◆ &nbsp;F I G F O R G E
+
+### Draw it in Figma. Forge it into Unity uGUI — by hand-off or by AI.
+
+<br/>
+
+[![release](https://img.shields.io/github/v/release/havokentity/FigForge?style=for-the-badge&color=7c5cff&label=release)](https://github.com/havokentity/FigForge/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/havokentity/FigForge/ci.yml?branch=main&style=for-the-badge&label=build)](https://github.com/havokentity/FigForge/actions/workflows/ci.yml)
+[![last commit](https://img.shields.io/github/last-commit/havokentity/FigForge?style=for-the-badge&color=444)](https://github.com/havokentity/FigForge/commits/main)
+[![license](https://img.shields.io/github/license/havokentity/FigForge?style=for-the-badge&color=blue)](LICENSE)
+
+![Unity](https://img.shields.io/badge/Unity-2022.3%2B-000?style=for-the-badge&logo=unity)
+![Figma](https://img.shields.io/badge/Figma-plugin-F24E1E?style=for-the-badge&logo=figma&logoColor=white)
+![Node](https://img.shields.io/badge/Node-%E2%89%A5%2020-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
+![MCP](https://img.shields.io/badge/MCP-compatible-8B5CF6?style=for-the-badge)
+
+**[Use it](#-if-you-just-want-to-use-it)** · **[How it works](#-what-happens-to-a-frame)** · **[Install](#-setting-it-up-properly)** · **[Canonical UI](#-the-canonical-trick)** · **[AI bridge](#-handing-the-wheel-to-an-agent)** · **[Troubleshoot](#-when-it-fights-you)**
+
+</div>
+
+---
 
 Most Figma-to-Unity tools hand you a pile of flat images. FigForge keeps the
 *structure*: a button stays anchored like a button, a stretched bar stays
-stretched, a rounded panel keeps its corners and its colour. You export a frame,
-and on the Unity side it comes back as a real, responsive uGUI hierarchy you'd
-have been happy to build by hand — only you didn't.
+stretched, a rounded panel keeps its corners **and** its colour. You export a
+frame, and on the Unity side it comes back as a real, responsive uGUI hierarchy
+you'd have been happy to build by hand — only you didn't.
 
 It comes in three parts that all speak one file format, so any piece is
 swappable and nothing is magic.
 
----
-
-## If you just want to use it
-
-```text
-1.  Build/install the Figma plugin  →  open it in Figma Desktop
-2.  Select a frame  →  Export for Unity  →  a .zip drops
-3.  Unzip under Assets/  →  Window ▸ FigForge ▸ Importer ▸ Build
-```
-
-That's the whole loop. The AI bridge (part three) is optional sugar for when you
-want an agent to skip the zip and write straight into your project. Detailed
-setup is [further down](#setting-it-up-properly).
+> [!TIP]
+> ### ⚡ If you just want to use it
+> ```text
+> 1.  Build/install the Figma plugin   →   open it in Figma Desktop
+> 2.  Select a frame  →  Export for Unity   →   a .zip drops
+> 3.  Unzip under Assets/   →   Window ▸ FigForge ▸ Importer ▸ Build
+> ```
+> That's the whole loop. The AI bridge is optional sugar for when you want an
+> agent to skip the zip and write straight into your project.
 
 ---
 
-## The three parts, and the one file
+## ⬡ The three parts, and the one file
 
 FigForge is deliberately not a monolith:
 
-**`plugin/` — the Figma side** *(TypeScript, bundled with esbuild)*
-Reads the selected frame, turns Figma constraints into Unity anchors, decides
-what has to become a PNG versus what can be rebuilt structurally, and emits a
-`manifest.json` plus its assets.
+```mermaid
+flowchart TD
+    subgraph FG["🎨  Figma Desktop"]
+        P["plugin/ &nbsp;·&nbsp; TypeScript<br/>traverse → map → rasterize → emit"]
+    end
+    subgraph SV["🖥  your machine"]
+        S["server/ &nbsp;·&nbsp; MCP + WebSocket bridge"]
+    end
+    subgraph UN["🧩  Unity Editor"]
+        I["unity/ &nbsp;·&nbsp; C# importer<br/>rebuild the uGUI hierarchy"]
+    end
+    AI(["🤖 AI agent<br/>Claude · Cursor"])
 
-**`server/` — the bridge** *(TypeScript, MCP + WebSocket)*
-An MCP server that lets an agent read the Figma file and call `export_unity` to
-drop a manifest straight onto disk. Several MCP clients can run at once; they
-elect one leader to hold the single plugin socket and the rest proxy through it.
+    P -- "manifest.json + PNGs (.zip)" --> I
+    AI <-- "MCP / stdio" --> S
+    S <-- "WebSocket :1994" --> P
+    S -. "export_unity writes to disk" .-> I
+```
 
-**`unity/` — the importer** *(C#, Editor + Runtime assemblies)*
-Reads the manifest and rebuilds the hierarchy: anchored `RectTransform`s,
-`Image`s, `TextMeshProUGUI`, the lot.
+| Part | Stack | Job |
+|:--|:--|:--|
+| **`plugin/`** | TypeScript · esbuild | Read the frame, turn constraints into anchors, decide pixels-vs-structure, emit the manifest + assets. |
+| **`server/`** | TypeScript · MCP · WebSocket | Let an agent read the file and `export_unity` to disk. Leader/follower election shares one plugin socket across clients. |
+| **`unity/`** | C# · Editor + Runtime | Rebuild the anchored hierarchy from the manifest + sprites. |
 
 The glue is **the manifest** — one JSON contract the plugin writes and the
 importer reads. Change one side, change the other. Everything else is detail.
 
 ---
 
-## What happens to a frame
+## ✦ What it actually gets right
 
-Follow a single frame through the machine; every feature shows up along the way.
+| In Figma | …becomes in Unity |
+|:--|:--|
+| 📐 Layout constraints (stretch / pin / centre / scale) | real `RectTransform` anchors, **per axis** — responsive, not centred-and-fixed |
+| 🎨 Solid fill | `Image` tint (rounded → procedural 9-sliced sprite) |
+| 🌈 Gradient fill | baked gradient sprite — not flattened to one colour |
+| ▭ Stroke (width + colour) | 9-sliced outline, rounded-corner aware |
+| ↻ Rotation | preserved on the `RectTransform` |
+| ✎ Vector / icon | rasterized PNG, hash-deduped |
+| 🅣 Text | `TextMeshProUGUI` + per-family/style font mapping |
+| 🔘 `Btn_<name>_<Ref>` layer | a real **canonical prefab** instance |
+| 🗂 Several frames | one navigable scene — `BaseScreen` pages under a `ScreenManager` |
+| 👻 Empty/placeholder paint, failed export | falls back to the fill colour — **no junk PNG, no white box** |
 
-**0 · You curate it.** In the plugin you can exclude layers, merge a container
-into one flat PNG, force a text layer to rasterize, search the tree, and preview
-any node live before committing.
-
-**1 · It gets walked.** A depth-first pass classifies every node. Placeholder
-and fully-transparent paints (the empty image fill someone left in the design)
-are recognised as *nothing* — so they never bake out as junk PNGs or stray white
-boxes.
-
-**2 · Layout becomes anchors.** Each layer's Figma constraints map to real Unity
-anchors — stretch, pin, centre, or proportional, per axis. Nothing is dumped at
-a fixed centre point, so the result actually responds to canvas size. Rotation
-rides along too.
-
-**3 · Pixels vs. structure gets decided.** Vectors and icon groups rasterize
-(hash-deduped, so identical art is stored once). Solid *and gradient* fills are
-captured as data — gradients bake to a sprite rather than collapsing to one
-colour. Strokes carry their width and colour and come back as 9-sliced outlines,
-rounded-corner aware. A rounded panel with only a fill becomes a procedural
-rounded sprite — corners and colour intact. Text stays `TextMeshProUGUI`. If an
-export ever fails, that element falls back to its fill colour instead of a
-missing-sprite white box.
-
-**4 · It's written out.** `manifest.json` + the PNGs, either as a downloadable
-zip or — over the bridge — written directly into your Unity project.
-
-**5 · Unity rebuilds it.** The importer stitches the anchored hierarchy under a
-`Canvas`, maps each font family/style to a `TMP_FontAsset`, swaps any
-canonically-named layer for a real prefab instance, and parents the whole frame
-under a `ScreenManager` as one `BaseScreen` — so importing several frames gives
-you a single navigable, multi-page scene rather than a heap of disconnected
-canvases.
+Plus, in the plugin itself: exclude layers, merge a container to one PNG,
+force-rasterize text, search the tree, and live-preview any node.
 
 ---
 
-## Setting it up properly
+## ✦ What happens to a frame
 
+Follow a single frame through the machine; every capability shows up along the way.
+
+> **0 · You curate it.** Exclude layers, merge a container into one flat PNG,
+> force a text layer to rasterize, search, and preview any node before committing.
+>
+> **1 · It gets walked.** A depth-first pass classifies every node. Placeholder
+> and fully-transparent paints are recognised as *nothing* — so they never bake
+> out as junk PNGs or stray white boxes.
+>
+> **2 · Layout becomes anchors.** Each layer's Figma constraints map to real
+> Unity anchors — stretch, pin, centre, or proportional, per axis. Rotation rides along.
+>
+> **3 · Pixels vs. structure gets decided.** Vectors and icon groups rasterize
+> (deduped). Solid *and gradient* fills are captured as data; strokes carry width
+> and colour; rounded fill-only panels become procedural rounded sprites; text
+> stays `TextMeshProUGUI`. A failed export falls back to its fill colour.
+>
+> **4 · It's written out.** `manifest.json` + PNGs — a downloadable zip, or, over
+> the bridge, straight into your Unity project.
+>
+> **5 · Unity rebuilds it.** Anchored hierarchy under a `Canvas`, fonts mapped to
+> `TMP_FontAsset`s, canonical layers swapped for prefab instances, and each frame
+> parented under a `ScreenManager` as one `BaseScreen` — many frames → one
+> navigable, multi-page scene.
+
+---
+
+## ✦ Setting it up properly
+
+> [!NOTE]
 > Prefer not to build anything? Every piece ships prebuilt on the
-> [latest release](../../releases/latest).
+> **[latest release](../../releases/latest)**.
 
-**The plugin**
+<details open>
+<summary><b>① &nbsp;The Figma plugin</b></summary>
 
 ```bash
 cd plugin && npm install && npm run build      # → dist/main.js + dist/ui.html
@@ -102,10 +141,11 @@ cd plugin && npm install && npm run build      # → dist/main.js + dist/ui.html
 
 Then in Figma **Desktop** (it needs `exportAsync`, which the browser lacks):
 *Plugins → Development → Import plugin from manifest…* → `plugin/manifest.json`.
-From a release instead: unzip `figforge-plugin-<ver>.zip` and import its
-`manifest.json`.
+From a release instead: unzip `figforge-plugin-<ver>.zip` and import its `manifest.json`.
+</details>
 
-**The bridge** *(only if you want the AI workflow)*
+<details>
+<summary><b>② &nbsp;The bridge server</b> &nbsp;<i>(only for the AI workflow)</i></summary>
 
 ```bash
 cd server && npm install && npm run build      # → dist/index.js
@@ -126,10 +166,11 @@ so `export_unity` writes there (and refuses to write anywhere else):
 }
 ```
 
-From a release instead: unzip `figforge-bridge-<ver>.zip`, then
-`npm install --omit=dev`.
+From a release instead: unzip `figforge-bridge-<ver>.zip`, then `npm install --omit=dev`.
+</details>
 
-**The Unity importer** — pick whichever fits your project:
+<details>
+<summary><b>③ &nbsp;The Unity importer</b></summary>
 
 ```text
 Package Manager ▸ Add package from git URL…
@@ -140,15 +181,20 @@ Package Manager ▸ Add package from disk…
     unity/package.json
 ```
 
-Pin the git URL to a tag (`#v1.0.1`) so upgrades are deliberate. Deps — uGUI,
+Pin the git URL to a tag (`#v1.0.1`) so upgrades stay deliberate. Deps — uGUI,
 TextMeshPro, Newtonsoft JSON, 2D Sprite — resolve automatically.
+</details>
+
+> [!IMPORTANT]
+> Install the importer from a tag that ships `.meta` files (`v1.0.1`+). Unity
+> ignores meta-less assets inside immutable package folders, so an earlier build
+> would silently produce no `FigForge` assembly.
 
 ---
 
-## The canonical trick
+## ✦ The canonical trick
 
-Here's the part that makes FigForge more than an importer. Name a Figma layer
-like this:
+The part that makes FigForge more than an importer. Name a Figma layer like this:
 
 ```text
 Btn_<instanceName>_<canonicalRef>          Btn_Save_PrimaryButton
@@ -163,56 +209,64 @@ up `PrimaryButton` in a **Canonical Library** asset you provide
 (*Create ▸ FigForge ▸ Canonical Library*), instantiates your real button prefab,
 and stamps the label onto it. Define a control once; reference it by name from
 every screen; restyle the prefab and every page updates. Miss a mapping and you
-get a labelled placeholder plus a warning — never a broken build. Full walkthrough:
-[`docs/canonical-elements.md`](docs/canonical-elements.md).
+get a labelled placeholder plus a warning — never a broken build.
+Full walkthrough → [`docs/canonical-elements.md`](docs/canonical-elements.md).
 
 ---
 
-## Handing the wheel to an agent
+## ✦ Handing the wheel to an agent
 
-With the bridge running, an MCP client can drive the whole thing. Tools on offer:
+With the bridge running, an MCP client can drive the whole thing:
 
-`get_metadata` · `get_document` · `get_selection` · `get_node` ·
-`get_design_context` · `get_screenshot` · `save_screenshots` · `export_unity`
+| Tool | Does |
+|:--|:--|
+| `get_metadata` | file name, pages, current page |
+| `get_document` / `get_selection` / `get_node` | read the tree, the selection, or one node |
+| `get_design_context` | a summarized design tree |
+| `get_screenshot` / `save_screenshots` | render node(s) to PNG (returned, or written to disk) |
+| **`export_unity`** | run the real exporter and write `manifest.json` + PNGs to a folder |
 
-`export_unity` is the headline: it runs the same exporter the UI button uses and
-writes `manifest.json` + PNGs to a folder you name (sandboxed to the workspace
-root). The plugin's **Bridge** tab connects out to `ws://127.0.0.1:1994/ws`.
-Wiring and the leader/follower design live in
+`export_unity` is sandboxed to the workspace root. The plugin's **Bridge** tab
+dials out to `ws://127.0.0.1:1994/ws`; the leader/follower design lives in
 [`docs/architecture.md`](docs/architecture.md).
 
----
-
-## The manifest, in one breath
-
-One JSON file describes the screen, every element (its rect, the computed Unity
-transform, components, style, text, any sprite or canonical reference, and its
-children), the asset list, and the fonts used. The plugin writes it; the C#
-`ManifestData` mirrors it field-for-field. The full schema is in
-[`docs/plugin-guide.md`](docs/plugin-guide.md).
+> [!NOTE]
+> The plugin is the WebSocket **client** — it can't *be* the server (Figma's
+> sandbox forbids it). Run `server/` separately; that process is the bridge.
 
 ---
 
-## When it fights you
+## ✦ The manifest, in one breath
 
-- **Plugin says "Select a frame…"** — select a Frame, Component, or Group, not a lone shape.
-- **Export button greyed out** — nothing valid is selected.
-- **Bridge dot stays red** — the server isn't up, or port `1994` is taken; start it and hit **Connect**.
-- **Wrong fonts in Unity** — map each `family|style` to a `TMP_FontAsset` in the importer's Fonts section.
-- **A canonical layer came in as a purple placeholder** — assign a Canonical Library and map that ref name to a prefab, then rebuild.
-- **A rounded panel rendered as a sharp/white box** — give the layer a real fill or stroke; fill-only rounded panels are drawn procedurally.
-- **`using FigForge` won't resolve after a git install** — make sure you're on a tag that ships `.meta` files (`v1.0.1`+); earlier builds didn't and Unity ignores meta-less package assets.
+One JSON file describes the screen, every element (rect, computed Unity
+transform, components, style, text, any sprite or canonical reference, children),
+the asset list, and the fonts used. The plugin writes it; the C# `ManifestData`
+mirrors it field-for-field. Full schema → [`docs/plugin-guide.md`](docs/plugin-guide.md).
 
 ---
 
-## On the bench (not built yet)
+## ✦ When it fights you
 
-A 2D `SpriteRenderer` output mode, dashed-stroke fidelity, and more canonical
-kinds beyond buttons (inputs, toggles). PRs welcome.
+| Symptom | Fix |
+|:--|:--|
+| Plugin says *"Select a frame…"* | Select a Frame, Component, or Group — not a lone shape. |
+| Export button greyed out | Nothing valid is selected. |
+| Bridge dot stays red | Server isn't up, or port `1994` is taken — start it and hit **Connect**. |
+| Wrong fonts in Unity | Map each `family\|style` to a `TMP_FontAsset` in the importer's Fonts section. |
+| Canonical layer came in as a purple placeholder | Assign a Canonical Library and map that ref to a prefab, then rebuild. |
+| Sharp/white box where a panel should be rounded | Give the layer a real fill or stroke; fill-only rounded panels are drawn procedurally. |
+| `using FigForge` won't resolve after a git install | Use a tag that ships `.meta` files (`v1.0.1`+). |
 
 ---
 
-## Where things live
+## ✦ On the bench (not built yet)
+
+A 2D `SpriteRenderer` output mode · dashed-stroke fidelity · more canonical kinds
+beyond buttons (inputs, toggles). PRs welcome.
+
+---
+
+## ✦ Where things live
 
 ```text
 plugin/   Figma plugin          — TypeScript / esbuild
@@ -221,5 +275,10 @@ unity/    Unity importer (UPM)  — C#, Editor + Runtime
 docs/     Guides
 ```
 
-**Needs:** Unity 2022.3+ (tested through 6000.x) · Node ≥ 20 · TextMeshPro ·
-Newtonsoft JSON.  **Licence:** MIT.
+<div align="center">
+
+<br/>
+
+**Needs** &nbsp; Unity 2022.3+ (tested through 6000.x) · Node ≥ 20 · TextMeshPro · Newtonsoft JSON &nbsp;&nbsp;•&nbsp;&nbsp; **MIT** licensed
+
+</div>
