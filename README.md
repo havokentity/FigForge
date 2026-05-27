@@ -36,7 +36,7 @@ swappable and nothing is magic.
 > ```text
 > 1.  Build/install the Figma plugin   →   open it in Figma Desktop
 > 2.  Select a frame  →  Export for Unity   →   a .zip drops
-> 3.  Unzip under Assets/   →   Window ▸ FigForge ▸ Importer ▸ Build
+> 3.  Window ▸ FigForge ▸ Importer  →  Import a .zip…  →  Build
 > ```
 > That's the whole loop. The AI bridge is optional sugar for when you want an
 > agent to skip the zip and write straight into your project.

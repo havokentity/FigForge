@@ -11,8 +11,11 @@ Dependencies (auto-resolved): uGUI, TextMeshPro, Newtonsoft JSON, 2D Sprite.
 
 ## Use
 
-1. Unzip a FigForge export anywhere under `Assets/` (or write one with the MCP `export_unity` tool).
-2. **Window ▸ FigForge ▸ Importer**, pick the manifest, configure, **Build**.
+1. **Window ▸ FigForge ▸ Importer** → **Import a .zip…** and pick a FigForge export
+   (it extracts into `Assets/FigForge/Imports/<name>/` for you).
+   *Or* drop an already-extracted folder under `Assets/`, or write one with the
+   MCP `export_unity` tool, then **Rescan**.
+2. Pick the manifest, configure, **Build**.
 
 ## What it builds
 
