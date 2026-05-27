@@ -77,24 +77,23 @@ Three pieces, one manifest contract:
 
 ## Quick start
 
+> **Fastest path:** grab prebuilt artifacts from the [latest release](../../releases/latest)
+> — no `npm` build required. Or build from source with the steps below.
+
 ### 1. Plugin
 
-```bash
-cd plugin
-npm install
-npm run build          # → dist/main.js + dist/ui.html
-```
-
-In Figma Desktop: **Plugins → Development → Import plugin from manifest…** and
-select `plugin/manifest.json`.
+- **From a release:** download `figforge-plugin-<ver>.zip`, unzip it, then in
+  Figma Desktop: **Plugins → Development → Import plugin from manifest…** → `manifest.json`.
+- **From source:**
+  ```bash
+  cd plugin && npm install && npm run build   # → dist/main.js + dist/ui.html
+  ```
+  then import `plugin/manifest.json` the same way.
 
 ### 2. Bridge server (optional, for AI workflows)
 
-```bash
-cd server
-npm install
-npm run build          # → dist/index.js
-```
+- **From a release:** download `figforge-bridge-<ver>.zip`, unzip, `npm install --omit=dev`.
+- **From source:** `cd server && npm install && npm run build`.
 
 Register it with your MCP client (run it from your Unity project root so
 `export_unity` writes there):
@@ -109,8 +108,11 @@ Register it with your MCP client (run it from your Unity project root so
 
 ### 3. Unity importer
 
-Package Manager → **Add package from disk…** → `unity/package.json`
-(or copy `unity/` into your project's `Packages/`).
+- **Git URL:** Package Manager → **Add package from git URL…** →
+  `https://github.com/<owner>/<repo>.git?path=unity`
+- **Tarball:** Package Manager → **Add package from tarball…** →
+  `figforge-unity-importer-<ver>.tgz` from a release.
+- **From disk:** **Add package from disk…** → `unity/package.json`.
 
 ### 4. Export & build
 

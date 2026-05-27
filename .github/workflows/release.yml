@@ -1,0 +1,92 @@
+name: Release
+
+# Tag a commit `vX.Y.Z` and push the tag to cut a release with ready-to-install
+# artifacts:
+#   • figforge-plugin-<tag>.zip            → import straight into Figma (no build)
+#   • figforge-bridge-<tag>.zip            → MCP server (unzip, npm install --omit=dev)
+#   • figforge-unity-importer-<tag>.tgz    → Unity "Add package from tarball"
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}" >> "$GITHUB_OUTPUT"
+
+      - name: Build plugin
+        run: |
+          cd plugin
+          npm ci
+          npm run build
+
+      - name: Build server
+        run: |
+          cd server
+          npm ci
+          npm run build
+
+      - name: Package artifacts
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+
+          # --- Figma plugin: manifest + built bundle, importable as-is ---
+          mkdir -p stage/figforge-plugin
+          cp plugin/manifest.json stage/figforge-plugin/
+          cp -r plugin/dist stage/figforge-plugin/dist
+          (cd stage && zip -qr "../out/figforge-plugin-${VERSION}.zip" figforge-plugin)
+
+          # --- MCP bridge server: compiled dist + manifest for `npm install` ---
+          mkdir -p stage/figforge-bridge
+          cp -r server/dist stage/figforge-bridge/dist
+          cp server/package.json server/package-lock.json stage/figforge-bridge/
+          (cd stage && zip -qr "../out/figforge-bridge-${VERSION}.zip" figforge-bridge)
+
+          # --- Unity UPM package tarball (npm pack → package/ root) ---
+          (cd unity && npm pack --silent)
+          mv unity/*.tgz "out/figforge-unity-importer-${VERSION}.tgz"
+
+          ls -la out
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FigForge ${{ steps.ver.outputs.version }}
+          tag_name: ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: |
+            out/figforge-plugin-*.zip
+            out/figforge-bridge-*.zip
+            out/figforge-unity-importer-*.tgz
+          body: |
+            ## Install
+
+            **Figma plugin** — download `figforge-plugin-${{ steps.ver.outputs.version }}.zip`, unzip,
+            then in Figma Desktop: *Plugins → Development → Import plugin from manifest…* → `manifest.json`.
+
+            **Unity importer** — Package Manager → *Add package from tarball…* →
+            `figforge-unity-importer-${{ steps.ver.outputs.version }}.tgz`
+            (or *Add from git URL*: `https://github.com/${{ github.repository }}.git?path=unity`).
+
+            **MCP bridge** (optional) — download `figforge-bridge-${{ steps.ver.outputs.version }}.zip`,
+            unzip, `npm install --omit=dev`, then point your MCP client at `dist/index.js`.
