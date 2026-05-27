@@ -17,8 +17,13 @@ async function main() {
   // stderr only — stdout is reserved for the MCP stdio transport.
   console.error(`[FigForge] bridge ${VERSION} started as ${role}`);
 
+  // export_unity / save_screenshots write under this root (and refuse to escape
+  // it). Defaults to the launch cwd; set FIGFORGE_WORKSPACE to pin it explicitly
+  // (e.g. to a Unity project root) regardless of how the MCP client launches us.
+  const workspace = process.env.FIGFORGE_WORKSPACE || process.cwd();
   const server = new McpServer({ name: 'figforge-bridge', version: VERSION });
-  registerTools(server, node, process.cwd());
+  registerTools(server, node, workspace);
+  console.error(`[FigForge] workspace root: ${workspace}`);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
