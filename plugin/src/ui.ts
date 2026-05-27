@@ -19,18 +19,8 @@ let currentTree: TreeNode | null = null;
 let selectedId: string | null = null;
 
 // ---------------------------------------------------------------------------
-// Tabs / header chrome
+// Header chrome
 // ---------------------------------------------------------------------------
-document.querySelectorAll('.tabs button').forEach((b) =>
-  b.addEventListener('click', () => {
-    const tab = (b as HTMLElement).dataset.tab!;
-    document.querySelectorAll('.tabs button').forEach((x) => x.classList.remove('active'));
-    b.classList.add('active');
-    document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
-    $(`#panel-${tab}`).classList.add('active');
-  })
-);
-
 document.querySelectorAll('#sizeSeg button').forEach((b) =>
   b.addEventListener('click', () => {
     document.querySelectorAll('#sizeSeg button').forEach((x) => x.classList.remove('active'));
@@ -204,37 +194,71 @@ function showProgress(show: boolean) { $('#progress').classList.toggle('show', s
 function setProgress(pct: number) { ($('#progress > div') as HTMLElement).style.width = `${pct}%`; }
 
 // ---------------------------------------------------------------------------
-// MCP bridge WebSocket client
+// MCP bridge — a WebSocket client to the local FigForge bridge server. One
+// start/stop toggle in the header; the dot shows the live connection state.
+// While "on" it auto-reconnects, so it goes green as soon as the server is up.
 // ---------------------------------------------------------------------------
+const BRIDGE_URL = 'ws://127.0.0.1:1994/ws';
 let socket: WebSocket | null = null;
-function bridgeLog(line: string) {
-  const el = $('#bridgeLog');
-  el.textContent += line + '\n';
-  el.scrollTop = el.scrollHeight;
+let wantConnected = false;
+let reconnectTimer: number | null = null;
+
+function bridgeLog(line: string) { console.log('[FigForge MCP]', line); }
+
+type McpState = 'off' | 'connecting' | 'connected';
+function setMcp(state: McpState) {
+  const dot = $('#mcpDot');
+  const ctl = $('#mcpCtl');
+  dot.classList.toggle('on', state === 'connected');
+  dot.classList.toggle('connecting', state === 'connecting');
+  ctl.classList.toggle('connected', state === 'connected');
+  ctl.classList.toggle('connecting', state === 'connecting');
+  $('#mcpLabel').textContent =
+    state === 'connected' ? 'Disconnect' : state === 'connecting' ? 'Connecting…' : 'Connect MCP';
 }
-function setMcp(connected: boolean) {
-  $('#mcpDot').classList.toggle('on', connected);
-  $('#mcpDot').title = `MCP bridge: ${connected ? 'connected' : 'disconnected'}`;
-  ($('#connectBtn') as HTMLButtonElement).textContent = connected ? 'Disconnect' : 'Connect';
+
+function scheduleReconnect() {
+  if (reconnectTimer !== null) return;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    if (wantConnected) connectMcp();
+  }, 2000);
 }
-$('#connectBtn').addEventListener('click', () => {
-  if (socket) { socket.close(); return; }
-  const url = ($('#bridgeUrl') as HTMLInputElement).value;
+
+function connectMcp() {
+  if (socket) return;
+  setMcp('connecting');
   try {
-    socket = new WebSocket(url);
-    bridgeLog(`connecting → ${url}`);
-    socket.onopen = () => { setMcp(true); bridgeLog('connected'); };
-    socket.onclose = () => { setMcp(false); bridgeLog('disconnected'); socket = null; };
+    socket = new WebSocket(BRIDGE_URL);
+    socket.onopen = () => { bridgeLog('connected'); setMcp('connected'); };
+    socket.onclose = () => {
+      socket = null;
+      if (wantConnected) { setMcp('connecting'); scheduleReconnect(); }
+      else setMcp('off');
+    };
     socket.onerror = () => bridgeLog('socket error');
     socket.onmessage = (ev) => {
-      try {
-        const payload = JSON.parse(ev.data);
-        bridgeLog(`← ${payload.type} ${payload.requestId || ''}`);
-        post({ type: 'mcp-request', payload });
-      } catch { bridgeLog('bad message'); }
+      try { post({ type: 'mcp-request', payload: JSON.parse(ev.data) }); }
+      catch { bridgeLog('bad message from server'); }
     };
-  } catch (e) { bridgeLog('failed: ' + String(e)); }
+  } catch (e) {
+    bridgeLog('connect failed: ' + String(e));
+    if (wantConnected) scheduleReconnect();
+  }
+}
+
+function disconnectMcp() {
+  wantConnected = false;
+  if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (socket) { socket.close(); socket = null; }
+  setMcp('off');
+}
+
+$('#mcpCtl').addEventListener('click', () => {
+  if (wantConnected) disconnectMcp();
+  else { wantConnected = true; connectMcp(); }
 });
+setMcp('off');
 
 // ---------------------------------------------------------------------------
 // main → ui

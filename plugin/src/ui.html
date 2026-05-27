@@ -59,24 +59,24 @@
   .seg button.active { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; }
   .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .dot.connecting { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  /* MCP connect/disconnect control (header) */
+  .mcp {
+    display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap;
+    background: var(--bg-tertiary); border: 1px solid transparent;
+    border-radius: var(--radius-sm); padding: 4px 9px; font-size: 10px; color: var(--text-secondary);
+  }
+  .mcp:hover { color: var(--text); background: var(--bg-hover); }
+  .mcp.connected { border-color: var(--ok); color: var(--text); }
+  .mcp.connecting { border-color: var(--warn); }
   .icon-btn {
     border: none; background: var(--bg-tertiary); color: var(--text-secondary);
     width: 24px; height: 24px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
   }
   .icon-btn:hover { color: var(--text); background: var(--bg-hover); }
 
-  /* ---- tabs ---- */
-  .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg); }
-  .tabs button {
-    flex: 1; border: none; background: transparent; color: var(--text-secondary);
-    padding: 9px 0; cursor: pointer; font-size: 11px; font-weight: 600;
-    border-bottom: 2px solid transparent;
-  }
-  .tabs button.active { color: var(--text); border-bottom-color: var(--brand); }
-
   main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-  .panel { flex: 1; overflow: hidden; display: none; flex-direction: column; }
-  .panel.active { display: flex; }
+  .panel { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 
   /* ---- toolbar ---- */
   .toolbar {
@@ -151,19 +151,6 @@
   }
   .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
   .btn-ghost { background: var(--bg-tertiary); color: var(--text); border: none; border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; font-size: 11px; }
-
-  /* ---- bridge panel ---- */
-  .bridge { padding: 12px; overflow: auto; flex: 1; }
-  .bridge h3 { font-size: 11px; margin-bottom: 6px; }
-  .field { display: flex; gap: 6px; margin-bottom: 10px; }
-  .field input { flex: 1; }
-  .toollist { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
-  .tool { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 9px; }
-  .tool b { font-size: 11px; }
-  .tool span { display: block; color: var(--text-secondary); font-size: 10px; margin-top: 2px; }
-  .log { margin-top: 10px; background: #000; border-radius: var(--radius-sm); padding: 8px; height: 120px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #8ee; }
-
-  .hint { color: var(--text-secondary); font-size: 10px; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -177,18 +164,15 @@
       <button data-size="M" class="active">M</button>
       <button data-size="L">L</button>
     </div>
-    <div class="dot" id="mcpDot" title="MCP bridge: disconnected"></div>
+    <div class="mcp" id="mcpCtl" title="Connect to the local FigForge MCP bridge (ws://127.0.0.1:1994)">
+      <span class="dot" id="mcpDot"></span>
+      <span id="mcpLabel">Connect MCP</span>
+    </div>
     <button class="icon-btn" id="minBtn" title="Minimize">—</button>
   </header>
 
-  <div class="tabs">
-    <button data-tab="export" class="active">Export</button>
-    <button data-tab="bridge">Bridge</button>
-  </div>
-
   <main>
-    <!-- ============================= EXPORT ============================= -->
-    <section class="panel active" id="panel-export">
+    <section class="panel" id="panel-export">
       <div class="toolbar">
         <select id="scale" title="Export scale">
           <option value="s:0.5">0.5×</option>
@@ -223,25 +207,6 @@
         <div class="progress" id="progress"><div></div></div>
         <button class="btn-primary" id="exportBtn" disabled>Export for Unity</button>
       </footer>
-    </section>
-
-    <!-- ============================= BRIDGE ============================= -->
-    <section class="panel" id="panel-bridge">
-      <div class="bridge">
-        <h3>MCP Bridge</h3>
-        <p class="hint">Connect to the local FigForge bridge so an AI agent can read this file and export frames directly to your Unity project.</p>
-        <div class="field" style="margin-top:10px;">
-          <input type="text" id="bridgeUrl" value="ws://127.0.0.1:1994/ws" />
-          <button class="btn-ghost" id="connectBtn">Connect</button>
-        </div>
-        <div class="toollist">
-          <div class="tool"><b>get_document / get_selection / get_node</b><span>Read the page tree, current selection, or a node by id.</span></div>
-          <div class="tool"><b>get_metadata / get_design_context</b><span>File + page info, summarized design tree.</span></div>
-          <div class="tool"><b>get_screenshot</b><span>Render node(s) to PNG at a chosen scale.</span></div>
-          <div class="tool"><b>export_unity</b><span>Write manifest.json + PNGs straight to a Unity project folder.</span></div>
-        </div>
-        <div class="log" id="bridgeLog"></div>
-      </div>
     </section>
   </main>
 

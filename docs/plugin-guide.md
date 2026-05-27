@@ -6,9 +6,13 @@ browser). Build with `npm run build` in `plugin/`, then import
 
 ## Window
 
-- **Header** — logo, version, window size presets (S / M / L), MCP status dot, minimize.
-- **Export tab** — toolbar (scale + options), layer tree (left), live preview (right), export button.
-- **Bridge tab** — connect to the MCP bridge, see the available tools and a live log.
+It's a single page — no tabs.
+
+- **Header** — logo, version, window size presets (S / M / L), the **MCP toggle** (a connect/disconnect control with a live status dot: grey = off, amber = connecting, green = connected), and minimize.
+- **Body** — toolbar (scale + options), layer tree (left), live preview (right), and the export button.
+
+Click the MCP control to start/stop the bridge connection; while on, it
+auto-reconnects, so the dot goes green as soon as the bridge server is up.
 
 ## Export options
 

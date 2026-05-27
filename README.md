@@ -226,9 +226,9 @@ With the bridge running, an MCP client can drive the whole thing:
 | `get_screenshot` / `save_screenshots` | render node(s) to PNG (returned, or written to disk) |
 | **`export_unity`** | run the real exporter and write `manifest.json` + PNGs to a folder |
 
-`export_unity` is sandboxed to the workspace root. The plugin's **Bridge** tab
-dials out to `ws://127.0.0.1:1994/ws`; the leader/follower design lives in
-[`docs/architecture.md`](docs/architecture.md).
+`export_unity` is sandboxed to the workspace root. The plugin's header **MCP
+toggle** dials out to `ws://127.0.0.1:1994/ws` (and auto-reconnects while on);
+the leader/follower design lives in [`docs/architecture.md`](docs/architecture.md).
 
 > [!NOTE]
 > The plugin is the WebSocket **client** — it can't *be* the server (Figma's
