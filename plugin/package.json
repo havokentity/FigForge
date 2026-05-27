@@ -1,0 +1,17 @@
+{
+  "name": "figforge",
+  "version": "1.0.0",
+  "description": "FigForge — export Figma frames as Unity uGUI-ready manifests + PNG assets",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.5.4"
+  }
+}

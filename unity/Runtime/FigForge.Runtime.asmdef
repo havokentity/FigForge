@@ -1,0 +1,9 @@
+{
+  "name": "FigForge.Runtime",
+  "rootNamespace": "FigForge",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "autoReferenced": true
+}

@@ -1,0 +1,11 @@
+{
+  "name": "FigForge",
+  "api": "1.0.0",
+  "main": "dist/main.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "WebSocket connection to the local FigForge MCP bridge server (ws://127.0.0.1:1994)."
+  }
+}

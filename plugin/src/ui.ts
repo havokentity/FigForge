@@ -1,0 +1,297 @@
+// =============================================================================
+// FigForge — UI thread (iframe)
+// =============================================================================
+
+import type { ElementConfig, ExportScale, TreeNode } from './types';
+
+declare const JSZip: any;
+
+const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
+function post(msg: Record<string, unknown>) {
+  parent.postMessage({ pluginMessage: msg }, '*');
+}
+
+// ---- per-element config state ----
+const excluded = new Set<string>();
+const merged = new Set<string>();
+const forcedPng = new Set<string>();
+let currentTree: TreeNode | null = null;
+let selectedId: string | null = null;
+
+// ---------------------------------------------------------------------------
+// Tabs / header chrome
+// ---------------------------------------------------------------------------
+document.querySelectorAll('.tabs button').forEach((b) =>
+  b.addEventListener('click', () => {
+    const tab = (b as HTMLElement).dataset.tab!;
+    document.querySelectorAll('.tabs button').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+    $(`#panel-${tab}`).classList.add('active');
+  })
+);
+
+document.querySelectorAll('#sizeSeg button').forEach((b) =>
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#sizeSeg button').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active');
+    post({ type: 'resize-ui', preset: (b as HTMLElement).dataset.size });
+  })
+);
+
+let minimized = false;
+$('#minBtn').addEventListener('click', () => {
+  minimized = !minimized;
+  post({ type: 'resize-ui', preset: minimized ? 'mini' : 'M' });
+});
+
+$('#reloadBtn').addEventListener('click', () => post({ type: 'reload' }));
+
+// option chips
+function wireChip(id: string) {
+  const el = $(`#${id}`);
+  const input = el.querySelector('input') as HTMLInputElement;
+  el.addEventListener('click', (e) => {
+    if (e.target !== input) input.checked = !input.checked;
+    el.classList.toggle('on', input.checked);
+  });
+}
+['optAutoMerge', 'optGradients', 'optRasterStroke'].forEach(wireChip);
+
+// ---------------------------------------------------------------------------
+// Tree rendering
+// ---------------------------------------------------------------------------
+const TYPE_SHORT: Record<string, string> = {
+  FRAME: 'FRM', GROUP: 'GRP', TEXT: 'TXT', VECTOR: 'VEC', INSTANCE: 'INS',
+  COMPONENT: 'CMP', RECTANGLE: 'RECT', ELLIPSE: 'ELL', LINE: 'LN',
+};
+
+function renderTree() {
+  const host = $('#tree');
+  host.innerHTML = '';
+  if (!currentTree) {
+    host.innerHTML = '<div class="empty">Select a frame in Figma.</div>';
+    return;
+  }
+  const query = ($('#search') as HTMLInputElement).value.trim().toLowerCase();
+  const expanded = new Set<string>(); // simple: everything expanded for now
+
+  const walk = (node: TreeNode) => {
+    const match = !query || node.displayName.toLowerCase().includes(query);
+    const childEls = node.children.map(walk).filter(Boolean) as HTMLElement[];
+    if (!match && childEls.length === 0) return null;
+
+    const row = document.createElement('div');
+    row.className = 'row';
+    if (node.id === selectedId) row.classList.add('sel');
+    if (excluded.has(node.id) || !node.visible) row.classList.add('hidden');
+    row.style.paddingLeft = `${8 + node.depth * 12}px`;
+
+    row.innerHTML = `
+      <span class="twirl">${node.children.length ? '▸' : ''}</span>
+      <span class="type-tag">${TYPE_SHORT[node.type] || node.type.slice(0, 3)}</span>
+      <span class="tname">${escapeHtml(node.displayName)}</span>
+      ${node.canonicalRef ? `<span class="canon-tag" title="canonical: ${escapeHtml(node.canonicalRef)}">${escapeHtml(node.canonicalRef)}</span>` : ''}
+    `;
+
+    const eye = miniBtn('👁', excluded.has(node.id) ? '' : 'on', 'Toggle export', () => {
+      toggle(excluded, node.id); post({ type: 'toggle-visibility', nodeId: node.id }); renderTree();
+    });
+    row.appendChild(eye);
+
+    if (node.canMerge) {
+      row.appendChild(miniBtn('⊞', merged.has(node.id) ? 'on' : '', 'Merge into one PNG', () => {
+        toggle(merged, node.id); post({ type: 'toggle-merge', nodeId: node.id }); renderTree();
+      }));
+    }
+    if (node.canExportPng && node.type === 'TEXT') {
+      row.appendChild(miniBtn('P', forcedPng.has(node.id) ? 'on png' : 'png', 'Rasterize as PNG', () => {
+        toggle(forcedPng, node.id); post({ type: 'toggle-png', nodeId: node.id }); renderTree();
+      }));
+    }
+
+    row.addEventListener('click', () => {
+      selectedId = node.id;
+      post({ type: 'highlight-element', nodeId: node.id });
+      post({ type: 'preview-element', nodeId: node.id });
+      renderTree();
+    });
+
+    const frag = document.createElement('div');
+    frag.appendChild(row);
+    childEls.forEach((c) => frag.appendChild(c));
+    return frag as unknown as HTMLElement;
+  };
+
+  const tree = walk(currentTree);
+  if (tree) host.appendChild(tree);
+}
+
+function miniBtn(label: string, cls: string, title: string, onClick: () => void): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.className = `mini ${cls}`;
+  b.textContent = label;
+  b.title = title;
+  b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+  return b;
+}
+function toggle(set: Set<string>, id: string) { set.has(id) ? set.delete(id) : set.add(id); }
+function escapeHtml(s: string) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!)); }
+
+$('#search').addEventListener('input', renderTree);
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+function parseScale(): ExportScale {
+  const v = ($('#scale') as HTMLSelectElement).value;
+  const [t, n] = v.split(':');
+  const value = parseFloat(n);
+  if (t === 'w') return { type: 'width', value };
+  if (t === 'h') return { type: 'height', value };
+  return { type: 'scale', value };
+}
+
+function collectConfigs(): ElementConfig[] {
+  const ids = new Set<string>([...excluded, ...merged, ...forcedPng]);
+  return [...ids].map((id) => ({
+    id,
+    excluded: excluded.has(id),
+    merged: merged.has(id),
+    rasterize: forcedPng.has(id),
+  }));
+}
+
+$('#exportBtn').addEventListener('click', () => {
+  setStatus('Exporting…');
+  showProgress(true);
+  post({
+    type: 'export',
+    scale: parseScale(),
+    options: {
+      autoMerge: ($('#optAutoMerge input') as HTMLInputElement).checked,
+      rasterizeStrokes: ($('#optRasterStroke input') as HTMLInputElement).checked,
+      emitGradients: ($('#optGradients input') as HTMLInputElement).checked,
+      emitImageFills: true,
+    },
+    elementConfigs: collectConfigs(),
+  });
+});
+
+async function downloadBundle(manifestJson: string, assets: { name: string; data: number[] }[]) {
+  const zip = new JSZip();
+  zip.file('manifest.json', manifestJson);
+  for (const a of assets) zip.file(a.name, new Uint8Array(a.data));
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(blob);
+  const screen = JSON.parse(manifestJson).screen?.name || 'figforge';
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${screen}_figforge.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------------
+// Status / progress helpers
+// ---------------------------------------------------------------------------
+function setStatus(text: string, err = false) {
+  const el = $('#status');
+  el.textContent = text;
+  el.classList.toggle('err', err);
+}
+function showProgress(show: boolean) { $('#progress').classList.toggle('show', show); }
+function setProgress(pct: number) { ($('#progress > div') as HTMLElement).style.width = `${pct}%`; }
+
+// ---------------------------------------------------------------------------
+// MCP bridge WebSocket client
+// ---------------------------------------------------------------------------
+let socket: WebSocket | null = null;
+function bridgeLog(line: string) {
+  const el = $('#bridgeLog');
+  el.textContent += line + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+function setMcp(connected: boolean) {
+  $('#mcpDot').classList.toggle('on', connected);
+  $('#mcpDot').title = `MCP bridge: ${connected ? 'connected' : 'disconnected'}`;
+  ($('#connectBtn') as HTMLButtonElement).textContent = connected ? 'Disconnect' : 'Connect';
+}
+$('#connectBtn').addEventListener('click', () => {
+  if (socket) { socket.close(); return; }
+  const url = ($('#bridgeUrl') as HTMLInputElement).value;
+  try {
+    socket = new WebSocket(url);
+    bridgeLog(`connecting → ${url}`);
+    socket.onopen = () => { setMcp(true); bridgeLog('connected'); };
+    socket.onclose = () => { setMcp(false); bridgeLog('disconnected'); socket = null; };
+    socket.onerror = () => bridgeLog('socket error');
+    socket.onmessage = (ev) => {
+      try {
+        const payload = JSON.parse(ev.data);
+        bridgeLog(`← ${payload.type} ${payload.requestId || ''}`);
+        post({ type: 'mcp-request', payload });
+      } catch { bridgeLog('bad message'); }
+    };
+  } catch (e) { bridgeLog('failed: ' + String(e)); }
+});
+
+// ---------------------------------------------------------------------------
+// main → ui
+// ---------------------------------------------------------------------------
+window.onmessage = (event: MessageEvent) => {
+  const msg = (event.data && event.data.pluginMessage) || event.data;
+  if (!msg || !msg.type) return;
+
+  switch (msg.type) {
+    case 'selection-info':
+      currentTree = msg.tree;
+      selectedId = null;
+      setStatus(`${msg.name} · ${msg.elementCount} layers`);
+      ($('#exportBtn') as HTMLButtonElement).disabled = false;
+      renderTree();
+      break;
+
+    case 'no-selection':
+      currentTree = null;
+      ($('#exportBtn') as HTMLButtonElement).disabled = true;
+      setStatus('Select a frame, component, or group.');
+      renderTree();
+      break;
+
+    case 'element-preview': {
+      const blob = new Blob([new Uint8Array(msg.imageData)], { type: 'image/png' });
+      const url = URL.createObjectURL(blob);
+      $('#previewHead').textContent = `${msg.name} · ${msg.figmaType} · ${Math.round(msg.size.w)}×${Math.round(msg.size.h)}`;
+      $('#previewWrap').innerHTML = '';
+      const img = document.createElement('img');
+      img.src = url;
+      $('#previewWrap').appendChild(img);
+      break;
+    }
+
+    case 'progress':
+      setProgress(msg.total ? Math.round((msg.current / msg.total) * 100) : 0);
+      setStatus(`Exporting ${msg.label} (${msg.current}/${msg.total})`);
+      break;
+
+    case 'export-complete':
+      showProgress(false);
+      setProgress(0);
+      downloadBundle(msg.manifest, msg.assets);
+      setStatus(`Exported ${msg.assets.length} asset(s). Bundle downloaded.`);
+      break;
+
+    case 'export-error':
+      showProgress(false);
+      setStatus(msg.message, true);
+      break;
+
+    case 'mcp-response':
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(msg.payload));
+        bridgeLog(`→ ${msg.payload.type} ${msg.payload.error ? 'ERR' : 'ok'}`);
+      }
+      break;
+  }
+};

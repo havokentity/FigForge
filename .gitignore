@@ -1,0 +1,20 @@
+# Node
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
+
+# Build outputs (rebuild with `npm run build`)
+plugin/dist/
+server/dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Unity (when the importer is dropped into a project)
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Ll]ogs/

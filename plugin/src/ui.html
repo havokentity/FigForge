@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: var(--figma-color-bg, #1e1e1e);
+    --bg-secondary: var(--figma-color-bg-secondary, #2c2c2c);
+    --bg-tertiary: var(--figma-color-bg-tertiary, #383838);
+    --bg-hover: var(--figma-color-bg-hover, #383838);
+    --text: var(--figma-color-text, #ffffff);
+    --text-secondary: var(--figma-color-text-secondary, #b3b3b3);
+    --border: var(--figma-color-border, #444);
+    --brand: #7c5cff;
+    --brand-strong: #6a47ff;
+    --accent: var(--figma-color-bg-brand, #0d99ff);
+    --warn: #ffb020;
+    --danger: #ff5c5c;
+    --ok: #2bd576;
+    --radius: 8px;
+    --radius-sm: 6px;
+    font-size: 11px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: Inter, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ---- header ---- */
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--bg-secondary), var(--bg));
+  }
+  .logo {
+    width: 22px; height: 22px; border-radius: 6px; flex: none;
+    background: linear-gradient(135deg, var(--brand), var(--accent));
+    display: grid; place-items: center; font-weight: 800; color: #fff; font-size: 12px;
+    box-shadow: 0 2px 8px rgba(124,92,255,.4);
+  }
+  .title { font-weight: 700; font-size: 13px; letter-spacing: .2px; }
+  .pill {
+    font-size: 9px; padding: 2px 6px; border-radius: 999px;
+    background: var(--bg-tertiary); color: var(--text-secondary);
+  }
+  .spacer { flex: 1; }
+  .seg { display: flex; background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 2px; }
+  .seg button {
+    border: none; background: transparent; color: var(--text-secondary);
+    font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+  }
+  .seg button.active { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .icon-btn {
+    border: none; background: var(--bg-tertiary); color: var(--text-secondary);
+    width: 24px; height: 24px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
+  }
+  .icon-btn:hover { color: var(--text); background: var(--bg-hover); }
+
+  /* ---- tabs ---- */
+  .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg); }
+  .tabs button {
+    flex: 1; border: none; background: transparent; color: var(--text-secondary);
+    padding: 9px 0; cursor: pointer; font-size: 11px; font-weight: 600;
+    border-bottom: 2px solid transparent;
+  }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--brand); }
+
+  main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .panel { flex: 1; overflow: hidden; display: none; flex-direction: column; }
+  .panel.active { display: flex; }
+
+  /* ---- toolbar ---- */
+  .toolbar {
+    display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+    border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  }
+  select, input[type="text"], input[type="number"] {
+    background: var(--bg-tertiary); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 5px 7px; font-size: 11px; font-family: inherit;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 10px;
+    padding: 5px 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary);
+    color: var(--text-secondary); cursor: pointer; border: 1px solid transparent;
+  }
+  .chip input { accent-color: var(--brand); }
+  .chip.on { color: var(--text); border-color: var(--brand); }
+
+  /* ---- split ---- */
+  .split { flex: 1; display: flex; overflow: hidden; }
+  .tree-pane { flex: 1.3; display: flex; flex-direction: column; border-right: 1px solid var(--border); min-width: 0; }
+  .preview-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .search { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  .search input { width: 100%; }
+  .tree { flex: 1; overflow: auto; padding: 4px 0; }
+
+  .row {
+    display: flex; align-items: center; gap: 5px; padding: 3px 8px; cursor: pointer;
+    border-radius: 5px; margin: 1px 4px; font-size: 11px; white-space: nowrap;
+  }
+  .row:hover { background: var(--bg-hover); }
+  .row.sel { background: color-mix(in srgb, var(--brand) 22%, transparent); }
+  .row.hidden { opacity: .4; }
+  .twirl { width: 12px; flex: none; color: var(--text-secondary); font-size: 9px; text-align: center; }
+  .tname { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .type-tag { font-size: 8px; padding: 1px 4px; border-radius: 3px; background: var(--bg-tertiary); color: var(--text-secondary); flex: none; }
+  .canon-tag { font-size: 8px; padding: 1px 5px; border-radius: 999px; background: var(--brand); color: #fff; flex: none; }
+  .mini {
+    width: 18px; height: 18px; border-radius: 4px; border: none; cursor: pointer; flex: none;
+    background: var(--bg-tertiary); color: var(--text-secondary); font-size: 10px;
+  }
+  .mini.on { background: var(--brand); color: #fff; }
+  .mini.png.on { background: var(--warn); color: #000; }
+
+  /* ---- preview ---- */
+  .preview-head { padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-secondary); }
+  .canvas-wrap {
+    flex: 1; display: grid; place-items: center; overflow: auto; padding: 14px;
+    background-color: var(--bg-secondary);
+    background-image:
+      linear-gradient(45deg, #00000022 25%, transparent 25%),
+      linear-gradient(-45deg, #00000022 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #00000022 75%),
+      linear-gradient(-45deg, transparent 75%, #00000022 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  }
+  .canvas-wrap img { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.5); }
+  .empty { color: var(--text-secondary); text-align: center; font-size: 11px; padding: 20px; }
+
+  /* ---- footer ---- */
+  footer { border-top: 1px solid var(--border); padding: 8px 10px; background: var(--bg-secondary); }
+  .statusline { font-size: 10px; color: var(--text-secondary); margin-bottom: 7px; min-height: 13px; font-family: ui-monospace, Menlo, monospace; }
+  .statusline.err { color: var(--danger); }
+  .progress { height: 4px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; margin-bottom: 7px; display: none; }
+  .progress.show { display: block; }
+  .progress > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--brand), var(--accent)); transition: width .15s; }
+  .btn-primary {
+    width: 100%; border: none; border-radius: var(--radius); padding: 10px;
+    background: linear-gradient(135deg, var(--brand), var(--brand-strong)); color: #fff;
+    font-weight: 700; font-size: 12px; cursor: pointer;
+  }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-ghost { background: var(--bg-tertiary); color: var(--text); border: none; border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; font-size: 11px; }
+
+  /* ---- bridge panel ---- */
+  .bridge { padding: 12px; overflow: auto; flex: 1; }
+  .bridge h3 { font-size: 11px; margin-bottom: 6px; }
+  .field { display: flex; gap: 6px; margin-bottom: 10px; }
+  .field input { flex: 1; }
+  .toollist { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .tool { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 9px; }
+  .tool b { font-size: 11px; }
+  .tool span { display: block; color: var(--text-secondary); font-size: 10px; margin-top: 2px; }
+  .log { margin-top: 10px; background: #000; border-radius: var(--radius-sm); padding: 8px; height: 120px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #8ee; }
+
+  .hint { color: var(--text-secondary); font-size: 10px; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="logo">F</div>
+    <div class="title">FigForge</div>
+    <span class="pill" id="version">v1.0</span>
+    <div class="spacer"></div>
+    <div class="seg" id="sizeSeg">
+      <button data-size="S">S</button>
+      <button data-size="M" class="active">M</button>
+      <button data-size="L">L</button>
+    </div>
+    <div class="dot" id="mcpDot" title="MCP bridge: disconnected"></div>
+    <button class="icon-btn" id="minBtn" title="Minimize">—</button>
+  </header>
+
+  <div class="tabs">
+    <button data-tab="export" class="active">Export</button>
+    <button data-tab="bridge">Bridge</button>
+  </div>
+
+  <main>
+    <!-- ============================= EXPORT ============================= -->
+    <section class="panel active" id="panel-export">
+      <div class="toolbar">
+        <select id="scale" title="Export scale">
+          <option value="s:0.5">0.5×</option>
+          <option value="s:1">1×</option>
+          <option value="s:1.5">1.5×</option>
+          <option value="s:2" selected>2×</option>
+          <option value="s:3">3×</option>
+          <option value="s:4">4×</option>
+          <option value="w:512">512w</option>
+          <option value="w:1024">1024w</option>
+          <option value="h:1024">1024h</option>
+        </select>
+        <label class="chip on" id="optAutoMerge"><input type="checkbox" checked /> Auto-merge</label>
+        <label class="chip on" id="optGradients"><input type="checkbox" checked /> Gradients</label>
+        <label class="chip" id="optRasterStroke"><input type="checkbox" /> Raster strokes</label>
+        <button class="icon-btn" id="reloadBtn" title="Rescan selection">⟳</button>
+      </div>
+
+      <div class="split">
+        <div class="tree-pane">
+          <div class="search"><input type="text" id="search" placeholder="Search layers…" /></div>
+          <div class="tree" id="tree"><div class="empty">Select a frame in Figma.</div></div>
+        </div>
+        <div class="preview-pane">
+          <div class="preview-head" id="previewHead">No element selected</div>
+          <div class="canvas-wrap" id="previewWrap"><div class="empty">Click a layer to preview</div></div>
+        </div>
+      </div>
+
+      <footer>
+        <div class="statusline" id="status"></div>
+        <div class="progress" id="progress"><div></div></div>
+        <button class="btn-primary" id="exportBtn" disabled>Export for Unity</button>
+      </footer>
+    </section>
+
+    <!-- ============================= BRIDGE ============================= -->
+    <section class="panel" id="panel-bridge">
+      <div class="bridge">
+        <h3>MCP Bridge</h3>
+        <p class="hint">Connect to the local FigForge bridge so an AI agent can read this file and export frames directly to your Unity project.</p>
+        <div class="field" style="margin-top:10px;">
+          <input type="text" id="bridgeUrl" value="ws://127.0.0.1:1994/ws" />
+          <button class="btn-ghost" id="connectBtn">Connect</button>
+        </div>
+        <div class="toollist">
+          <div class="tool"><b>get_document / get_selection / get_node</b><span>Read the page tree, current selection, or a node by id.</span></div>
+          <div class="tool"><b>get_metadata / get_design_context</b><span>File + page info, summarized design tree.</span></div>
+          <div class="tool"><b>get_screenshot</b><span>Render node(s) to PNG at a chosen scale.</span></div>
+          <div class="tool"><b>export_unity</b><span>Write manifest.json + PNGs straight to a Unity project folder.</span></div>
+        </div>
+        <div class="log" id="bridgeLog"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- JSZip for packaging the export bundle -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- FIGFORGE_UI_SCRIPT -->
+</body>
+</html>
