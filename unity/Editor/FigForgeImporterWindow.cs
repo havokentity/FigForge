@@ -23,8 +23,13 @@ namespace FigForge
         Manifest _manifest;
 
         // ---- config ----
+        enum UIBackend { uGUI, UIToolkit }
         enum OutputMode { Scene, Prefab, Both }
         enum ScalePreset { MatchFigma, P720, P1080, Custom }
+
+        UIBackend _backend = UIBackend.uGUI;
+        string _uitkOutFolder = "Assets/FigForge/UI";
+        bool _uitkCreateDoc = true;
 
         OutputMode _output = OutputMode.Scene;
         ScalePreset _scalePreset = ScalePreset.MatchFigma;
@@ -205,21 +210,33 @@ namespace FigForge
 
         void CanvasSection()
         {
-            _showCanvas = Foldout(_showCanvas, "Canvas & Output");
+            _showCanvas = Foldout(_showCanvas, "Backend & Output");
             if (!_showCanvas) return;
             using (new EditorGUI.IndentLevelScope())
             {
-                _output = (OutputMode)EditorGUILayout.EnumPopup("Output", _output);
-                _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (ScreenManager toggles pages)", _connectedScene);
-                _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas", _newCanvas);
-                if (!_newCanvas)
-                    _existingCanvas = (Canvas)EditorGUILayout.ObjectField("Canvas", _existingCanvas, typeof(Canvas), true);
-                _scalePreset = (ScalePreset)EditorGUILayout.EnumPopup("Reference height", _scalePreset);
-                if (_scalePreset == ScalePreset.Custom)
-                    _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
-                _disableRaycasts = EditorGUILayout.ToggleLeft("Disable raycast targets on non-interactive graphics", _disableRaycasts);
-                if (_output != OutputMode.Scene)
-                    _prefabFolder = EditorGUILayout.TextField("Prefab folder", _prefabFolder);
+                _backend = (UIBackend)EditorGUILayout.EnumPopup("UI backend", _backend);
+
+                if (_backend == UIBackend.UIToolkit)
+                {
+                    _uitkOutFolder = EditorGUILayout.TextField("UXML/USS folder", _uitkOutFolder);
+                    _uitkCreateDoc = EditorGUILayout.ToggleLeft("Create UIDocument + PanelSettings in scene", _uitkCreateDoc);
+                    _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (one UIDocument toggles pages)", _connectedScene);
+                    EditorGUILayout.HelpBox("UI Toolkit emits a .uxml + .uss. Canonical layers become <Button> with a `fge-ref-<name>` USS class — style that class once in your own stylesheet.", MessageType.None);
+                }
+                else
+                {
+                    _output = (OutputMode)EditorGUILayout.EnumPopup("Output", _output);
+                    _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (ScreenManager toggles pages)", _connectedScene);
+                    _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas", _newCanvas);
+                    if (!_newCanvas)
+                        _existingCanvas = (Canvas)EditorGUILayout.ObjectField("Canvas", _existingCanvas, typeof(Canvas), true);
+                    _scalePreset = (ScalePreset)EditorGUILayout.EnumPopup("Reference height", _scalePreset);
+                    if (_scalePreset == ScalePreset.Custom)
+                        _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
+                    _disableRaycasts = EditorGUILayout.ToggleLeft("Disable raycast targets on non-interactive graphics", _disableRaycasts);
+                    if (_output != OutputMode.Scene)
+                        _prefabFolder = EditorGUILayout.TextField("Prefab folder", _prefabFolder);
+                }
             }
         }
 
@@ -318,6 +335,7 @@ namespace FigForge
         {
             _log.Clear();
             if (_manifest?.screen == null) { Log("manifest has no screen", MessageType.Error); return; }
+            if (_backend == UIBackend.UIToolkit) { BuildUITK(); return; }
 
             try
             {
@@ -378,6 +396,121 @@ namespace FigForge
                 EditorUtility.ClearProgressBar();
                 AssetDatabase.SaveAssets();
             }
+        }
+
+        // ---- UI Toolkit backend ------------------------------------------------
+        void BuildUITK()
+        {
+            try
+            {
+                EditorUtility.DisplayProgressBar("FigForge", "Importing assets…", 0.15f);
+                var sourceDir = Path.GetDirectoryName(_manifestPaths[_selected]);
+                var screenFolder = $"{_spriteFolder}/{SafeName(_manifest.screen.name)}";
+                var sprites = TextureImportHelper.Import(_manifest, sourceDir, screenFolder, _tex);
+                Log($"imported {sprites.Count} sprite(s)", MessageType.Info);
+
+                EditorUtility.DisplayProgressBar("FigForge", "Generating UXML + USS…", 0.55f);
+                var ctx = new UITKContext
+                {
+                    outFolder = _uitkOutFolder,
+                    sprites = sprites,
+                    resolveFontPath = (fam, sty) =>
+                    {
+                        var fa = _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null;
+                        return new TMP_FontAssetRef { assetPath = fa != null ? AssetDatabase.GetAssetPath(fa) : null };
+                    },
+                    log = m => Log(m, MessageType.Warning),
+                };
+
+                var res = UxmlBuilder.Build(_manifest, ctx);
+                Log($"wrote {res.uxmlPath} (+ .uss), {res.elementCount} elements", MessageType.Info);
+
+                if (_uitkCreateDoc)
+                    CreateUIDocument(res);
+
+                Log($"built '{_manifest.screen.name}' (UI Toolkit) ✓", MessageType.Info);
+            }
+            catch (System.Exception e)
+            {
+                Log($"UITK build failed: {e.Message}\n{e.StackTrace}", MessageType.Error);
+            }
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+            }
+        }
+
+        void CreateUIDocument(UxmlResult res)
+        {
+            var vta = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.VisualTreeAsset>(res.uxmlPath);
+            if (vta == null) { Log("could not load generated UXML as VisualTreeAsset", MessageType.Warning); return; }
+
+            var panel = ResolvePanelSettings();
+
+            // Reuse an existing FigForge UIDocument when building a connected scene.
+            var existing = Object.FindObjectsByType<UnityEngine.UIElements.UIDocument>(FindObjectsSortMode.None)
+                .FirstOrDefault(d => d.GetComponent<UIScreenManager>() != null || d.name == "FigForge UI");
+
+            GameObject go;
+            UnityEngine.UIElements.UIDocument doc;
+            if (_connectedScene && existing != null) { doc = existing; go = existing.gameObject; }
+            else
+            {
+                go = new GameObject("FigForge UI", typeof(UnityEngine.UIElements.UIDocument));
+                doc = go.GetComponent<UnityEngine.UIElements.UIDocument>();
+            }
+            if (panel != null) doc.panelSettings = panel;
+
+            if (_connectedScene)
+            {
+                var mgr = go.GetComponent<UIScreenManager>() ?? go.AddComponent<UIScreenManager>();
+                mgr.Register(_manifest.screen.name, vta);
+                Log($"registered UITK page '{_manifest.screen.name}' on UIScreenManager", MessageType.Info);
+            }
+            else
+            {
+                doc.visualTreeAsset = vta;
+            }
+
+            Undo.RegisterCreatedObjectUndo(go, "FigForge UITK Build");
+            EditorUtility.SetDirty(go);
+            UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
+                UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
+        }
+
+        UnityEngine.UIElements.PanelSettings ResolvePanelSettings()
+        {
+            const string path = "Assets/FigForge/FigForgePanelSettings.asset";
+            var existing = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.PanelSettings>(path);
+            if (existing != null) return existing;
+
+            var panel = ScriptableObject.CreateInstance<UnityEngine.UIElements.PanelSettings>();
+            // Scale like a CanvasScaler "match height" so figma-px coords map across resolutions.
+            panel.scaleMode = UnityEngine.UIElements.PanelScaleMode.ScaleWithScreenSize;
+            float fw = _manifest.screen.figmaSize != null ? _manifest.screen.figmaSize.w : 1920f;
+            float fh = _manifest.screen.figmaSize != null ? _manifest.screen.figmaSize.h : 1080f;
+            panel.referenceResolution = new Vector2Int(Mathf.RoundToInt(fw), Mathf.RoundToInt(fh));
+            panel.match = 1f;
+
+            // A PanelSettings needs a theme; grab any ThemeStyleSheet in the project.
+            var themeGuid = AssetDatabase.FindAssets("t:ThemeStyleSheet");
+            if (themeGuid.Length > 0)
+            {
+                var theme = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.ThemeStyleSheet>(
+                    AssetDatabase.GUIDToAssetPath(themeGuid[0]));
+                if (theme != null) panel.themeStyleSheet = theme;
+            }
+            else
+            {
+                Log("No ThemeStyleSheet found — assign one to FigForgePanelSettings (Assets ▸ Create ▸ UI Toolkit ▸ TSS Theme File).", MessageType.Warning);
+            }
+
+            TextureImportHelper.EnsureFolder("Assets/FigForge");
+            AssetDatabase.CreateAsset(panel, path);
+            AssetDatabase.SaveAssets();
+            return panel;
         }
 
         Canvas ResolveCanvas()
