@@ -212,7 +212,10 @@
       <footer>
         <div class="statusline" id="status"></div>
         <div class="progress" id="progress"><div></div></div>
-        <button class="btn-primary" id="exportBtn" disabled>Export for Unity</button>
+        <div style="display:flex; gap:6px;">
+          <button class="btn-primary" id="exportBtn" style="flex:2" disabled>Export Frame</button>
+          <button class="btn-ghost" id="exportPageBtn" style="flex:1" title="Export every top-level frame on this page as a connected project bundle">Export Page</button>
+        </div>
       </footer>
     </section>
   </main>

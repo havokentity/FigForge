@@ -13,6 +13,8 @@ import {
   DEFAULT_EXPORT_OPTIONS,
   MANIFEST_SCHEMA,
   MANIFEST_VERSION,
+  type CanonicalKind,
+  type CanonicalRef,
   type ExportOptions,
   type ExportScale,
   type Fill,
@@ -21,6 +23,7 @@ import {
   type ManifestAsset,
   type ManifestElement,
   type ManifestFont,
+  type NavLink,
   type RGBA,
   type Stroke,
   type Style,
@@ -251,6 +254,77 @@ function firstTextLabel(node: SceneNode): string | undefined {
   return undefined;
 }
 
+/** All text strings under a node — heuristic source of dropdown options. */
+function gatherTexts(node: SceneNode): string[] {
+  const out: string[] = [];
+  const walk = (n: SceneNode) => {
+    if (n.type === 'TEXT') {
+      const t = (n as TextNode).characters.trim();
+      if (t) out.push(t);
+    }
+    if ('children' in n) for (const c of (n as ChildrenMixin).children) walk(c);
+  };
+  if ('children' in node) for (const c of (node as ChildrenMixin).children) walk(c);
+  return out;
+}
+
+/** Initial control state from instance variant properties, where detectable. */
+function canonicalValue(node: SceneNode, kind: CanonicalKind): string | undefined {
+  if (kind === 'input') return firstTextLabel(node);
+  if (kind === 'toggle') {
+    const props = (node as unknown as {
+      componentProperties?: Record<string, { value: unknown }>;
+    }).componentProperties;
+    if (props) {
+      for (const k of Object.keys(props)) {
+        const kl = k.toLowerCase();
+        if (kl.includes('state') || kl.includes('check') || kl.includes('select') || kl === 'on') {
+          const v = String(props[k].value).toLowerCase();
+          if (['on', 'true', 'checked', 'selected'].includes(v)) return 'true';
+          if (['off', 'false', 'unchecked'].includes(v)) return 'false';
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef | undefined {
+  if (!ref) return undefined;
+  const c: CanonicalRef = {
+    kind: ref.kind,
+    ref: ref.ref,
+    instanceName: ref.instanceName,
+    label: firstTextLabel(node) || ref.instanceName,
+  };
+  const value = canonicalValue(node, ref.kind);
+  if (value !== undefined) c.value = value;
+  if (ref.kind === 'dropdown') {
+    const opts = gatherTexts(node);
+    if (opts.length) c.options = opts;
+  }
+  return c;
+}
+
+/** Figma prototype "Navigate to" reaction → nav data (no behaviour). */
+function navFor(node: SceneNode): NavLink | undefined {
+  const reactions = (node as unknown as { reactions?: any[] }).reactions;
+  if (!Array.isArray(reactions)) return undefined;
+  for (const r of reactions) {
+    const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
+    for (const a of actions) {
+      if (a && a.type === 'NODE' && a.destinationId && (!a.navigation || a.navigation === 'NAVIGATE')) {
+        const dest = figma.getNodeById(a.destinationId);
+        if (dest) {
+          const trig = r.trigger && r.trigger.type === 'ON_CLICK' ? 'click' : 'click';
+          return { target: sanitize(dest.name), trigger: trig };
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
 /**
  * Build the manifest + PNG assets for a selected root node.
  */
@@ -405,6 +479,9 @@ export async function exportDesign(
     }
     if (interactive(node.name) && !p.canonicalRef) components.push('Button');
 
+    const canonical = buildCanonical(p.canonicalRef, node);
+    const nav = navFor(node);
+
     const element: ManifestElement = {
       id: node.id,
       name: sanitize(node.name),
@@ -434,14 +511,8 @@ export async function exportDesign(
             exportScale: scaleNum,
           }
         : undefined,
-      canonical: p.canonicalRef
-        ? {
-            kind: p.canonicalRef.kind,
-            ref: p.canonicalRef.ref,
-            instanceName: p.canonicalRef.instanceName,
-            label: firstTextLabel(node) || p.canonicalRef.instanceName,
-          }
-        : undefined,
+      canonical,
+      nav,
       interactive: interactive(node.name),
       clipsContent: (node as unknown as { clipsContent?: boolean }).clipsContent === true,
       merged: p.merged,

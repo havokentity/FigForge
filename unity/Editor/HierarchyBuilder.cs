@@ -24,6 +24,8 @@ namespace FigForge
         public CanonicalLibrary canonical;
         public bool disableRaycasts = true;
         public Action<string> log = _ => { };
+        // name → GameObject collected during a build, applied to the page's FigForgeScreen.
+        public readonly List<KeyValuePair<string, GameObject>> registered = new List<KeyValuePair<string, GameObject>>();
     }
 
     public static class HierarchyBuilder
@@ -33,6 +35,8 @@ namespace FigForge
             var index = ManifestParser.Index(manifest);
             var roots = ManifestParser.Roots(manifest);
             if (roots.Count == 0) { ctx.log("no root element in manifest"); return null; }
+
+            ctx.registered.Clear();
 
             // One Figma frame = one root. If several, wrap them under a page root.
             GameObject pageRoot;
@@ -45,6 +49,13 @@ namespace FigForge
                 pageRoot = NewRect(manifest.screen.name, parent);
                 Stretch(pageRoot.GetComponent<RectTransform>());
                 foreach (var r in roots) BuildElement(r, index, pageRoot.transform, ctx);
+            }
+
+            // Registry of named controls, for code to fetch by Figma name.
+            if (pageRoot != null && ctx.registered.Count > 0)
+            {
+                var reg = pageRoot.GetComponent<FigForgeScreen>() ?? pageRoot.AddComponent<FigForgeScreen>();
+                foreach (var kv in ctx.registered) reg.Register(kv.Key, kv.Value);
             }
             return pageRoot;
         }
@@ -63,11 +74,19 @@ namespace FigForge
                 }
                 else
                 {
-                    ctx.log($"canonical '{e.canonical.Ref}' not in library → placeholder button");
+                    ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' not in library → placeholder");
                     inst = BuildPlaceholderButton(e, parent, ctx);
                 }
                 ApplyTransform(inst.GetComponent<RectTransform>() ?? inst.AddComponent<RectTransform>(), e, ctx);
-                StampLabel(inst, e.canonical.label);
+
+                // Fill the prefab's binding slots (label/value/options); else stamp label.
+                var bindings = inst.GetComponentInChildren<FigForgeBindings>(true);
+                if (bindings != null) bindings.Apply(e.canonical.label, e.canonical.value, e.canonical.options);
+                else StampLabel(inst, e.canonical.label);
+
+                AttachNav(inst, e, ctx);
+                if (!string.IsNullOrEmpty(e.canonical.instanceName))
+                    ctx.registered.Add(new KeyValuePair<string, GameObject>(e.canonical.instanceName, inst));
                 return inst;
             }
 
@@ -90,6 +109,7 @@ namespace FigForge
 
             if (e.clipsContent) go.AddComponent<RectMask2D>();
             if (e.autoLayout != null) ApplyAutoLayout(go, e.autoLayout, ctx.scaleFactor);
+            AttachNav(go, e, ctx);
 
             // children
             if (e.children != null)
@@ -269,6 +289,15 @@ namespace FigForge
         {
             var img = go.AddComponent<Image>();
             img.color = new Color(0, 0, 0, 0);
+        }
+
+        // Captured Figma navigation → a passive FigForgeNavLink (no listener wired).
+        static void AttachNav(GameObject go, ElementData e, BuildContext ctx)
+        {
+            if (e.nav == null || string.IsNullOrEmpty(e.nav.target)) return;
+            var link = go.GetComponent<FigForgeNavLink>() ?? go.AddComponent<FigForgeNavLink>();
+            link.targetScreen = e.nav.target;
+            link.trigger = string.IsNullOrEmpty(e.nav.trigger) ? "click" : e.nav.trigger;
         }
 
         // ---- small helpers -----------------------------------------------------

@@ -162,20 +162,25 @@ function collectConfigs(): ElementConfig[] {
   }));
 }
 
+function currentOptions() {
+  return {
+    autoMerge: ($('#optAutoMerge input') as HTMLInputElement).checked,
+    rasterizeStrokes: ($('#optRasterStroke input') as HTMLInputElement).checked,
+    emitGradients: ($('#optGradients input') as HTMLInputElement).checked,
+    emitImageFills: true,
+  };
+}
+
 $('#exportBtn').addEventListener('click', () => {
   setStatus('Exporting…');
   showProgress(true);
-  post({
-    type: 'export',
-    scale: parseScale(),
-    options: {
-      autoMerge: ($('#optAutoMerge input') as HTMLInputElement).checked,
-      rasterizeStrokes: ($('#optRasterStroke input') as HTMLInputElement).checked,
-      emitGradients: ($('#optGradients input') as HTMLInputElement).checked,
-      emitImageFills: true,
-    },
-    elementConfigs: collectConfigs(),
-  });
+  post({ type: 'export', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
+});
+
+$('#exportPageBtn').addEventListener('click', () => {
+  setStatus('Exporting whole page…');
+  showProgress(true);
+  post({ type: 'export-page', scale: parseScale(), options: currentOptions() });
 });
 
 async function downloadBundle(manifestJson: string, assets: { name: string; data: number[] }[]) {
@@ -188,6 +193,38 @@ async function downloadBundle(manifestJson: string, assets: { name: string; data
   const a = document.createElement('a');
   a.href = url;
   a.download = `${screen}_figforge.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+interface PageScreen { name: string; manifest: string; assets: { name: string; data: number[] }[] }
+async function downloadProjectBundle(project: { name: string; initial: string }, screens: PageScreen[]) {
+  const zip = new JSZip();
+  const used = new Set<string>();
+  const index = {
+    schema: 'figforge/project',
+    version: '1.0',
+    generator: 'FigForge',
+    name: project.name,
+    exportedAt: new Date().toISOString(),
+    initial: project.initial,
+    screens: [] as { name: string; manifest: string }[],
+  };
+  for (const s of screens) {
+    let folder = s.name || 'screen';
+    let n = 1;
+    while (used.has(folder)) folder = `${s.name}_${n++}`;
+    used.add(folder);
+    zip.file(`${folder}/manifest.json`, s.manifest);
+    for (const a of s.assets) zip.file(`${folder}/${a.name}`, new Uint8Array(a.data));
+    index.screens.push({ name: s.name, manifest: `${folder}/manifest.json` });
+  }
+  zip.file('project.json', JSON.stringify(index, null, 2));
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(project.name || 'figforge').replace(/[^a-z0-9]+/gi, '_')}_page.zip`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -314,6 +351,13 @@ window.onmessage = (event: MessageEvent) => {
       setProgress(0);
       downloadBundle(msg.manifest, msg.assets);
       setStatus(`Exported ${msg.assets.length} asset(s). Bundle downloaded.`);
+      break;
+
+    case 'export-page-complete':
+      showProgress(false);
+      setProgress(0);
+      downloadProjectBundle(msg.project, msg.screens);
+      setStatus(`Exported ${msg.screens.length} screen(s). Project bundle downloaded.`);
       break;
 
     case 'export-error':

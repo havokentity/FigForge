@@ -143,6 +143,8 @@ namespace FigForge
             // ---- UXML element -------------------------------------------------
             string classes = cls;
             if (isRoot) classes += " fge-screen";
+            if (e.nav != null && !string.IsNullOrEmpty(e.nav.target))
+                classes += " fge-navto-" + Safe(e.nav.target); // navigation marker (data only)
             string name = Attr(e.name ?? e.type);
 
             bool isCanonical = e.canonical != null;
@@ -151,8 +153,29 @@ namespace FigForge
             if (isCanonical)
             {
                 classes += $" fge-canonical fge-ref-{Safe(e.canonical.Ref)}";
-                uxml.Append(pad).Append($"<ui:Button name=\"{name}\" text=\"{Attr(e.canonical.label)}\" class=\"{classes}\" />\n");
-                return; // canonical buttons have no imported children
+                string label = Attr(e.canonical.label);
+                string val = e.canonical.value;
+                string el;
+                switch (e.canonical.kind)
+                {
+                    case "toggle":
+                        el = $"<ui:Toggle name=\"{name}\" label=\"{label}\"{(val == "true" ? " value=\"true\"" : "")} class=\"{classes}\" />";
+                        break;
+                    case "input":
+                        el = $"<ui:TextField name=\"{name}\" label=\"{label}\" value=\"{Attr(val)}\" class=\"{classes}\" />";
+                        break;
+                    case "dropdown":
+                        el = $"<ui:DropdownField name=\"{name}\" label=\"{label}\" class=\"{classes}\" />"; // choices set in code
+                        break;
+                    case "slider":
+                        el = $"<ui:Slider name=\"{name}\" label=\"{label}\" low-value=\"0\" high-value=\"100\"{(float.TryParse(val, out var sv) ? $" value=\"{F(sv)}\"" : "")} class=\"{classes}\" />";
+                        break;
+                    default:
+                        el = $"<ui:Button name=\"{name}\" text=\"{label}\" class=\"{classes}\" />";
+                        break;
+                }
+                uxml.Append(pad).Append(el).Append('\n');
+                return; // canonical controls have no imported children
             }
             if (isText)
             {

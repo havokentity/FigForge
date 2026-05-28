@@ -1,9 +1,9 @@
 // =============================================================================
-// FigForge — CanonicalLibrary. Maps canonical reference names (from element
-// names like `Btn_Save_PrimaryButton` → ref "PrimaryButton") to reusable Unity
-// prefabs. The importer instantiates these instead of rebuilding the element
-// from a PNG/text, so canonical UI (buttons, for now) is defined once and reused
-// across every imported page.
+// FigForge — CanonicalLibrary. Maps a (kind, reference name) to a reusable Unity
+// prefab. A Figma layer named `Btn_Save_PrimaryButton` (kind=button,
+// ref=PrimaryButton) instantiates the matching prefab instead of being rebuilt
+// from a PNG/text — so canonical UI (buttons, toggles, inputs, dropdowns,
+// sliders) is defined once and reused across every imported page.
 // =============================================================================
 
 using System.Collections.Generic;
@@ -11,30 +11,45 @@ using UnityEngine;
 
 namespace FigForge
 {
+    public enum CanonicalKind { Button, Toggle, Input, Dropdown, Slider }
+
     [CreateAssetMenu(fileName = "FigForgeCanonicalLibrary", menuName = "FigForge/Canonical Library")]
     public class CanonicalLibrary : ScriptableObject
     {
         [System.Serializable]
         public class Entry
         {
-            [Tooltip("Canonical reference name as used in Figma layer names (the trailing token).")]
+            public CanonicalKind kind = CanonicalKind.Button;
+            [Tooltip("Reference name as used in Figma layer names (the trailing token).")]
             public string referenceName;
-
-            [Tooltip("Prefab instantiated for this reference. For buttons, its root should have a Button + a text label.")]
+            [Tooltip("Prefab instantiated for this (kind, reference). A FigForgeBindings on it gets auto-filled.")]
             public GameObject prefab;
         }
 
-        public List<Entry> buttons = new List<Entry>();
+        public List<Entry> entries = new List<Entry>();
 
         public GameObject Resolve(string kind, string referenceName)
         {
-            // Only "button" is supported today; kept switchable for future kinds.
-            if (kind != "button") return null;
-            foreach (var e in buttons)
-                if (e != null && e.referenceName == referenceName) return e.prefab;
+            if (!TryParseKind(kind, out var k)) return null;
+            foreach (var e in entries)
+                if (e != null && e.kind == k && e.referenceName == referenceName)
+                    return e.prefab;
             return null;
         }
 
-        public bool HasAny => buttons != null && buttons.Count > 0;
+        public bool HasAny => entries != null && entries.Count > 0;
+
+        public static bool TryParseKind(string s, out CanonicalKind kind)
+        {
+            switch ((s ?? "").ToLowerInvariant())
+            {
+                case "button": kind = CanonicalKind.Button; return true;
+                case "toggle": kind = CanonicalKind.Toggle; return true;
+                case "input": kind = CanonicalKind.Input; return true;
+                case "dropdown": kind = CanonicalKind.Dropdown; return true;
+                case "slider": kind = CanonicalKind.Slider; return true;
+                default: kind = CanonicalKind.Button; return false;
+            }
+        }
     }
 }

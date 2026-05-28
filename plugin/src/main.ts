@@ -140,6 +140,38 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       break;
     }
 
+    case 'export-page': {
+      const frames = figma.currentPage.children.filter(
+        (n) => ['FRAME', 'COMPONENT'].includes(n.type) && (n as SceneNode).visible !== false
+      ) as SceneNode[];
+      if (frames.length === 0) {
+        figma.ui.postMessage({ type: 'export-error', message: 'No top-level frames on this page.' });
+        break;
+      }
+      try {
+        const scale = (msg.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
+        const options = (msg.options as ExportOptions) || DEFAULT_EXPORT_OPTIONS;
+        const screens: { name: string; manifest: string; assets: { name: string; data: number[] }[] }[] = [];
+        for (let i = 0; i < frames.length; i++) {
+          figma.ui.postMessage({ type: 'progress', current: i, total: frames.length, label: frames[i].name });
+          const result = await exportDesign(frames[i], scale, options);
+          screens.push({
+            name: sanitize(frames[i].name),
+            manifest: JSON.stringify(result.manifest, null, 2),
+            assets: result.assets,
+          });
+        }
+        figma.ui.postMessage({
+          type: 'export-page-complete',
+          project: { name: figma.currentPage.name, initial: screens[0] ? screens[0].name : '' },
+          screens,
+        });
+      } catch (e) {
+        figma.ui.postMessage({ type: 'export-error', message: String((e as Error)?.message || e) });
+      }
+      break;
+    }
+
     case 'mcp-request':
       await handleMcp(msg.payload as McpRequest);
       break;

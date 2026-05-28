@@ -1,7 +1,10 @@
 {
   "name": "FigForge.Runtime",
   "rootNamespace": "FigForge",
-  "references": [],
+  "references": [
+    "UnityEngine.UI",
+    "Unity.TextMeshPro"
+  ],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,

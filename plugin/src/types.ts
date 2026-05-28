@@ -105,13 +105,21 @@ export interface TextProps {
 // in Unity as an instance of a named canonical Button definition rather than
 // rebuilt from PNG/text. Scoped to buttons for now; `kind` keeps it extensible.
 // ---------------------------------------------------------------------------
-export type CanonicalKind = 'button';
+export type CanonicalKind = 'button' | 'toggle' | 'input' | 'dropdown' | 'slider';
 
 export interface CanonicalRef {
   kind: CanonicalKind;
   ref: string; // canonical definition name to instantiate in Unity
   instanceName: string; // the design-specific name (middle token)
   label?: string; // text to stamp onto the instance, if any
+  value?: string; // initial state: toggle on/off, slider value, input text
+  options?: string[]; // dropdown options
+}
+
+/** Prototype navigation captured as data (no behaviour wired). */
+export interface NavLink {
+  target: string; // destination screen name (sanitized)
+  trigger: string; // e.g. "click"
 }
 
 export interface AssetBounds {
@@ -158,6 +166,7 @@ export interface ManifestElement {
   assetBounds?: AssetBounds;
   nineSlice?: NineSlice;
   canonical?: CanonicalRef;
+  nav?: NavLink;
   interactive: boolean;
   clipsContent: boolean;
   merged: boolean;
@@ -194,6 +203,26 @@ export interface Manifest {
   assets: ManifestAsset[];
   fonts: ManifestFont[];
   canonicalRefs: string[]; // distinct canonical ref names referenced by elements
+}
+
+// ---------------------------------------------------------------------------
+// Project bundle (whole-page export): a project.json index + per-screen folders.
+// ---------------------------------------------------------------------------
+export const PROJECT_SCHEMA = 'figforge/project';
+
+export interface ProjectScreen {
+  name: string;
+  manifest: string; // path within the bundle, e.g. "Home/manifest.json"
+}
+
+export interface Project {
+  schema: typeof PROJECT_SCHEMA;
+  version: typeof MANIFEST_VERSION;
+  generator: 'FigForge';
+  name: string;
+  exportedAt: string;
+  initial: string;
+  screens: ProjectScreen[];
 }
 
 // ---------------------------------------------------------------------------

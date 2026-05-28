@@ -53,5 +53,23 @@ namespace FigForge
                 if (string.IsNullOrEmpty(e.parentId)) roots.Add(e);
             return roots;
         }
+
+        public static ProjectData LoadProject(string projectJsonPath)
+        {
+            if (!File.Exists(projectJsonPath)) return null;
+            try
+            {
+                var p = JsonConvert.DeserializeObject<ProjectData>(File.ReadAllText(projectJsonPath));
+                if (p == null || p.screens == null) return null;
+                if (p.schema != "figforge/project")
+                    Debug.LogWarning($"[FigForge] unexpected project schema '{p.schema}'.");
+                return p;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[FigForge] failed to parse project.json: {e.Message}");
+                return null;
+            }
+        }
     }
 }

@@ -21,6 +21,8 @@ namespace FigForge
         List<string> _manifestPaths = new List<string>();
         int _selected = 0;
         Manifest _manifest;
+        List<string> _projectPaths = new List<string>();
+        int _selectedProject = 0;
 
         // ---- config ----
         enum UIBackend { uGUI, UIToolkit }
@@ -79,6 +81,14 @@ namespace FigForge
                 .Where(IsFigForgeManifest)
                 .ToList();
             _selected = Mathf.Clamp(_selected, 0, Mathf.Max(0, _manifestPaths.Count - 1));
+
+            _projectPaths = Directory
+                .GetFiles(Application.dataPath, "project.json", SearchOption.AllDirectories)
+                .Select(p => "Assets" + p.Substring(Application.dataPath.Length).Replace('\\', '/'))
+                .Where(p => { try { return File.ReadAllText(p).Contains("figforge/project"); } catch { return false; } })
+                .ToList();
+            _selectedProject = Mathf.Clamp(_selectedProject, 0, Mathf.Max(0, _projectPaths.Count - 1));
+
             LoadSelected();
         }
 
@@ -175,6 +185,18 @@ namespace FigForge
 
         void ManifestPicker()
         {
+            // Whole-page project bundles (project.json) → Build Page.
+            if (_projectPaths.Count > 0)
+            {
+                _selectedProject = EditorGUILayout.Popup("Page bundle", _selectedProject,
+                    _projectPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / project.json").ToArray());
+                GUI.backgroundColor = new Color(0.49f, 0.36f, 1f);
+                if (GUILayout.Button($"Build Page → {_backend} (all screens)", GUILayout.Height(26)))
+                    BuildPageProject(_projectPaths[_selectedProject]);
+                GUI.backgroundColor = Color.white;
+                Divider();
+            }
+
             // Import straight from a FigForge export .zip — no manual unzip.
             using (new EditorGUILayout.HorizontalScope())
             {
@@ -372,7 +394,7 @@ namespace FigForge
                     mgr = canvas.GetComponent<ScreenManager>() ?? canvas.gameObject.AddComponent<ScreenManager>();
                 }
 
-                float refH = ReferenceHeight();
+                float refH = ReferenceHeight(_manifest.screen.figmaSize.h);
                 float sf = _manifest.screen.figmaSize.h > 0 ? refH / _manifest.screen.figmaSize.h : 1f;
 
                 var ctx = new BuildContext
@@ -412,6 +434,102 @@ namespace FigForge
                 EditorUtility.ClearProgressBar();
                 AssetDatabase.SaveAssets();
             }
+        }
+
+        // ---- Whole-page (project bundle) build ---------------------------------
+        struct LoadedScreen { public Manifest m; public string srcDir; }
+
+        void BuildPageProject(string projectPath)
+        {
+            _log.Clear();
+            var proj = ManifestParser.LoadProject(projectPath);
+            if (proj == null || proj.screens.Count == 0) { Log("project.json is empty or invalid", MessageType.Error); return; }
+            var baseDir = Path.GetDirectoryName(projectPath).Replace('\\', '/');
+
+            var loaded = new List<LoadedScreen>();
+            foreach (var ps in proj.screens)
+            {
+                var mp = $"{baseDir}/{ps.manifest}".Replace('\\', '/');
+                var m = ManifestParser.Load(mp);
+                if (m == null) { Log($"skip '{ps.name}': manifest not found ({mp})", MessageType.Warning); continue; }
+                loaded.Add(new LoadedScreen { m = m, srcDir = Path.GetDirectoryName(mp) });
+            }
+            if (loaded.Count == 0) { Log("no buildable screens in bundle", MessageType.Error); return; }
+            _manifest = loaded[0].m; // for ResolveCanvas / PanelSettings / header
+
+            try
+            {
+                if (_backend == UIBackend.UIToolkit) { BuildPageUITK(proj, loaded); return; }
+
+                var canvas = ResolveCanvas();
+                var mgr = canvas.GetComponent<ScreenManager>() ?? canvas.gameObject.AddComponent<ScreenManager>();
+                int built = 0;
+                for (int i = 0; i < loaded.Count; i++)
+                {
+                    var m = loaded[i].m;
+                    EditorUtility.DisplayProgressBar("FigForge", $"Building {m.screen.name}…", (float)i / loaded.Count);
+                    var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
+                    float fh = m.screen.figmaSize != null ? m.screen.figmaSize.h : 1080f;
+                    float sf = fh > 0 ? ReferenceHeight(fh) / fh : 1f;
+                    var ctx = new BuildContext
+                    {
+                        scaleFactor = sf, sprites = sprites, canonical = _canonicalLibrary, disableRaycasts = _disableRaycasts,
+                        resolveFont = (fam, sty) => _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null,
+                        log = mm => Log(mm, MessageType.Warning),
+                    };
+                    var page = HierarchyBuilder.BuildPage(m, canvas.transform, ctx);
+                    if (page == null) continue;
+                    var bs = page.GetComponent<BaseScreen>() ?? page.AddComponent<BaseScreen>();
+                    bs.screenName = m.screen.name;
+                    mgr.Register(bs);
+                    built++;
+                }
+                mgr.initialScreen = proj.initial;
+                // Editor convenience: show only the initial screen.
+                foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(s.screenName == proj.initial);
+
+                Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build Page");
+                EditorUtility.SetDirty(canvas);
+                UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
+                    UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
+                Log($"built page '{proj.name}' — {built} screen(s), initial '{proj.initial}' ✓", MessageType.Info);
+            }
+            catch (System.Exception e) { Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); }
+            finally { EditorUtility.ClearProgressBar(); AssetDatabase.SaveAssets(); }
+        }
+
+        void BuildPageUITK(ProjectData proj, List<LoadedScreen> loaded)
+        {
+            var panel = ResolvePanelSettings();
+            var go = new GameObject("FigForge UI", typeof(UnityEngine.UIElements.UIDocument));
+            var doc = go.GetComponent<UnityEngine.UIElements.UIDocument>();
+            if (panel != null) doc.panelSettings = panel;
+            var mgr = go.AddComponent<UIScreenManager>();
+
+            int built = 0;
+            for (int i = 0; i < loaded.Count; i++)
+            {
+                var m = loaded[i].m;
+                EditorUtility.DisplayProgressBar("FigForge", $"Generating {m.screen.name}…", (float)i / loaded.Count);
+                var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
+                var ctx = new UITKContext
+                {
+                    outFolder = _uitkOutFolder, sprites = sprites, log = mm => Log(mm, MessageType.Warning),
+                    resolveFontPath = (fam, sty) =>
+                    {
+                        var fa = _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null;
+                        return new TMP_FontAssetRef { assetPath = fa != null ? AssetDatabase.GetAssetPath(fa) : null };
+                    },
+                };
+                var res = UxmlBuilder.Build(m, ctx);
+                var vta = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.VisualTreeAsset>(res.uxmlPath);
+                if (vta != null) { mgr.Register(m.screen.name, vta); built++; }
+            }
+            mgr.initialScreen = proj.initial;
+            Undo.RegisterCreatedObjectUndo(go, "FigForge Build Page");
+            UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
+                UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
+            Log($"built UITK page '{proj.name}' — {built} screen(s) ✓", MessageType.Info);
         }
 
         // ---- UI Toolkit backend ------------------------------------------------
@@ -551,9 +669,9 @@ namespace FigForge
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             var scaler = go.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            float rh = ReferenceHeight(_manifest.screen.figmaSize.h);
             scaler.referenceResolution = new Vector2(
-                _manifest.screen.figmaSize.w * (ReferenceHeight() / Mathf.Max(1f, _manifest.screen.figmaSize.h)),
-                ReferenceHeight());
+                _manifest.screen.figmaSize.w * (rh / Mathf.Max(1f, _manifest.screen.figmaSize.h)), rh);
             scaler.matchWidthOrHeight = 0.5f;
 
             if (Object.FindObjectsByType<UnityEngine.EventSystems.EventSystem>(FindObjectsSortMode.None).Length == 0)
@@ -563,14 +681,14 @@ namespace FigForge
             return canvas;
         }
 
-        float ReferenceHeight()
+        float ReferenceHeight(float figmaH)
         {
             switch (_scalePreset)
             {
                 case ScalePreset.P720: return 720f;
                 case ScalePreset.P1080: return 1080f;
                 case ScalePreset.Custom: return _customRefHeight;
-                default: return _manifest.screen.figmaSize.h;
+                default: return figmaH;
             }
         }
 

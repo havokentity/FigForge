@@ -42,6 +42,19 @@ export function generateFileName(root: string, element: string, scale: number): 
 const KIND_TAGS: Record<string, CanonicalKind> = {
   btn: 'button',
   button: 'button',
+  tgl: 'toggle',
+  toggle: 'toggle',
+  chk: 'toggle',
+  check: 'toggle',
+  checkbox: 'toggle',
+  inp: 'input',
+  input: 'input',
+  field: 'input',
+  drp: 'dropdown',
+  dropdown: 'dropdown',
+  select: 'dropdown',
+  sld: 'slider',
+  slider: 'slider',
 };
 
 export function parseCanonical(name: string): CanonicalRef | null {

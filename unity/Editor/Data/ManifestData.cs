@@ -95,10 +95,18 @@ namespace FigForge
 
     public class CanonicalRef
     {
-        public string kind;              // "button"
+        public string kind;              // button | toggle | input | dropdown | slider
         [JsonProperty("ref")] public string Ref;
         public string instanceName;
         public string label;
+        public string value;             // initial state (toggle on/off, slider value, input text)
+        public List<string> options;     // dropdown options
+    }
+
+    public class NavLink
+    {
+        public string target;            // destination screen name (sanitized)
+        public string trigger;           // e.g. "click"
     }
 
     public class AssetBounds
@@ -134,6 +142,7 @@ namespace FigForge
         public AssetBounds assetBounds;
         public NineSlice nineSlice;
         public CanonicalRef canonical;
+        public NavLink nav;
         public bool interactive;
         public bool clipsContent;
         public bool merged;
@@ -143,4 +152,18 @@ namespace FigForge
 
     public class AssetEntry { public string file; public string nodeId; public float scale = 1f; }
     public class FontEntry { public string family; public List<string> styles = new List<string>(); }
+
+    // ---- project bundle (whole-page export) -------------------------------
+    public class ProjectScreen { public string name; public string manifest; }
+
+    public class ProjectData
+    {
+        public string schema;            // "figforge/project"
+        public string version;
+        public string generator;
+        public string name;
+        public string exportedAt;
+        public string initial;
+        public List<ProjectScreen> screens = new List<ProjectScreen>();
+    }
 }
