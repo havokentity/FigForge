@@ -155,12 +155,22 @@ namespace FigForge
             using (new EditorGUILayout.HorizontalScope())
             {
                 GUILayout.Label("◆ FigForge", _h1);
+                GUILayout.Label($"v{PackageVersion()}", EditorStyles.miniLabel, GUILayout.Width(56));
                 GUILayout.FlexibleSpace();
                 if (GUILayout.Button("Rescan", EditorStyles.miniButton, GUILayout.Width(64)))
                 { RefreshManifests(); RefreshFonts(); }
             }
             EditorGUILayout.LabelField("Figma → Unity UI importer", EditorStyles.miniLabel);
             Divider();
+        }
+
+        string _version;
+        string PackageVersion()
+        {
+            if (_version != null) return _version;
+            var info = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(FigForgeImporterWindow).Assembly);
+            _version = info != null ? info.version : "dev";
+            return _version;
         }
 
         void ManifestPicker()

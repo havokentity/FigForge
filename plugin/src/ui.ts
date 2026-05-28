@@ -5,11 +5,15 @@
 import type { ElementConfig, ExportScale, TreeNode } from './types';
 
 declare const JSZip: any;
+declare const __FIGFORGE_VERSION__: string; // injected by esbuild from package.json
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 function post(msg: Record<string, unknown>) {
   parent.postMessage({ pluginMessage: msg }, '*');
 }
+
+// Show the real version in the header pill.
+$('#version').textContent = 'v' + __FIGFORGE_VERSION__;
 
 // ---- per-element config state ----
 const excluded = new Set<string>();

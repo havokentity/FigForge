@@ -1,15 +1,20 @@
 // Build script: bundles main.ts → dist/main.js and inlines ui.ts into dist/ui.html.
 import { build, context } from 'esbuild';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const watch = process.argv.includes('--watch');
+
+// Single source of truth for the plugin version → injected into the bundle.
+const VERSION = JSON.parse(readFileSync('package.json', 'utf8')).version;
 
 const common = {
   bundle: true,
   format: 'iife',
   target: 'es2017',
   logLevel: 'info',
+  define: { __FIGFORGE_VERSION__: JSON.stringify(VERSION) },
 };
 
 async function buildUiHtml() {
