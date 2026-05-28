@@ -176,7 +176,10 @@ namespace FigForge
             if (hasAsset)
             {
                 img.sprite = ctx.sprites[e.asset];
-                if (e.nineSlice != null) { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
+                // Auto-9-slice when the sprite was imported with a border (rounded /
+                // bordered panel) so it scales without smearing the corners.
+                if (img.sprite != null && img.sprite.border.sqrMagnitude > 0.01f)
+                { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
                 ApplyOpacity(go, e, Color.white);
             }
             else if (style?.fill != null)
@@ -317,6 +320,10 @@ namespace FigForge
             var normal = SpriteByFile(st.normal, ctx);
             if (normal != null) img.sprite = normal;
             else img.color = new Color(0.45f, 0.36f, 1f, 1f);
+            // 9-slice the button background so instances scale without smearing
+            // the corner radius (the state sprites were imported with a border).
+            if (normal != null && normal.border.sqrMagnitude > 0.01f)
+            { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = img;
