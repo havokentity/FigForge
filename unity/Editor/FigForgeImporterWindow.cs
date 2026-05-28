@@ -135,13 +135,20 @@ namespace FigForge
 
         TMP_FontAsset GuessFont(string family, string style)
         {
+            // Only a confident family+weight match prefills the Fonts section; a
+            // miss returns null so it falls through to FontAutoImporter (tiered
+            // matching + can generate the exact weight). The old family-only /
+            // first-available fallbacks were harmful — they cached e.g. a Regular
+            // face for an "Extra Bold" request and shadowed the smart resolver.
             var fam = (family ?? "").Replace(" ", "").ToLower();
             var sty = (style ?? "").Replace(" ", "").ToLower();
+            if (fam == "") return null;
             return _projectFonts.FirstOrDefault(f =>
-                       f.name.Replace(" ", "").ToLower().Contains(fam) &&
-                       f.name.Replace(" ", "").ToLower().Contains(sty))
-                   ?? _projectFonts.FirstOrDefault(f => f.name.Replace(" ", "").ToLower().Contains(fam))
-                   ?? (_projectFonts.Count > 0 ? _projectFonts[0] : null);
+            {
+                var n = f.name.Replace(" ", "").ToLower();
+                if (!n.Contains(fam)) return false;
+                return sty == "" || sty == "regular" ? n.Contains("regular") : n.Contains(sty);
+            });
         }
 
         // -----------------------------------------------------------------------

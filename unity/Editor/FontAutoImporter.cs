@@ -100,6 +100,7 @@ namespace FigForge
             }
             catch (Exception e)
             {
+                Debug.LogWarning($"[FigForge] font auto-import failed for '{family} {style}': {e}");
                 log?.Invoke($"font auto-import failed for '{family} {style}': {e.Message} — using default");
                 return null;
             }

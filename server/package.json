@@ -1,6 +1,6 @@
 {
   "name": "figforge-bridge",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "FigForge MCP bridge — exposes Figma design data + Unity export to AI agents over MCP",
   "license": "MIT",
   "type": "module",
