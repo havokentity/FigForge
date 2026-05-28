@@ -92,13 +92,12 @@ namespace FigForge
             LoadSelected();
         }
 
+        // Only FigForge manifests carry the "figforge/manifest" schema marker.
+        // Requiring it keeps the scan from trying to parse foreign/old-schema
+        // manifest.json files in the project (which throw and spam the log).
         static bool IsFigForgeManifest(string assetPath)
         {
-            try
-            {
-                var head = File.ReadAllText(assetPath);
-                return head.Contains("figforge/manifest") || (head.Contains("\"elements\"") && head.Contains("\"screen\""));
-            }
+            try { return File.ReadAllText(assetPath).Contains("figforge/manifest"); }
             catch { return false; }
         }
 
