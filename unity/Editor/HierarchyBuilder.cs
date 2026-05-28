@@ -129,14 +129,27 @@ namespace FigForge
         // -----------------------------------------------------------------------
         static void ApplyTransform(RectTransform rt, ElementData e, BuildContext ctx)
         {
-            var t = e.transform;
             float sf = ctx.scaleFactor;
+            var t = e.transform;
+            rt.localScale = Vector3.one;
+
+            // Fall back to the raw rect when no mapped transform is present
+            // (partial export, or an element kind the mapper skipped): centre-
+            // anchored, sized from the Figma rect. Avoids a hard NRE on build.
+            if (t == null)
+            {
+                ctx.log($"element '{e.name}' has no transform — positioned from rect");
+                rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.sizeDelta = e.rect != null ? new Vector2(e.rect.w * sf, e.rect.h * sf) : new Vector2(100f, 100f);
+                rt.anchoredPosition = Vector2.zero;
+                return;
+            }
+
             rt.anchorMin = V(t.anchorMin, 0.5f);
             rt.anchorMax = V(t.anchorMax, 0.5f);
             rt.pivot = V(t.pivot, 0.5f);
             rt.offsetMin = V(t.offsetMin, 0f) * sf;
             rt.offsetMax = V(t.offsetMax, 0f) * sf;
-            rt.localScale = Vector3.one;
             if (Mathf.Abs(t.rotationZ) > 0.001f)
                 rt.localEulerAngles = new Vector3(0, 0, t.rotationZ);
         }
