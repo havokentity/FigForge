@@ -32,6 +32,15 @@ namespace FigForge
 
         public Color FillColor { get => fillColor; set { fillColor = value; Push(); } }
 
+        // Swap the whole fill at runtime (used by FigForgeButtonStateColors for
+        // per-state colours). Setting fill2==fill and grad=(0,0) renders solid;
+        // a real second colour + direction renders the gradient — so a gradient
+        // button can show its gradient at rest and a solid colour on hover/press.
+        public void SetFill(Color fill, Color fill2, Vector2 grad)
+        {
+            fillColor = fill; fillColor2 = fill2; gradientDir = grad; Push();
+        }
+
         public void Configure(Color fill, Color fill2, Vector2 grad, Color border, float borderW, Vector4 cornerRadii)
         {
             fillColor = fill; fillColor2 = fill2; gradientDir = grad;

@@ -499,19 +499,24 @@ namespace FigForge
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = rr;
-            btn.transition = Selectable.Transition.None; // colours driven by FigForgeButtonStateColors
+            btn.transition = Selectable.Transition.None; // fills driven by FigForgeButtonStateColors
 
-            // Per-state colour swap only for solid fills — swapping a single
-            // FillColor would flatten a gradient on hover. Gradient buttons keep
-            // their gradient across states (per-state gradient swap is future work).
-            if (!gradient)
-            {
-                var sc = e.canonical.stateColors;
-                var states = go.AddComponent<FigForgeButtonStateColors>();
-                states.normal = sc != null && sc.normal != null ? ToColor(sc.normal) : fill;
-                states.highlighted = sc != null && sc.highlighted != null ? ToColor(sc.highlighted) : states.normal;
-                states.pressed = sc != null && sc.pressed != null ? ToColor(sc.pressed) : states.normal;
-            }
+            // Per-state full-fill swap (works for solid AND gradient buttons): the
+            // normal state is the shape's fill (gradient or solid); a captured
+            // hover/press colour is applied as a SOLID (fill2==fill, dir=0) so a
+            // gradient button flattens to the Figma rollover/pressed colour, while
+            // an uncaptured state keeps the normal fill.
+            var sc = e.canonical.stateColors;
+            var states = go.AddComponent<FigForgeButtonStateColors>();
+            states.normal = fill;        states.normal2 = fill2;      states.normalDir = dir;
+            if (sc != null && sc.highlighted != null)
+            { var c = ToColor(sc.highlighted); states.highlighted = c; states.highlighted2 = c; states.highlightedDir = Vector2.zero; }
+            else
+            { states.highlighted = fill; states.highlighted2 = fill2; states.highlightedDir = dir; }
+            if (sc != null && sc.pressed != null)
+            { var c = ToColor(sc.pressed); states.pressed = c; states.pressed2 = c; states.pressedDir = Vector2.zero; }
+            else
+            { states.pressed = fill; states.pressed2 = fill2; states.pressedDir = dir; }
 
             var labelGo = NewRect("Label", go.transform);
             Stretch(labelGo.GetComponent<RectTransform>());

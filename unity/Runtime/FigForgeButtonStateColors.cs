@@ -1,8 +1,10 @@
 // =============================================================================
-// FigForge — swaps a FigForgeRoundedRect's fill colour per interaction state
-// (the Figma button's Regular / Rollover / Pressed). Lives alongside the Button
-// (transition set to None). The base (normal) colour applies immediately, so the
-// button looks right even before any pointer input.
+// FigForge — swaps a FigForgeRoundedRect's fill per interaction state (the Figma
+// button's Regular / Rollover / Pressed). Lives alongside the Button (transition
+// set to None). The base (normal) fill applies immediately, so the button looks
+// right even before any pointer input. Each state carries a FULL fill — a solid
+// (fill2 == fill, dir = 0) or a 2-stop gradient — so a gradient button shows its
+// gradient at rest and the (solid or gradient) hover/press states on input.
 // =============================================================================
 
 using UnityEngine;
@@ -15,9 +17,10 @@ namespace FigForge
     public class FigForgeButtonStateColors : MonoBehaviour,
         IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler, IPointerUpHandler
     {
-        public Color normal = Color.white;
-        public Color highlighted = Color.white;
-        public Color pressed = Color.white;
+        public Color normal = Color.white,      normal2 = Color.white;
+        public Color highlighted = Color.white, highlighted2 = Color.white;
+        public Color pressed = Color.white,     pressed2 = Color.white;
+        public Vector2 normalDir, highlightedDir, pressedDir;
 
         FigForgeRoundedRect _g;
         bool _over, _down;
@@ -33,7 +36,9 @@ namespace FigForge
         void Apply()
         {
             if (_g == null) return;
-            _g.FillColor = _down ? pressed : (_over ? highlighted : normal);
+            if (_down) _g.SetFill(pressed, pressed2, pressedDir);
+            else if (_over) _g.SetFill(highlighted, highlighted2, highlightedDir);
+            else _g.SetFill(normal, normal2, normalDir);
         }
     }
 }
