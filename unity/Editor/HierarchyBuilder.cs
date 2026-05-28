@@ -233,11 +233,24 @@ namespace FigForge
 
             var font = ctx.resolveFont?.Invoke(t.fontFamily, t.fontStyle);
             if (font != null) tmp.font = font;
+            tmp.fontStyle = FauxStyle(t.fontStyle, font); // synthesize bold/italic if the real weight isn't available
 
             tmp.alignment = MapAlign(t.alignH, t.alignV);
             if (t.letterSpacing.HasValue) tmp.characterSpacing = t.letterSpacing.Value;
             tmp.enableWordWrapping = true;
             ApplyOpacity(go, e, tmp.color);
+        }
+
+        // Faux bold/italic only when the resolved face doesn't already encode that
+        // weight/slant — so a real Bold asset isn't double-bolded.
+        static FontStyles FauxStyle(string style, TMP_FontAsset font)
+        {
+            string s = (style ?? "").ToLowerInvariant();
+            string fn = (font != null ? font.name : "").ToLowerInvariant();
+            FontStyles fs = FontStyles.Normal;
+            if (s.Contains("bold") && !fn.Contains("bold")) fs |= FontStyles.Bold;
+            if ((s.Contains("italic") || s.Contains("oblique")) && !fn.Contains("italic") && !fn.Contains("oblique")) fs |= FontStyles.Italic;
+            return fs;
         }
 
         static TextAlignmentOptions MapAlign(string h, string v)

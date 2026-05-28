@@ -126,6 +126,14 @@ namespace FigForge
                 }
         }
 
+        // Explicit assignment in the Fonts section wins; otherwise auto-import a
+        // matching font (project → OS) and build a TMP asset for it.
+        TMP_FontAsset ResolveFontAsset(string family, string style)
+        {
+            if (_fontMap.TryGetValue($"{family}|{style}", out var a) && a != null) return a;
+            return FontAutoImporter.Resolve(family, style, m => Log(m, MessageType.Info));
+        }
+
         TMP_FontAsset GuessFont(string family, string style)
         {
             var fam = (family ?? "").Replace(" ", "").ToLower();
@@ -407,6 +415,7 @@ namespace FigForge
         void Build()
         {
             _log.Clear();
+            FontAutoImporter.ClearCache();
             if (_manifest?.screen == null) { Log("manifest has no screen", MessageType.Error); return; }
             if (_backend == UIBackend.UIToolkit) { BuildUITK(); return; }
 
@@ -438,7 +447,7 @@ namespace FigForge
                     sprites = sprites,
                     canonical = _canonicalLibrary,
                     disableRaycasts = _disableRaycasts,
-                    resolveFont = (fam, sty) => _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null,
+                    resolveFont = ResolveFontAsset,
                     log = m => Log(m, MessageType.Warning),
                 };
 
@@ -481,7 +490,7 @@ namespace FigForge
             return new BuildContext
             {
                 scaleFactor = sf, sprites = sprites, canonical = _canonicalLibrary, disableRaycasts = _disableRaycasts,
-                resolveFont = (fam, sty) => _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null,
+                resolveFont = ResolveFontAsset,
                 log = mm => Log(mm, MessageType.Warning),
             };
         }
@@ -507,6 +516,7 @@ namespace FigForge
         void BuildPageProject(string projectPath)
         {
             _log.Clear();
+            FontAutoImporter.ClearCache();
             var proj = ManifestParser.LoadProject(projectPath);
             if (proj == null || proj.screens.Count == 0) { Log("project.json is empty or invalid", MessageType.Error); return; }
             var baseDir = Path.GetDirectoryName(projectPath).Replace('\\', '/');
