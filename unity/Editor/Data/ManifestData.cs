@@ -105,7 +105,8 @@ namespace FigForge
         public string value;             // initial state (toggle on/off, slider value, input text)
         public List<string> options;     // dropdown options
         public CanonicalStates states;   // per-state sprite filenames (button)
-        public CanonicalLabelFont labelFont; // instance label's font (overrides the prefab default per-instance)
+        public CanonicalLabelFont labelFont;    // THIS instance's label font (per-instance override when it differs)
+        public CanonicalLabelFont defLabelFont; // the canonical COMPONENT's label font (the prefab/definition uses this)
     }
 
     public class NavLink

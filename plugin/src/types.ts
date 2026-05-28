@@ -122,7 +122,8 @@ export interface CanonicalRef {
   value?: string; // initial state: toggle on/off, slider value, input text
   options?: string[]; // dropdown options
   states?: CanonicalStates; // sprite filenames per Button state (from Figma layers)
-  labelFont?: { family: string; style: string }; // instance label's font, so a customised weight (e.g. Extra Bold) overrides the prefab default
+  labelFont?: { family: string; style: string }; // THIS instance's label font (per-instance override when it differs from the definition)
+  defLabelFont?: { family: string; style: string }; // the canonical COMPONENT's label font — the prefab/definition uses this
 }
 
 /** Prototype navigation captured as data (no behaviour wired). */

@@ -1,2 +1,2 @@
-export const VERSION = '1.0.21';
+export const VERSION = '1.0.22';
 export const BRIDGE_PORT = 1994;

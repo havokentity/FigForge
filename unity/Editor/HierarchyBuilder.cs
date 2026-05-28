@@ -89,9 +89,16 @@ namespace FigForge
                 if (bindings != null) bindings.Apply(e.canonical.label, e.canonical.value, e.canonical.options);
                 else StampLabel(inst, e.canonical.label);
 
-                // Per-instance label font override (e.g. this instance set to Extra Bold).
-                var labelTmp = (bindings != null ? bindings.label : null) ?? inst.GetComponentInChildren<TMP_Text>(true);
-                ApplyLabelFont(labelTmp, e, ctx);
+                // Per-instance label font override — only when we know the component
+                // font (defLabelFont) AND this instance genuinely differs from it.
+                // Without defLabelFont (older export) we can't tell a real override
+                // from the component default, so we leave the prefab's font alone.
+                if (e.canonical.labelFont != null && e.canonical.defLabelFont != null
+                    && !SameFont(e.canonical.labelFont, e.canonical.defLabelFont))
+                {
+                    var labelTmp = (bindings != null ? bindings.label : null) ?? inst.GetComponentInChildren<TMP_Text>(true);
+                    ApplyFont(labelTmp, e.canonical.labelFont, ctx);
+                }
 
                 AttachNav(inst, e, ctx);
                 if (!string.IsNullOrEmpty(e.canonical.instanceName))
@@ -333,7 +340,8 @@ namespace FigForge
             tmp.color = Color.white;
             tmp.fontSize = 18f * ctx.scaleFactor;
             tmp.raycastTarget = false;
-            ApplyLabelFont(tmp, e, ctx);
+            // The prefab/definition mirrors the canonical COMPONENT's label font.
+            ApplyFont(tmp, e.canonical != null ? e.canonical.defLabelFont : null, ctx);
             return go;
         }
 
@@ -367,18 +375,25 @@ namespace FigForge
             if (ui != null) ui.text = label;
         }
 
-        // Apply a canonical instance's customised label font to its TMP label —
-        // so a button whose label was set to e.g. Extra Bold in Figma overrides
-        // the prefab's default weight per-instance. Falls back to Inter/Regular.
-        static void ApplyLabelFont(TMP_Text label, ElementData e, BuildContext ctx)
+        // Apply a specific canonical label font (family/style) to a TMP label;
+        // null → Inter/Regular. The prefab/definition uses the COMPONENT's font
+        // (defLabelFont); an instance only overrides when its font differs.
+        static void ApplyFont(TMP_Text label, CanonicalLabelFont lf, BuildContext ctx)
         {
             if (label == null) return;
-            var lf = e.canonical != null ? e.canonical.labelFont : null;
             string fam = lf != null && !string.IsNullOrEmpty(lf.family) ? lf.family : "Inter";
             string sty = lf != null && !string.IsNullOrEmpty(lf.style) ? lf.style : "Regular";
             var font = ctx.resolveFont?.Invoke(fam, sty);
             if (font != null) label.font = font;
             label.fontStyle = FauxStyle(sty, font);
+        }
+
+        static bool SameFont(CanonicalLabelFont a, CanonicalLabelFont b)
+        {
+            string af = a != null ? (a.family ?? "") : "", asy = a != null ? (a.style ?? "") : "";
+            string bf = b != null ? (b.family ?? "") : "", bsy = b != null ? (b.style ?? "") : "";
+            return string.Equals(af, bf, System.StringComparison.OrdinalIgnoreCase)
+                && string.Equals(asy, bsy, System.StringComparison.OrdinalIgnoreCase);
         }
 
         // ---- Canonical prefab: one Figma component → one reusable Unity prefab --

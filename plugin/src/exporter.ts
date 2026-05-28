@@ -317,10 +317,19 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
     const opts = gatherTexts(node);
     if (opts.length) c.options = opts;
   }
+  // This instance's label font (used as a per-instance override when it differs).
   const labelNode = firstTextNode(node);
   if (labelNode && labelNode.fontName !== figma.mixed) {
     const fn = labelNode.fontName as FontName;
     c.labelFont = { family: fn.family, style: fn.style };
+  }
+  // The canonical COMPONENT's label font — the generated prefab/definition uses
+  // this, so the prefab mirrors the component (not whatever an instance overrode).
+  const comp = node.type === 'INSTANCE' ? (node as InstanceNode).mainComponent : null;
+  const defNode = comp ? firstTextNode(comp) : (node.type === 'COMPONENT' ? labelNode : undefined);
+  if (defNode && defNode.fontName !== figma.mixed) {
+    const fn = defNode.fontName as FontName;
+    c.defLabelFont = { family: fn.family, style: fn.style };
   }
   return c;
 }
