@@ -34,7 +34,7 @@ namespace FigForge
         OutputMode _output = OutputMode.Scene;
         ScalePreset _scalePreset = ScalePreset.MatchFigma;
         float _customRefHeight = 1080f;
-        bool _newCanvas = true;
+        bool _newCanvas = false;   // default: reuse the scene's canvas
         Canvas _existingCanvas;
         bool _connectedScene = true;       // build under a shared ScreenManager
         bool _disableRaycasts = true;
@@ -227,9 +227,15 @@ namespace FigForge
                 {
                     _output = (OutputMode)EditorGUILayout.EnumPopup("Output", _output);
                     _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (ScreenManager toggles pages)", _connectedScene);
-                    _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas", _newCanvas);
+                    _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas (off = add to existing)", _newCanvas);
                     if (!_newCanvas)
+                    {
+                        // Auto-fill the slot with the scene's first canvas when blank.
+                        if (_existingCanvas == null) _existingCanvas = FirstSceneCanvas();
                         _existingCanvas = (Canvas)EditorGUILayout.ObjectField("Canvas", _existingCanvas, typeof(Canvas), true);
+                        if (_existingCanvas == null)
+                            EditorGUILayout.HelpBox("No Canvas in the scene yet — one will be created on Build, then reused next time.", MessageType.None);
+                    }
                     _scalePreset = (ScalePreset)EditorGUILayout.EnumPopup("Reference height", _scalePreset);
                     if (_scalePreset == ScalePreset.Custom)
                         _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
@@ -511,6 +517,14 @@ namespace FigForge
             AssetDatabase.CreateAsset(panel, path);
             AssetDatabase.SaveAssets();
             return panel;
+        }
+
+        // First canvas in the open scene — prefers a root ScreenSpaceOverlay one.
+        static Canvas FirstSceneCanvas()
+        {
+            var all = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.InstanceID);
+            return all.FirstOrDefault(c => c.transform.parent == null && c.renderMode == RenderMode.ScreenSpaceOverlay)
+                ?? all.FirstOrDefault();
         }
 
         Canvas ResolveCanvas()
