@@ -127,7 +127,7 @@ namespace FigForge
                 go.AddComponent<Button>();
             }
 
-            if (e.clipsContent) go.AddComponent<RectMask2D>();
+            if (e.clipsContent) ApplyClip(go);
             if (e.autoLayout != null) ApplyAutoLayout(go, e.autoLayout, ctx.scaleFactor);
             AttachNav(go, e, ctx);
 
@@ -203,15 +203,37 @@ namespace FigForge
             if (style?.stroke != null) AddBorder(go, e, ctx);
         }
 
-        // SDF panel covers solid (or fill-less) rounded/bordered rects. Gradients
-        // and image fills are left to the baked/texture paths.
+        // SDF panel covers solid (or fill-less) rounded/bordered rects AND 2-stop
+        // linear gradients (rendered crisp + rounded by the shader). Image fills,
+        // radial/angular gradients, and 3+ stop gradients stay on the baked path.
         static bool UseSdf(StyleData s)
         {
             if (s == null) return false;
-            if (s.fill != null && (s.fill.kind == "gradient" || s.fill.kind == "image")) return false;
+            if (s.fill != null && s.fill.kind == "image") return false;
+            if (s.fill != null && s.fill.kind == "gradient") return IsSdfGradient(s.fill);
             bool rounded = s.cornerRadius > 0.01f || AnyCorner(s.corners);
             bool border = s.stroke != null;
             return rounded || border;
+        }
+
+        // A gradient the SDF shader can render exactly: linear with two stops.
+        // (3+ stops or radial/angular/diamond need the baked texture path.)
+        static bool IsSdfGradient(Fill f)
+            => f != null && f.kind == "gradient" && f.gradient == "linear"
+               && f.stops != null && f.stops.Count == 2;
+
+        // Linear-gradient direction in the SDF shader's UV space (origin centre,
+        // +y UP), from Figma's gradientTransform first row [a,b,...]. Figma UV is
+        // +y DOWN, so flip y. Magnitude is dropped (the shader spans the shape);
+        // default top→bottom when no transform is present.
+        static Vector2 GradientDir(float[] transform)
+        {
+            if (transform != null && transform.Length >= 2)
+            {
+                var d = new Vector2(transform[0], -transform[1]);
+                if (d.sqrMagnitude > 1e-6f) return d.normalized;
+            }
+            return new Vector2(0f, -1f);
         }
 
         static bool AnyCorner(float[] c)
@@ -262,11 +284,40 @@ namespace FigForge
             var rr = go.AddComponent<FigForgeRoundedRect>();
             rr.raycastTarget = !ctx.disableRaycasts;
             var s = e.style;
-            Color fill = s.fill != null && s.fill.kind == "solid" ? ToColor(s.fill.color) : new Color(0, 0, 0, 0);
             Color border = s.stroke != null ? ToColor(s.stroke.color) : new Color(0, 0, 0, 0);
             float bw = s.stroke != null ? Mathf.Max(1f, s.stroke.weight * ctx.scaleFactor) : 0f;
-            rr.Configure(fill, fill, Vector2.zero, border, bw, CornerRadii(s, ctx.scaleFactor));
+
+            Color fill, fill2; Vector2 dir;
+            if (s.fill != null && IsSdfGradient(s.fill))
+            {
+                fill = ToColor(s.fill.stops[0].color);
+                fill2 = ToColor(s.fill.stops[1].color);
+                dir = GradientDir(s.fill.transform);
+            }
+            else
+            {
+                fill = s.fill != null && s.fill.kind == "solid" ? ToColor(s.fill.color) : new Color(0, 0, 0, 0);
+                fill2 = fill; dir = Vector2.zero;
+            }
+            rr.Configure(fill, fill2, dir, border, bw, CornerRadii(s, ctx.scaleFactor));
             ApplyOpacity(go, e, fill);
+        }
+
+        // Clip child content. A rounded element (already backed by an SDF
+        // FigForgeRoundedRect) clips to its rounded corners via a stencil Mask —
+        // RectMask2D can only clip to a rectangle. Flat rects keep the cheaper
+        // RectMask2D.
+        static void ApplyClip(GameObject go)
+        {
+            if (go.GetComponent<FigForgeRoundedRect>() != null)
+            {
+                var mask = go.AddComponent<Mask>();
+                mask.showMaskGraphic = true; // still draw the panel's own fill/gradient/border
+            }
+            else
+            {
+                go.AddComponent<RectMask2D>();
+            }
         }
 
         static void ApplyFill(Image img, StyleData style, BuildContext ctx)
@@ -439,19 +490,28 @@ namespace FigForge
             var rr = go.AddComponent<FigForgeRoundedRect>();
             rr.raycastTarget = true;
             var fill = ToColor(sh.fill);
+            bool gradient = sh.fill2 != null;
+            Color fill2 = gradient ? ToColor(sh.fill2) : fill;
+            Vector2 dir = gradient ? GradientDir(sh.gradientTransform) : Vector2.zero;
             var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
             float br = sh.cornerRadius * ctx.scaleFactor;
-            rr.Configure(fill, fill, Vector2.zero, border, sh.borderWidth * ctx.scaleFactor, new Vector4(br, br, br, br));
+            rr.Configure(fill, fill2, dir, border, sh.borderWidth * ctx.scaleFactor, new Vector4(br, br, br, br));
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = rr;
             btn.transition = Selectable.Transition.None; // colours driven by FigForgeButtonStateColors
 
-            var sc = e.canonical.stateColors;
-            var states = go.AddComponent<FigForgeButtonStateColors>();
-            states.normal = sc != null && sc.normal != null ? ToColor(sc.normal) : fill;
-            states.highlighted = sc != null && sc.highlighted != null ? ToColor(sc.highlighted) : states.normal;
-            states.pressed = sc != null && sc.pressed != null ? ToColor(sc.pressed) : states.normal;
+            // Per-state colour swap only for solid fills — swapping a single
+            // FillColor would flatten a gradient on hover. Gradient buttons keep
+            // their gradient across states (per-state gradient swap is future work).
+            if (!gradient)
+            {
+                var sc = e.canonical.stateColors;
+                var states = go.AddComponent<FigForgeButtonStateColors>();
+                states.normal = sc != null && sc.normal != null ? ToColor(sc.normal) : fill;
+                states.highlighted = sc != null && sc.highlighted != null ? ToColor(sc.highlighted) : states.normal;
+                states.pressed = sc != null && sc.pressed != null ? ToColor(sc.pressed) : states.normal;
+            }
 
             var labelGo = NewRect("Label", go.transform);
             Stretch(labelGo.GetComponent<RectTransform>());

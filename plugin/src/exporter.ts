@@ -510,24 +510,56 @@ export async function exportDesign(
     return s ? toRGBA(s.color, s.opacity) : null;
   }
 
-  // Procedural background shape from a button master's state layers (solid only).
+  // The renderable fill of a button state layer: a solid colour, or a 2-stop
+  // linear gradient (the SDF shader renders both crisply). Other gradients /
+  // image fills → null, so the button keeps the exported-PNG path.
+  function shapeFill(node: SceneNode): { fill: RGBA; fill2?: RGBA; gradientTransform?: number[] } | null {
+    const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
+    if (!Array.isArray(fills)) return null;
+    const paint = fills.find((f) => !isEmptyPaint(f));
+    if (!paint) return null;
+    if (paint.type === 'SOLID') {
+      const s = paint as SolidPaint;
+      return { fill: toRGBA(s.color, s.opacity) };
+    }
+    if (paint.type === 'GRADIENT_LINEAR') {
+      const g = paint as GradientPaint;
+      const stops = g.gradientStops;
+      if (stops.length === 2) {
+        const c0 = stops[0].color, c1 = stops[1].color;
+        return {
+          fill: [c0.r, c0.g, c0.b, c0.a] as RGBA,
+          fill2: [c1.r, c1.g, c1.b, c1.a] as RGBA,
+          gradientTransform: g.gradientTransform ? ([] as number[]).concat(...g.gradientTransform) : undefined,
+        };
+      }
+    }
+    return null;
+  }
+
+  // Procedural background shape from a button master's state layers: solid OR
+  // 2-stop linear gradient (SDF shader). Other fills → null → exported-PNG path.
   function captureButtonShape(master: SceneNode) {
     if (!('children' in master)) return null;
     const kids = (master as ChildrenMixin).children as SceneNode[];
     const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
     if (!reg) return null;
-    const fill = solidRGBA(reg);
-    if (!fill) return null; // gradient/image/empty → keep the PNG path
+    const sf = shapeFill(reg);
+    if (!sf) return null; // unsupported fill → keep the PNG path
     const radius = typeof (reg as unknown as { cornerRadius?: number }).cornerRadius === 'number'
       ? (reg as unknown as { cornerRadius: number }).cornerRadius : 0;
-    const shape: { cornerRadius: number; fill: RGBA; borderColor?: RGBA; borderWidth?: number } = { cornerRadius: radius, fill };
+    const shape: {
+      cornerRadius: number; fill: RGBA; fill2?: RGBA; gradientTransform?: number[];
+      borderColor?: RGBA; borderWidth?: number;
+    } = { cornerRadius: radius, fill: sf.fill };
+    if (sf.fill2) { shape.fill2 = sf.fill2; shape.gradientTransform = sf.gradientTransform; }
     const strokes = (reg as unknown as { strokes?: Paint[] }).strokes;
     const sw = (reg as unknown as { strokeWeight?: number }).strokeWeight;
     if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
       const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
       if (sc) { shape.borderColor = toRGBA(sc.color, sc.opacity); shape.borderWidth = sw; }
     }
-    const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: fill };
+    const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: sf.fill };
     const ro = kids.find((c) => c.name.toLowerCase() === 'rollover'); const rc = ro ? solidRGBA(ro) : null; if (rc) stateColors.highlighted = rc;
     const pr = kids.find((c) => c.name.toLowerCase() === 'pressed'); const pc = pr ? solidRGBA(pr) : null; if (pc) stateColors.pressed = pc;
     return { shape, stateColors };

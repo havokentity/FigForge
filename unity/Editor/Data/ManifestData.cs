@@ -95,7 +95,15 @@ namespace FigForge
 
     public class CanonicalStates { public string normal; public string highlighted; public string pressed; }
     public class CanonicalLabelFont { public string family; public string style; }
-    public class CanonicalShape { public float cornerRadius; public float[] fill; public float[] borderColor; public float borderWidth; }
+    public class CanonicalShape
+    {
+        public float cornerRadius;
+        public float[] fill;              // solid colour, or gradient stop 0
+        public float[] fill2;             // gradient stop 1 (null = solid fill)
+        public float[] gradientTransform; // gradient affine (null = solid fill)
+        public float[] borderColor;
+        public float borderWidth;
+    }
     public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }
 
     public class CanonicalRef

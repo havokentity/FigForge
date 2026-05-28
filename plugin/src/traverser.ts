@@ -22,6 +22,26 @@ function parseTag(data: string): { kind: CanonicalKind; ref: string } | null {
 }
 
 /**
+ * The canonical ref identifies WHICH definition (→ exactly one Unity prefab per
+ * ref). The Create-Button helper stamps EVERY component with the generic tag
+ * ref "Button", which collapses all button components onto a single prefab. So
+ * when the stored ref is that generic default, fall back to the component's own
+ * name (the thing a designer renames to distinguish button types). Variants
+ * share their COMPONENT_SET name. A hand-authored, non-generic ref is honored
+ * as-is, letting several components deliberately share one definition.
+ */
+function resolveRef(tagRef: string, comp: BaseNode | null): string {
+  const stored = sanitize(tagRef);
+  const generic = !tagRef || stored === 'button' || stored === 'node';
+  if (generic && comp) {
+    const set = comp.parent && comp.parent.type === 'COMPONENT_SET' ? comp.parent : null;
+    const fromName = sanitize(set ? set.name : comp.name);
+    if (fromName && fromName !== 'node') return fromName;
+  }
+  return stored || tagRef;
+}
+
+/**
  * Resolve an element's canonical binding. Priority:
  *   1. an INSTANCE of a FigForge-tagged master Component (robust — survives
  *      skinning/renaming),
@@ -32,10 +52,10 @@ export function detectCanonical(node: SceneNode): CanonicalRef | null {
   if (node.type === 'INSTANCE') {
     const mc = (node as InstanceNode).mainComponent;
     const tag = mc ? parseTag(mc.getSharedPluginData(PLUGIN_DATA_NS, PLUGIN_DATA_KEY)) : null;
-    if (tag) return { kind: tag.kind, ref: sanitize(tag.ref) || tag.ref, instanceName: sanitize(node.name) };
+    if (tag) return { kind: tag.kind, ref: resolveRef(tag.ref, mc), instanceName: sanitize(node.name) };
   }
   const selfTag = parseTag(node.getSharedPluginData(PLUGIN_DATA_NS, PLUGIN_DATA_KEY));
-  if (selfTag) return { kind: selfTag.kind, ref: sanitize(selfTag.ref) || selfTag.ref, instanceName: sanitize(node.name) };
+  if (selfTag) return { kind: selfTag.kind, ref: resolveRef(selfTag.ref, node), instanceName: sanitize(node.name) };
   return parseCanonical(node.name);
 }
 

@@ -126,7 +126,14 @@ export interface CanonicalRef {
   defLabelFont?: { family: string; style: string }; // the canonical COMPONENT's label font — the prefab/definition uses this
   // Procedural background shape (solid buttons): the importer renders this with a
   // crisp SDF shader instead of the exported state PNGs. Absent → PNG fallback.
-  shape?: { cornerRadius: number; fill?: RGBA; borderColor?: RGBA; borderWidth?: number };
+  shape?: {
+    cornerRadius: number;
+    fill?: RGBA; // solid colour, or gradient stop 0
+    fill2?: RGBA; // gradient stop 1 (present → 2-stop linear gradient background)
+    gradientTransform?: number[]; // gradient affine (Figma row-major), present with fill2
+    borderColor?: RGBA;
+    borderWidth?: number;
+  };
   stateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA };
 }
 

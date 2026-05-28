@@ -87,6 +87,11 @@ Shader "FigForge/RoundedRect"
                 float coverage = 1.0 - smoothstep(-aa, aa, d);   // crisp AA edge
                 col *= i.color;                                  // CanvasRenderer tint
                 col.a *= coverage;
+                // Discard fragments outside the rounded shape so this graphic can
+                // double as a UGUI Mask: the stencil is only written inside the
+                // rounded coverage, clipping children to the rounded corners
+                // (independent of fill alpha — a transparent fill still masks).
+                clip(coverage - 0.001);
                 return col;
             }
             ENDCG
