@@ -175,6 +175,8 @@ namespace FigForge
                         break;
                 }
                 uxml.Append(pad).Append(el).Append('\n');
+                if (e.canonical.kind == "button" && e.canonical.states != null)
+                    EmitButtonStateUss(uss, cls, e.canonical.states, ctx, ussFolderAbs);
                 return; // canonical controls have no imported children
             }
             if (isText)
@@ -307,6 +309,24 @@ namespace FigForge
             string v = t.alignV == "middle" ? "middle" : t.alignV == "bottom" ? "lower" : "upper";
             string h = t.alignH == "center" ? "center" : t.alignH == "right" ? "right" : "left";
             return $"{v}-{h}";
+        }
+
+        // Native UITK button states via :hover / :active using the exported sprites.
+        static void EmitButtonStateUss(StringBuilder uss, string cls, CanonicalStates st, UITKContext ctx, string ussFolderAbs)
+        {
+            string n = SpriteUrl(st.normal, ctx, ussFolderAbs);
+            string h = SpriteUrl(st.highlighted, ctx, ussFolderAbs);
+            string p = SpriteUrl(st.pressed, ctx, ussFolderAbs);
+            if (n != null) uss.Append($".{cls} {{ background-image: url(\"{n}\"); }}\n");
+            if (h != null) uss.Append($".{cls}:hover {{ background-image: url(\"{h}\"); }}\n");
+            if (p != null) uss.Append($".{cls}:active {{ background-image: url(\"{p}\"); }}\n");
+        }
+
+        static string SpriteUrl(string file, UITKContext ctx, string ussFolderAbs)
+        {
+            if (string.IsNullOrEmpty(file) || !ctx.sprites.ContainsKey(file)) return null;
+            var path = AssetDatabase.GetAssetPath(ctx.sprites[file]);
+            return string.IsNullOrEmpty(path) ? null : RelUrl(ussFolderAbs, ToAbs(path));
         }
 
         static string Px(float v) => Mathf.RoundToInt(v).ToString(CultureInfo.InvariantCulture) + "px";

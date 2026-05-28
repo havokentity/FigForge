@@ -93,6 +93,8 @@ namespace FigForge
         public string autoResize;
     }
 
+    public class CanonicalStates { public string normal; public string highlighted; public string pressed; }
+
     public class CanonicalRef
     {
         public string kind;              // button | toggle | input | dropdown | slider
@@ -101,6 +103,7 @@ namespace FigForge
         public string label;
         public string value;             // initial state (toggle on/off, slider value, input text)
         public List<string> options;     // dropdown options
+        public CanonicalStates states;   // per-state sprite filenames (button)
     }
 
     public class NavLink

@@ -107,6 +107,13 @@ export interface TextProps {
 // ---------------------------------------------------------------------------
 export type CanonicalKind = 'button' | 'toggle' | 'input' | 'dropdown' | 'slider';
 
+/** Exported per-state background sprites for an interactive control. */
+export interface CanonicalStates {
+  normal?: string;
+  highlighted?: string;
+  pressed?: string;
+}
+
 export interface CanonicalRef {
   kind: CanonicalKind;
   ref: string; // canonical definition name to instantiate in Unity
@@ -114,6 +121,7 @@ export interface CanonicalRef {
   label?: string; // text to stamp onto the instance, if any
   value?: string; // initial state: toggle on/off, slider value, input text
   options?: string[]; // dropdown options
+  states?: CanonicalStates; // sprite filenames per Button state (from Figma layers)
 }
 
 /** Prototype navigation captured as data (no behaviour wired). */

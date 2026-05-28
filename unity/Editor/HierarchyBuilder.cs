@@ -69,12 +69,18 @@ namespace FigForge
                 GameObject inst;
                 if (prefab != null)
                 {
+                    // Optional override: a hand-made prefab in the CanonicalLibrary.
                     inst = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, parent);
                     inst.name = e.name;
                 }
+                else if (e.canonical.kind == "button" && e.canonical.states != null)
+                {
+                    // Built entirely from the Figma component's state layers.
+                    inst = BuildStateButton(e, parent, ctx);
+                }
                 else
                 {
-                    ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' not in library → placeholder");
+                    ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' has no states or library prefab → placeholder");
                     inst = BuildPlaceholderButton(e, parent, ctx);
                 }
                 ApplyTransform(inst.GetComponent<RectTransform>() ?? inst.AddComponent<RectTransform>(), e, ctx);
@@ -260,6 +266,51 @@ namespace FigForge
         }
 
         // -----------------------------------------------------------------------
+        // A real interactive Button built from the Figma component's state sprites
+        // (SpriteSwap). No prefab, no hand-wiring.
+        static GameObject BuildStateButton(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Button" : e.name, parent);
+            var img = go.AddComponent<Image>();
+            img.raycastTarget = true;
+            var st = e.canonical.states;
+
+            var normal = SpriteByFile(st.normal, ctx);
+            if (normal != null) img.sprite = normal;
+            else img.color = new Color(0.45f, 0.36f, 1f, 1f);
+
+            var btn = go.AddComponent<Button>();
+            btn.targetGraphic = img;
+            var hi = SpriteByFile(st.highlighted, ctx);
+            var pr = SpriteByFile(st.pressed, ctx);
+            if (hi != null || pr != null)
+            {
+                btn.transition = Selectable.Transition.SpriteSwap;
+                var ss = btn.spriteState;
+                ss.highlightedSprite = hi;
+                ss.selectedSprite = hi;
+                ss.pressedSprite = pr;
+                btn.spriteState = ss;
+            }
+
+            var labelGo = NewRect("Label", go.transform);
+            Stretch(labelGo.GetComponent<RectTransform>());
+            var tmp = labelGo.AddComponent<TextMeshProUGUI>();
+            tmp.text = e.canonical.label ?? e.name;
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.color = Color.white;
+            tmp.fontSize = 18f * ctx.scaleFactor;
+            tmp.raycastTarget = false;
+            var font = ctx.resolveFont?.Invoke("Inter", "Regular");
+            if (font != null) tmp.font = font;
+            return go;
+        }
+
+        static Sprite SpriteByFile(string file, BuildContext ctx)
+        {
+            return !string.IsNullOrEmpty(file) && ctx.sprites.TryGetValue(file, out var s) ? s : null;
+        }
+
         static GameObject BuildPlaceholderButton(ElementData e, Transform parent, BuildContext ctx)
         {
             var go = NewRect(e.name, parent);

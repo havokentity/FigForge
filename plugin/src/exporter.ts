@@ -15,6 +15,7 @@ import {
   MANIFEST_VERSION,
   type CanonicalKind,
   type CanonicalRef,
+  type CanonicalStates,
   type ExportOptions,
   type ExportScale,
   type Fill,
@@ -434,6 +435,59 @@ export async function exportDesign(
     }
   }
 
+  // ---- 2b. Render canonical Button states (Regular/Rollover/Pressed) ---------
+  // The states live as named layers on the master component; Rollover/Pressed
+  // are usually hidden, so we toggle each visible just for its own export.
+  const STATE_LAYERS: [keyof CanonicalStates, string][] = [
+    ['normal', 'regular'],
+    ['highlighted', 'rollover'],
+    ['pressed', 'pressed'],
+  ];
+  async function exportStates(master: SceneNode): Promise<CanonicalStates | undefined> {
+    if (!('children' in master)) return undefined;
+    const kids = (master as ChildrenMixin).children as SceneNode[];
+    const out: CanonicalStates = {};
+    for (const [key, layerName] of STATE_LAYERS) {
+      const layer = kids.find((c) => c.name.toLowerCase() === layerName);
+      if (!layer || !('exportAsync' in layer)) continue;
+      const prev = (layer as unknown as { visible: boolean }).visible;
+      (layer as unknown as { visible: boolean }).visible = true;
+      try {
+        const bytes = await (layer as unknown as {
+          exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
+        }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
+        const hash = fnv1a(bytes);
+        let file = hashToFile.get(hash);
+        if (!file) {
+          file = generateFileName(root.name, `${master.name}_${layerName}`, scaleNum);
+          let n = 1;
+          while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
+          hashToFile.set(hash, file);
+          assets.push({ name: file, data: Array.from(bytes) });
+          assetEntries.push({ file, nodeId: layer.id, scale: scaleNum });
+        }
+        out[key] = file;
+      } catch {
+        /* skip unrenderable state */
+      } finally {
+        (layer as unknown as { visible: boolean }).visible = prev;
+      }
+    }
+    return out.normal || out.highlighted || out.pressed ? out : undefined;
+  }
+
+  const stateByNode = new Map<string, CanonicalStates>();
+  for (const p of plans) {
+    if (!p.canonicalRef || p.canonicalRef.kind !== 'button') continue;
+    const master =
+      p.node.type === 'INSTANCE'
+        ? ((p.node as InstanceNode).mainComponent as SceneNode | null)
+        : p.node;
+    if (!master) continue;
+    const states = await exportStates(master);
+    if (states) stateByNode.set(p.node.id, states);
+  }
+
   // ---- 3. Assemble manifest elements ----------------------------------------
   const elements: ManifestElement[] = [];
   const fontMap = new Map<string, Set<string>>();
@@ -481,6 +535,7 @@ export async function exportDesign(
     if (interactive(node.name) && !p.canonicalRef) components.push('Button');
 
     const canonical = buildCanonical(p.canonicalRef, node);
+    if (canonical && stateByNode.has(node.id)) canonical.states = stateByNode.get(node.id);
     const nav = navFor(node);
 
     const element: ManifestElement = {
