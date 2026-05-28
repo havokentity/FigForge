@@ -5,7 +5,10 @@
 import type { CanonicalKind, CanonicalRef, TreeNode } from './types';
 import { sanitize, parseCanonical } from './naming';
 
-const PLUGIN_DATA_KEY = 'figforge';
+// Shared plugin data (namespace + key) works without a manifest "id";
+// private get/setPluginData would require one.
+const PLUGIN_DATA_NS = 'figforge';
+const PLUGIN_DATA_KEY = 'canonical';
 
 function parseTag(data: string): { kind: CanonicalKind; ref: string } | null {
   if (!data) return null;
@@ -28,10 +31,10 @@ function parseTag(data: string): { kind: CanonicalKind; ref: string } | null {
 export function detectCanonical(node: SceneNode): CanonicalRef | null {
   if (node.type === 'INSTANCE') {
     const mc = (node as InstanceNode).mainComponent;
-    const tag = mc ? parseTag(mc.getPluginData(PLUGIN_DATA_KEY)) : null;
+    const tag = mc ? parseTag(mc.getSharedPluginData(PLUGIN_DATA_NS, PLUGIN_DATA_KEY)) : null;
     if (tag) return { kind: tag.kind, ref: sanitize(tag.ref) || tag.ref, instanceName: sanitize(node.name) };
   }
-  const selfTag = parseTag(node.getPluginData(PLUGIN_DATA_KEY));
+  const selfTag = parseTag(node.getSharedPluginData(PLUGIN_DATA_NS, PLUGIN_DATA_KEY));
   if (selfTag) return { kind: selfTag.kind, ref: sanitize(selfTag.ref) || selfTag.ref, instanceName: sanitize(node.name) };
   return parseCanonical(node.name);
 }

@@ -382,7 +382,7 @@ async function createCanonicalButton(): Promise<ComponentNode> {
   label.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
   comp.appendChild(label);
 
-  comp.setPluginData('figforge', JSON.stringify({ kind: 'button', ref: name }));
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'button', ref: name }));
 
   page.appendChild(comp);
   comp.x = page.children.filter((n) => n !== comp).length * 200;
