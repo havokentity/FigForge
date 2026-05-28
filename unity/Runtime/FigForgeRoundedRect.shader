@@ -13,7 +13,7 @@ Shader "FigForge/RoundedRect"
         _Fill2 ("Fill 2 (gradient)", Color) = (1,1,1,1)
         _BorderColor ("Border", Color) = (0,0,0,0)
         _BorderWidth ("Border Width (px)", Float) = 0
-        _Radius ("Corner Radius (px)", Float) = 0
+        _Radius ("Corner Radii px (tl,tr,br,bl)", Vector) = (0,0,0,0)
         _Size ("Rect Size (px)", Vector) = (100,100,0,0)
         _GradientDir ("Gradient Dir (xy, 0=off)", Vector) = (0,0,0,0)
 
@@ -45,8 +45,8 @@ Shader "FigForge/RoundedRect"
             struct v2f { float4 pos:SV_POSITION; fixed4 color:COLOR; float2 uv:TEXCOORD0; };
 
             fixed4 _FillColor, _Fill2, _BorderColor;
-            float4 _Size, _GradientDir;
-            float _BorderWidth, _Radius;
+            float4 _Size, _GradientDir, _Radius; // _Radius = (tl, tr, br, bl)
+            float _BorderWidth;
 
             v2f vert(appdata v) { v2f o; o.pos = UnityObjectToClipPos(v.vertex); o.color = v.color; o.uv = v.uv; return o; }
 
@@ -61,8 +61,11 @@ Shader "FigForge/RoundedRect"
             fixed4 frag(v2f i) : SV_Target
             {
                 float2 size = max(_Size.xy, float2(1,1));
-                float2 p = (i.uv - 0.5) * size;            // pixel coords from centre
-                float d = sdRoundBox(p, size * 0.5, _Radius);
+                float2 p = (i.uv - 0.5) * size;            // pixel coords from centre (+x right, +y up)
+                // pick this quadrant's corner radius: tl=x, tr=y, br=z, bl=w
+                float rad = (p.x > 0.0) ? (p.y > 0.0 ? _Radius.y : _Radius.z)
+                                        : (p.y > 0.0 ? _Radius.x : _Radius.w);
+                float d = sdRoundBox(p, size * 0.5, rad);
                 float aa = max(fwidth(d), 1e-4);
 
                 // base fill (optional linear gradient)

@@ -174,6 +174,11 @@ namespace FigForge
             bool needGraphic = hasAsset || (style != null && (style.fill != null || style.stroke != null));
             if (!needGraphic) return;
 
+            // Procedural SDF for rounded/bordered solid panels (crisp at any size,
+            // per-corner). Gradients stay on the baked path; images are textures;
+            // flat un-bordered solids stay a cheap plain Image.
+            if (!hasAsset && UseSdf(style)) { BuildSdfPanel(go, e, ctx); return; }
+
             var img = go.AddComponent<Image>();
             img.raycastTarget = !ctx.disableRaycasts;
 
@@ -196,6 +201,72 @@ namespace FigForge
             }
 
             if (style?.stroke != null) AddBorder(go, e, ctx);
+        }
+
+        // SDF panel covers solid (or fill-less) rounded/bordered rects. Gradients
+        // and image fills are left to the baked/texture paths.
+        static bool UseSdf(StyleData s)
+        {
+            if (s == null) return false;
+            if (s.fill != null && (s.fill.kind == "gradient" || s.fill.kind == "image")) return false;
+            bool rounded = s.cornerRadius > 0.01f || AnyCorner(s.corners);
+            bool border = s.stroke != null;
+            return rounded || border;
+        }
+
+        static bool AnyCorner(float[] c)
+        {
+            if (c == null) return false;
+            for (int i = 0; i < c.Length; i++) if (c[i] > 0.01f) return true;
+            return false;
+        }
+
+        // Per-corner radii (tl,tr,br,bl) in scaled px, from style.corners or the uniform radius.
+        static Vector4 CornerRadii(StyleData s, float sf)
+        {
+            if (s.corners != null && s.corners.Length >= 4)
+                return new Vector4(s.corners[0], s.corners[1], s.corners[2], s.corners[3]) * sf;
+            float r = s.cornerRadius * sf;
+            return new Vector4(r, r, r, r);
+        }
+
+        // The SDF shader is found via Shader.Find, which works in the editor but
+        // not in a player build unless the shader is "always included". Register it
+        // once per domain so built players render the procedural panels/buttons.
+        static bool _sdfShaderRegistered;
+        static void EnsureSdfShaderIncluded()
+        {
+            if (_sdfShaderRegistered) return;
+            _sdfShaderRegistered = true;
+            try
+            {
+                var shader = Shader.Find("FigForge/RoundedRect");
+                if (shader == null) return;
+                var so = new UnityEditor.SerializedObject(UnityEngine.Rendering.GraphicsSettings.GetGraphicsSettings());
+                var arr = so.FindProperty("m_AlwaysIncludedShaders");
+                if (arr == null) return;
+                for (int i = 0; i < arr.arraySize; i++)
+                    if (arr.GetArrayElementAtIndex(i).objectReferenceValue == shader) return;
+                int idx = arr.arraySize;
+                arr.InsertArrayElementAtIndex(idx);
+                arr.GetArrayElementAtIndex(idx).objectReferenceValue = shader;
+                so.ApplyModifiedProperties();
+            }
+            catch { /* best effort — editor still works via Shader.Find */ }
+        }
+
+        static void BuildSdfPanel(GameObject go, ElementData e, BuildContext ctx)
+        {
+            EnsureSdfShaderIncluded();
+            if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>();
+            var rr = go.AddComponent<FigForgeRoundedRect>();
+            rr.raycastTarget = !ctx.disableRaycasts;
+            var s = e.style;
+            Color fill = s.fill != null && s.fill.kind == "solid" ? ToColor(s.fill.color) : new Color(0, 0, 0, 0);
+            Color border = s.stroke != null ? ToColor(s.stroke.color) : new Color(0, 0, 0, 0);
+            float bw = s.stroke != null ? Mathf.Max(1f, s.stroke.weight * ctx.scaleFactor) : 0f;
+            rr.Configure(fill, fill, Vector2.zero, border, bw, CornerRadii(s, ctx.scaleFactor));
+            ApplyOpacity(go, e, fill);
         }
 
         static void ApplyFill(Image img, StyleData style, BuildContext ctx)
@@ -362,13 +433,15 @@ namespace FigForge
         static GameObject BuildShapeButton(ElementData e, Transform parent, BuildContext ctx)
         {
             var sh = e.canonical.shape;
+            EnsureSdfShaderIncluded();
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "Button" : e.name, parent);
             if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>(); // Graphic needs it
             var rr = go.AddComponent<FigForgeRoundedRect>();
             rr.raycastTarget = true;
             var fill = ToColor(sh.fill);
             var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
-            rr.Configure(fill, fill, Vector2.zero, border, sh.borderWidth * ctx.scaleFactor, sh.cornerRadius * ctx.scaleFactor);
+            float br = sh.cornerRadius * ctx.scaleFactor;
+            rr.Configure(fill, fill, Vector2.zero, border, sh.borderWidth * ctx.scaleFactor, new Vector4(br, br, br, br));
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = rr;

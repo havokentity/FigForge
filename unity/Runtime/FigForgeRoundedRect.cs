@@ -19,7 +19,7 @@ namespace FigForge
         [SerializeField] Vector2 gradientDir = Vector2.zero; // (0,0) = solid
         [SerializeField] Color borderColor = new Color(0, 0, 0, 0);
         [SerializeField] float borderWidth = 0f;             // px
-        [SerializeField] float cornerRadius = 0f;            // px
+        [SerializeField] Vector4 corners = Vector4.zero;     // per-corner radii px: (tl, tr, br, bl)
 
         Material _mat;
         static readonly int IdFill = Shader.PropertyToID("_FillColor");
@@ -32,10 +32,10 @@ namespace FigForge
 
         public Color FillColor { get => fillColor; set { fillColor = value; Push(); } }
 
-        public void Configure(Color fill, Color fill2, Vector2 grad, Color border, float borderW, float radius)
+        public void Configure(Color fill, Color fill2, Vector2 grad, Color border, float borderW, Vector4 cornerRadii)
         {
             fillColor = fill; fillColor2 = fill2; gradientDir = grad;
-            borderColor = border; borderWidth = borderW; cornerRadius = radius;
+            borderColor = border; borderWidth = borderW; corners = cornerRadii;
             Push();
         }
 
@@ -60,7 +60,7 @@ namespace FigForge
             m.SetColor(IdFill2, fillColor2);
             m.SetColor(IdBorder, borderColor);
             m.SetFloat(IdBorderW, borderWidth);
-            m.SetFloat(IdRadius, cornerRadius);
+            m.SetVector(IdRadius, corners);
             m.SetVector(IdSize, new Vector4(r.width, r.height, 0, 0));
             m.SetVector(IdGrad, new Vector4(gradientDir.x, gradientDir.y, 0, 0));
             SetMaterialDirty();
