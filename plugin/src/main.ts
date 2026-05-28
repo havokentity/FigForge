@@ -177,7 +177,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         const comp = await createCanonicalButton();
         figma.ui.postMessage({
           type: 'status',
-          message: `Created button "${comp.name}" on the "FigForge Components" page — skin it, then drop instances into your screens.`,
+          message: `Button "${comp.name}" ready (Regular/Rollover/Pressed/HitArea/Label) — skin it, then drop instances into your screens.`,
         });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create button failed: ' + String((e as Error)?.message || e) });
@@ -349,6 +349,25 @@ async function loadUiFont(): Promise<FontName> {
   return f;
 }
 
+function jumpTo(page: PageNode, node: SceneNode) {
+  figma.currentPage = page;
+  figma.currentPage.selection = [node];
+  figma.viewport.scrollAndZoomIntoView([node]);
+}
+
+function stateRect(name: string, color: RGB, visible: boolean, w: number, h: number, r: number): RectangleNode {
+  const rect = figma.createRectangle();
+  rect.name = name;
+  rect.resize(w, h);
+  rect.x = 0;
+  rect.y = 0;
+  rect.cornerRadius = r;
+  rect.fills = [{ type: 'SOLID', color }];
+  rect.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  rect.visible = visible;
+  return rect;
+}
+
 async function createCanonicalButton(): Promise<ComponentNode> {
   let page = figma.root.children.find((p) => p.name === COMPONENTS_PAGE) as PageNode | undefined;
   if (!page) {
@@ -356,36 +375,57 @@ async function createCanonicalButton(): Promise<ComponentNode> {
     page.name = COMPONENTS_PAGE;
   }
 
-  // Unique name within the page → becomes the canonical ref.
-  let name = 'Button';
-  let i = 2;
-  while (page.children.some((n) => n.name === name)) name = `Button${i++}`;
+  // Reuse the default "Button" master if it already exists — don't spam Button2/3.
+  const existing = page.children.find(
+    (n) => n.type === 'COMPONENT' && n.name === 'Button'
+  ) as ComponentNode | undefined;
+  if (existing) {
+    jumpTo(page, existing);
+    return existing;
+  }
 
   const font = await loadUiFont();
+  const W = 160, H = 48, R = 8;
 
   const comp = figma.createComponent();
-  comp.name = name;
-  comp.layoutMode = 'HORIZONTAL';
-  comp.primaryAxisSizingMode = 'FIXED';
-  comp.counterAxisSizingMode = 'FIXED';
-  comp.primaryAxisAlignItems = 'CENTER';
-  comp.counterAxisAlignItems = 'CENTER';
-  comp.resize(160, 48);
-  comp.cornerRadius = 8;
-  comp.fills = [{ type: 'SOLID', color: { r: 0.49, g: 0.36, b: 1 } }];
+  comp.name = 'Button';
+  comp.resize(W, H);
+  comp.fills = []; // the visible background is the state layers below
 
+  // Visual states (only Regular shown by default) — skin each one.
+  comp.appendChild(stateRect('Regular', { r: 0.49, g: 0.36, b: 1 }, true, W, H, R));
+  comp.appendChild(stateRect('Rollover', { r: 0.58, g: 0.47, b: 1 }, false, W, H, R));
+  comp.appendChild(stateRect('Pressed', { r: 0.40, g: 0.27, b: 0.92 }, false, W, H, R));
+
+  // Hit area — full-bleed transparent rect marking the clickable region.
+  const hit = figma.createRectangle();
+  hit.name = 'HitArea';
+  hit.resize(W, H);
+  hit.x = 0;
+  hit.y = 0;
+  hit.fills = [{ type: 'SOLID', color: { r: 0, g: 0, b: 0 }, opacity: 0 }];
+  hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(hit);
+
+  // Label (top, centered).
   const label = figma.createText();
   label.fontName = font;
+  label.name = 'Label';
   label.characters = 'Button';
   label.fontSize = 16;
-  label.name = 'Label';
   label.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  label.textAlignHorizontal = 'CENTER';
+  label.textAlignVertical = 'CENTER';
   comp.appendChild(label);
+  label.x = (W - label.width) / 2;
+  label.y = (H - label.height) / 2;
+  label.constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
 
-  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'button', ref: name }));
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'button', ref: 'Button' }));
 
   page.appendChild(comp);
-  comp.x = page.children.filter((n) => n !== comp).length * 200;
+  comp.x = 0;
   comp.y = 0;
+  jumpTo(page, comp);
   return comp;
 }

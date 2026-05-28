@@ -90,6 +90,8 @@
     display: flex; align-items: center; gap: 6px; padding: 8px 10px;
     border-bottom: 1px solid var(--border); flex-wrap: wrap;
   }
+  .toolbar.subtools { padding-top: 6px; padding-bottom: 6px; background: var(--bg); }
+  .toolbar-label { font-size: 9px; letter-spacing: .6px; text-transform: uppercase; color: var(--text-secondary); }
   select, input[type="text"], input[type="number"] {
     background: var(--bg-tertiary); color: var(--text); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 5px 7px; font-size: 11px; font-family: inherit;
@@ -195,8 +197,13 @@
         <label class="chip on" id="optAutoMerge"><input type="checkbox" checked /> Auto-merge</label>
         <label class="chip on" id="optGradients"><input type="checkbox" checked /> Gradients</label>
         <label class="chip" id="optRasterStroke"><input type="checkbox" /> Raster strokes</label>
-        <button class="chip" id="createBtnBtn" title="Create a canonical Button component on the FigForge Components page">＋ Button</button>
+        <div class="spacer"></div>
         <button class="icon-btn" id="reloadBtn" title="Rescan selection">⟳</button>
+      </div>
+
+      <div class="toolbar subtools">
+        <span class="toolbar-label">Create</span>
+        <button class="chip" id="createBtnBtn" title="Create a canonical Button component on the FigForge Components page">＋ Button</button>
       </div>
 
       <div class="split">
