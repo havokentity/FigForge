@@ -71,27 +71,38 @@ namespace FigForge
         // ---- generation --------------------------------------------------------
         static TMP_FontAsset Generate(string family, string style, Action<string> log)
         {
-            string src = FindFontFile(family, style); // project-relative .ttf/.otf (OS file copied in)
-            if (src == null) return null;
+            // Never let a font-generation hiccup abort the whole build — fall back
+            // to the TMP default instead.
+            try
+            {
+                string src = FindFontFile(family, style); // project-relative .ttf/.otf (OS file copied in)
+                if (src == null) return null;
 
-            string outPath = $"{FontFolder}/{Safe(Path.GetFileNameWithoutExtension(src))} SDF.asset";
-            var prior = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(outPath);
-            if (prior != null) return prior; // reuse
+                string outPath = $"{FontFolder}/{Safe(Path.GetFileNameWithoutExtension(src))} SDF.asset";
+                var prior = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(outPath);
+                if (prior != null) return prior; // reuse
 
-            var font = AssetDatabase.LoadAssetAtPath<Font>(src);
-            if (font == null) return null;
-            var tmp = TMP_FontAsset.CreateFontAsset(font); // dynamic SDF, on-demand atlas
-            if (tmp == null) return null;
+                var font = AssetDatabase.LoadAssetAtPath<Font>(src);
+                if (font == null) return null;
+                var tmp = TMP_FontAsset.CreateFontAsset(font); // dynamic SDF, on-demand atlas
+                if (tmp == null) return null;
 
-            AssetDatabase.CreateAsset(tmp, outPath);
-            tmp.name = Path.GetFileNameWithoutExtension(outPath);
-            if (tmp.material != null) { tmp.material.name = tmp.name + " Material"; AssetDatabase.AddObjectToAsset(tmp.material, tmp); }
-            if (tmp.atlasTextures != null)
-                foreach (var tex in tmp.atlasTextures) if (tex != null) AssetDatabase.AddObjectToAsset(tex, tmp);
-            AssetDatabase.SaveAssets();
-            AssetDatabase.ImportAsset(outPath);
-            log?.Invoke($"auto-imported font '{family} {style}' → {outPath} (source: {src})");
-            return AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(outPath);
+                TextureImportHelper.EnsureFolder(FontFolder); // src may be a project/package font → folder not yet created
+                AssetDatabase.CreateAsset(tmp, outPath);
+                tmp.name = Path.GetFileNameWithoutExtension(outPath);
+                if (tmp.material != null) { tmp.material.name = tmp.name + " Material"; AssetDatabase.AddObjectToAsset(tmp.material, tmp); }
+                if (tmp.atlasTextures != null)
+                    foreach (var tex in tmp.atlasTextures) if (tex != null) AssetDatabase.AddObjectToAsset(tex, tmp);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.ImportAsset(outPath);
+                log?.Invoke($"auto-imported font '{family} {style}' → {outPath} (source: {src})");
+                return AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(outPath);
+            }
+            catch (Exception e)
+            {
+                log?.Invoke($"font auto-import failed for '{family} {style}': {e.Message} — using default");
+                return null;
+            }
         }
 
         // Best .ttf/.otf for (family, style) across project + OS by tier; copies an
