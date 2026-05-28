@@ -23,11 +23,14 @@ namespace FigForge
 #if UNITY_2023_1_OR_NEWER
             if (screenManager == null)
                 screenManager = Object.FindFirstObjectByType<ScreenManager>();
-            var links = Object.FindObjectsByType<FigForgeNavLink>(FindObjectsSortMode.None);
+            // Include inactive: most screens start hidden (ScreenManager shows one
+            // at a time), so their nav links must still be wired regardless of
+            // Start() execution order between this and ScreenManager.
+            var links = Object.FindObjectsByType<FigForgeNavLink>(FindObjectsInactive.Include, FindObjectsSortMode.None);
 #else
             if (screenManager == null)
                 screenManager = Object.FindObjectOfType<ScreenManager>();
-            var links = Object.FindObjectsOfType<FigForgeNavLink>();
+            var links = Object.FindObjectsOfType<FigForgeNavLink>(true);
 #endif
             if (screenManager == null) { Debug.LogWarning("[FigForge] NavBinder: no ScreenManager found."); return; }
 
