@@ -763,6 +763,8 @@ namespace FigForge
 
         Canvas ResolveCanvas()
         {
+            EnsureEventSystem(); // always — even when an existing canvas is reused
+
             if (!_newCanvas && _existingCanvas != null) return _existingCanvas;
 
             var existing = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
@@ -779,12 +781,74 @@ namespace FigForge
             scaler.referenceResolution = new Vector2(
                 _manifest.screen.figmaSize.w * (rh / Mathf.Max(1f, _manifest.screen.figmaSize.h)), rh);
             scaler.matchWidthOrHeight = 0.5f;
-
-            if (Object.FindObjectsByType<UnityEngine.EventSystems.EventSystem>(FindObjectsSortMode.None).Length == 0)
-                new GameObject("EventSystem",
-                    typeof(UnityEngine.EventSystems.EventSystem),
-                    typeof(UnityEngine.EventSystems.StandaloneInputModule));
             return canvas;
+        }
+
+        // An EventSystem with the RIGHT input module, or buttons never react. On a
+        // project whose Active Input Handling is "Input System Package" (new), the
+        // legacy StandaloneInputModule throws every frame and nothing is clickable;
+        // the Input System needs InputSystemUIInputModule WITH its default actions
+        // assigned (a bare AddComponent leaves them null → no pointer input at all).
+        // Done via reflection so the importer keeps NO hard dependency on the Input
+        // System package — legacy-only projects fall back to StandaloneInputModule.
+        // Also repairs an existing mis-configured EventSystem (e.g. one left with the
+        // legacy module, or an Input System module with no actions).
+        static void EnsureEventSystem()
+        {
+            var found = Object.FindObjectsByType<UnityEngine.EventSystems.EventSystem>(FindObjectsSortMode.None);
+            var es = found.Length > 0 ? found[0] : null;
+            if (es == null)
+                es = new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem))
+                    .GetComponent<UnityEngine.EventSystems.EventSystem>();
+            var go = es.gameObject;
+
+            var ismType = FindType("UnityEngine.InputSystem.UI.InputSystemUIInputModule");
+            if (ismType != null)
+            {
+                // Input System present → it's the safe choice for "new" and "both".
+                var legacy = go.GetComponent<UnityEngine.EventSystems.StandaloneInputModule>();
+                if (legacy != null) Object.DestroyImmediate(legacy);
+
+                bool added = go.GetComponent(ismType) == null;
+                var ism = go.GetComponent(ismType) as Behaviour ?? go.AddComponent(ismType) as Behaviour;
+                bool assigned = AssignDefaultUiActions(ismType, ism);
+                if (added || legacy != null || assigned)
+                    Debug.Log("[FigForge] EventSystem → InputSystemUIInputModule with default actions"
+                        + (legacy != null ? " (replaced legacy StandaloneInputModule)." : "."));
+            }
+            else if (go.GetComponent<UnityEngine.EventSystems.BaseInputModule>() == null)
+            {
+                go.AddComponent<UnityEngine.EventSystems.StandaloneInputModule>();
+            }
+        }
+
+        static System.Type FindType(string fullName)
+        {
+            var t = System.Type.GetType(fullName);
+            if (t != null) return t;
+            foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                t = asm.GetType(fullName);
+                if (t != null) return t;
+            }
+            return null;
+        }
+
+        // Wire the Input System UI module's default actions (Point/LeftClick/…) when
+        // none are assigned — otherwise the module reads no device and the UI is dead.
+        // Respect a user-assigned actions asset. Reflection-only (no package dep).
+        static bool AssignDefaultUiActions(System.Type ismType, object ism)
+        {
+            if (ism == null) return false;
+            try
+            {
+                var assetProp = ismType.GetProperty("actionsAsset");
+                if (assetProp != null && assetProp.GetValue(ism) != null) return false; // user already wired actions
+                var assign = ismType.GetMethod("AssignDefaultActions", System.Type.EmptyTypes);
+                if (assign != null) { assign.Invoke(ism, null); return true; }
+            }
+            catch { /* older Input System without AssignDefaultActions — best effort */ }
+            return false;
         }
 
         float ReferenceHeight(float figmaH)

@@ -60,9 +60,10 @@ namespace FigForge
 
         public override Material material { get => EnsureMat() ?? base.material; set { } }
 
-        void Push()
+        // Write our SDF params onto a material. Factored out so we can re-apply them
+        // to the mask-modified material too (see GetModifiedMaterial).
+        void ApplyParams(Material m)
         {
-            var m = EnsureMat();
             if (m == null) return;
             var r = rectTransform.rect;
             m.SetColor(IdFill, fillColor);
@@ -72,7 +73,27 @@ namespace FigForge
             m.SetVector(IdRadius, corners);
             m.SetVector(IdSize, new Vector4(r.width, r.height, 0, 0));
             m.SetVector(IdGrad, new Vector4(gradientDir.x, gradientDir.y, 0, 0));
+        }
+
+        void Push()
+        {
+            var m = EnsureMat();
+            if (m == null) return;
+            ApplyParams(m);
             SetMaterialDirty();
+        }
+
+        // When this graphic is inside a UGUI Mask, the mask wraps our per-instance
+        // material in a StencilMaterial COPY that is cached by base-material reference
+        // — so later uniform changes (a hover/press fill swap, or a resize) never reach
+        // the actually-rendered copy and nothing updates on screen. SetMaterialDirty
+        // re-runs this each time, so re-apply our params to whatever material the mask
+        // hands back, keeping the masked copy in sync with fillColor/gradient/size.
+        public override Material GetModifiedMaterial(Material baseMaterial)
+        {
+            var m = base.GetModifiedMaterial(baseMaterial);
+            if (m != null && m != baseMaterial) ApplyParams(m);
+            return m;
         }
 
         // White vertices — the shader supplies fill/border/gradient; vertex color
