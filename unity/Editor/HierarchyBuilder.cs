@@ -73,9 +73,13 @@ namespace FigForge
                     inst = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, parent);
                     inst.name = e.name;
                 }
+                else if (e.canonical.kind == "button" && e.canonical.shape != null)
+                {
+                    inst = BuildShapeButton(e, parent, ctx); // fallback: inline SDF shader
+                }
                 else if (e.canonical.kind == "button" && e.canonical.states != null)
                 {
-                    inst = BuildStateButton(e, parent, ctx); // fallback: inline build
+                    inst = BuildStateButton(e, parent, ctx); // fallback: inline state PNGs
                 }
                 else
                 {
@@ -352,6 +356,42 @@ namespace FigForge
             return go;
         }
 
+        // Procedural rounded-rect button (SDF shader) — resolution-independent,
+        // matches the Figma vector exactly. Used when the export captured a solid
+        // background shape; otherwise we fall back to the state-PNG button.
+        static GameObject BuildShapeButton(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var sh = e.canonical.shape;
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Button" : e.name, parent);
+            if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>(); // Graphic needs it
+            var rr = go.AddComponent<FigForgeRoundedRect>();
+            rr.raycastTarget = true;
+            var fill = ToColor(sh.fill);
+            var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
+            rr.Configure(fill, fill, Vector2.zero, border, sh.borderWidth * ctx.scaleFactor, sh.cornerRadius * ctx.scaleFactor);
+
+            var btn = go.AddComponent<Button>();
+            btn.targetGraphic = rr;
+            btn.transition = Selectable.Transition.None; // colours driven by FigForgeButtonStateColors
+
+            var sc = e.canonical.stateColors;
+            var states = go.AddComponent<FigForgeButtonStateColors>();
+            states.normal = sc != null && sc.normal != null ? ToColor(sc.normal) : fill;
+            states.highlighted = sc != null && sc.highlighted != null ? ToColor(sc.highlighted) : states.normal;
+            states.pressed = sc != null && sc.pressed != null ? ToColor(sc.pressed) : states.normal;
+
+            var labelGo = NewRect("Label", go.transform);
+            Stretch(labelGo.GetComponent<RectTransform>());
+            var tmp = labelGo.AddComponent<TextMeshProUGUI>();
+            tmp.text = e.canonical.label ?? e.name;
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.color = Color.white;
+            tmp.fontSize = 18f * ctx.scaleFactor;
+            tmp.raycastTarget = false;
+            ApplyFont(tmp, e.canonical.defLabelFont, ctx);
+            return go;
+        }
+
         static Sprite SpriteByFile(string file, BuildContext ctx)
         {
             return !string.IsNullOrEmpty(file) && ctx.sprites.TryGetValue(file, out var s) ? s : null;
@@ -434,9 +474,11 @@ namespace FigForge
             if (existing != null) { RegisterInLibrary(ctx, kind, refName, existing); return existing; }
 
             // 3. Generate from the canonical definition, save, register.
-            GameObject temp = (kind == "button" && e.canonical.states != null)
-                ? BuildStateButton(e, null, ctx)
-                : BuildPlaceholderButton(e, null, ctx);
+            GameObject temp = (kind == "button" && e.canonical.shape != null)
+                ? BuildShapeButton(e, null, ctx)                          // crisp SDF shader (preferred)
+                : (kind == "button" && e.canonical.states != null)
+                    ? BuildStateButton(e, null, ctx)                      // exported state PNGs
+                    : BuildPlaceholderButton(e, null, ctx);
             if (temp == null) return null;
             temp.name = SafeAsset(refName);
 

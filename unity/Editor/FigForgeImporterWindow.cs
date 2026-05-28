@@ -89,6 +89,7 @@ namespace FigForge
                 .ToList();
             _selectedProject = Mathf.Clamp(_selectedProject, 0, Mathf.Max(0, _projectPaths.Count - 1));
 
+            RefreshFonts(); // keep _projectFonts current so BuildFontKeys/GuessFont never hit stale refs
             LoadSelected();
         }
 
@@ -145,6 +146,7 @@ namespace FigForge
             if (fam == "") return null;
             return _projectFonts.FirstOrDefault(f =>
             {
+                if (f == null) return false; // guard stale/destroyed refs (fonts deleted since the last refresh)
                 var n = f.name.Replace(" ", "").ToLower();
                 if (!n.Contains(fam)) return false;
                 return sty == "" || sty == "regular" ? n.Contains("regular") : n.Contains(sty);

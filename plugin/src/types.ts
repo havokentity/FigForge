@@ -124,6 +124,10 @@ export interface CanonicalRef {
   states?: CanonicalStates; // sprite filenames per Button state (from Figma layers)
   labelFont?: { family: string; style: string }; // THIS instance's label font (per-instance override when it differs from the definition)
   defLabelFont?: { family: string; style: string }; // the canonical COMPONENT's label font — the prefab/definition uses this
+  // Procedural background shape (solid buttons): the importer renders this with a
+  // crisp SDF shader instead of the exported state PNGs. Absent → PNG fallback.
+  shape?: { cornerRadius: number; fill?: RGBA; borderColor?: RGBA; borderWidth?: number };
+  stateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA };
 }
 
 /** Prototype navigation captured as data (no behaviour wired). */

@@ -502,7 +502,39 @@ export async function exportDesign(
     return out.normal || out.highlighted || out.pressed ? out : undefined;
   }
 
+  // First solid-fill colour of a node → RGBA (null if no solid fill).
+  function solidRGBA(node: SceneNode): RGBA | null {
+    const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
+    if (!Array.isArray(fills)) return null;
+    const s = fills.find((f) => !isEmptyPaint(f) && f.type === 'SOLID') as SolidPaint | undefined;
+    return s ? toRGBA(s.color, s.opacity) : null;
+  }
+
+  // Procedural background shape from a button master's state layers (solid only).
+  function captureButtonShape(master: SceneNode) {
+    if (!('children' in master)) return null;
+    const kids = (master as ChildrenMixin).children as SceneNode[];
+    const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
+    if (!reg) return null;
+    const fill = solidRGBA(reg);
+    if (!fill) return null; // gradient/image/empty → keep the PNG path
+    const radius = typeof (reg as unknown as { cornerRadius?: number }).cornerRadius === 'number'
+      ? (reg as unknown as { cornerRadius: number }).cornerRadius : 0;
+    const shape: { cornerRadius: number; fill: RGBA; borderColor?: RGBA; borderWidth?: number } = { cornerRadius: radius, fill };
+    const strokes = (reg as unknown as { strokes?: Paint[] }).strokes;
+    const sw = (reg as unknown as { strokeWeight?: number }).strokeWeight;
+    if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
+      const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
+      if (sc) { shape.borderColor = toRGBA(sc.color, sc.opacity); shape.borderWidth = sw; }
+    }
+    const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: fill };
+    const ro = kids.find((c) => c.name.toLowerCase() === 'rollover'); const rc = ro ? solidRGBA(ro) : null; if (rc) stateColors.highlighted = rc;
+    const pr = kids.find((c) => c.name.toLowerCase() === 'pressed'); const pc = pr ? solidRGBA(pr) : null; if (pc) stateColors.pressed = pc;
+    return { shape, stateColors };
+  }
+
   const stateByNode = new Map<string, CanonicalStates>();
+  const shapeByNode = new Map<string, ReturnType<typeof captureButtonShape>>();
   for (const p of plans) {
     if (!p.canonicalRef || p.canonicalRef.kind !== 'button') continue;
     const master =
@@ -512,6 +544,8 @@ export async function exportDesign(
     if (!master) continue;
     const states = await exportStates(master);
     if (states) stateByNode.set(p.node.id, states);
+    const sh = captureButtonShape(master);
+    if (sh) shapeByNode.set(p.node.id, sh);
   }
 
   // ---- 3. Assemble manifest elements ----------------------------------------
@@ -562,6 +596,10 @@ export async function exportDesign(
 
     const canonical = buildCanonical(p.canonicalRef, node);
     if (canonical && stateByNode.has(node.id)) canonical.states = stateByNode.get(node.id);
+    if (canonical && shapeByNode.has(node.id)) {
+      const sh = shapeByNode.get(node.id);
+      if (sh) { canonical.shape = sh.shape; canonical.stateColors = sh.stateColors; }
+    }
     const nav = navFor(node);
 
     const element: ManifestElement = {

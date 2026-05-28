@@ -95,6 +95,8 @@ namespace FigForge
 
     public class CanonicalStates { public string normal; public string highlighted; public string pressed; }
     public class CanonicalLabelFont { public string family; public string style; }
+    public class CanonicalShape { public float cornerRadius; public float[] fill; public float[] borderColor; public float borderWidth; }
+    public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }
 
     public class CanonicalRef
     {
@@ -107,6 +109,8 @@ namespace FigForge
         public CanonicalStates states;   // per-state sprite filenames (button)
         public CanonicalLabelFont labelFont;    // THIS instance's label font (per-instance override when it differs)
         public CanonicalLabelFont defLabelFont; // the canonical COMPONENT's label font (the prefab/definition uses this)
+        public CanonicalShape shape;            // procedural background (SDF shader) — overrides the state PNGs when present
+        public CanonicalStateColors stateColors; // per-state fill colours for the procedural background
     }
 
     public class NavLink
