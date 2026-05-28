@@ -89,6 +89,10 @@ namespace FigForge
                 if (bindings != null) bindings.Apply(e.canonical.label, e.canonical.value, e.canonical.options);
                 else StampLabel(inst, e.canonical.label);
 
+                // Per-instance label font override (e.g. this instance set to Extra Bold).
+                var labelTmp = (bindings != null ? bindings.label : null) ?? inst.GetComponentInChildren<TMP_Text>(true);
+                ApplyLabelFont(labelTmp, e, ctx);
+
                 AttachNav(inst, e, ctx);
                 if (!string.IsNullOrEmpty(e.canonical.instanceName))
                     ctx.registered.Add(new KeyValuePair<string, GameObject>(e.canonical.instanceName, inst));
@@ -237,7 +241,10 @@ namespace FigForge
 
             tmp.alignment = MapAlign(t.alignH, t.alignV);
             if (t.letterSpacing.HasValue) tmp.characterSpacing = t.letterSpacing.Value;
-            tmp.enableWordWrapping = true;
+            // Figma "auto width" text (WIDTH_AND_HEIGHT) hugs its content and never
+            // wraps — so don't wrap, else a hair of width difference pushes a word
+            // to the next line. Fixed-width/auto-height text still wraps.
+            tmp.enableWordWrapping = !string.Equals(t.autoResize, "WIDTH_AND_HEIGHT", System.StringComparison.OrdinalIgnoreCase);
             ApplyOpacity(go, e, tmp.color);
         }
 
@@ -326,8 +333,7 @@ namespace FigForge
             tmp.color = Color.white;
             tmp.fontSize = 18f * ctx.scaleFactor;
             tmp.raycastTarget = false;
-            var font = ctx.resolveFont?.Invoke("Inter", "Regular");
-            if (font != null) tmp.font = font;
+            ApplyLabelFont(tmp, e, ctx);
             return go;
         }
 
@@ -359,6 +365,20 @@ namespace FigForge
             if (tmp != null) { tmp.text = label; return; }
             var ui = inst.GetComponentInChildren<Text>(true);
             if (ui != null) ui.text = label;
+        }
+
+        // Apply a canonical instance's customised label font to its TMP label —
+        // so a button whose label was set to e.g. Extra Bold in Figma overrides
+        // the prefab's default weight per-instance. Falls back to Inter/Regular.
+        static void ApplyLabelFont(TMP_Text label, ElementData e, BuildContext ctx)
+        {
+            if (label == null) return;
+            var lf = e.canonical != null ? e.canonical.labelFont : null;
+            string fam = lf != null && !string.IsNullOrEmpty(lf.family) ? lf.family : "Inter";
+            string sty = lf != null && !string.IsNullOrEmpty(lf.style) ? lf.style : "Regular";
+            var font = ctx.resolveFont?.Invoke(fam, sty);
+            if (font != null) label.font = font;
+            label.fontStyle = FauxStyle(sty, font);
         }
 
         // ---- Canonical prefab: one Figma component → one reusable Unity prefab --

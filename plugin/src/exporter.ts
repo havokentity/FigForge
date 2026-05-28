@@ -256,6 +256,18 @@ function firstTextLabel(node: SceneNode): string | undefined {
   return undefined;
 }
 
+/** First TEXT node under a node — used to read a canonical instance's label font. */
+function firstTextNode(node: SceneNode): TextNode | undefined {
+  if (node.type === 'TEXT') return node as TextNode;
+  if ('children' in node) {
+    for (const c of (node as ChildrenMixin).children) {
+      const n = firstTextNode(c);
+      if (n) return n;
+    }
+  }
+  return undefined;
+}
+
 /** All text strings under a node — heuristic source of dropdown options. */
 function gatherTexts(node: SceneNode): string[] {
   const out: string[] = [];
@@ -304,6 +316,11 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
   if (ref.kind === 'dropdown') {
     const opts = gatherTexts(node);
     if (opts.length) c.options = opts;
+  }
+  const labelNode = firstTextNode(node);
+  if (labelNode && labelNode.fontName !== figma.mixed) {
+    const fn = labelNode.fontName as FontName;
+    c.labelFont = { family: fn.family, style: fn.style };
   }
   return c;
 }
