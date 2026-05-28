@@ -437,7 +437,37 @@ namespace FigForge
         }
 
         // ---- Whole-page (project bundle) build ---------------------------------
-        struct LoadedScreen { public Manifest m; public string srcDir; }
+        struct LoadedScreen { public Manifest m; public string srcDir; public ProjectScreen ps; }
+
+        BuildContext MakeContext(Manifest m, Dictionary<string, Sprite> sprites)
+        {
+            float fh = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.h : 1080f;
+            float sf = fh > 0 ? ReferenceHeight(fh) / fh : 1f;
+            return new BuildContext
+            {
+                scaleFactor = sf, sprites = sprites, canonical = _canonicalLibrary, disableRaycasts = _disableRaycasts,
+                resolveFont = (fam, sty) => _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null,
+                log = mm => Log(mm, MessageType.Warning),
+            };
+        }
+
+        static Transform FindContentSlot(GameObject root)
+        {
+            foreach (var t in root.GetComponentsInChildren<Transform>(true))
+            {
+                var n = t.name.ToLowerInvariant();
+                if (n == "content" || n == "content_slot") return t;
+            }
+            return null;
+        }
+
+        static void StretchToParent(GameObject go)
+        {
+            var rt = go.GetComponent<RectTransform>();
+            if (rt == null) return;
+            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+        }
 
         void BuildPageProject(string projectPath)
         {
@@ -452,7 +482,7 @@ namespace FigForge
                 var mp = $"{baseDir}/{ps.manifest}".Replace('\\', '/');
                 var m = ManifestParser.Load(mp);
                 if (m == null) { Log($"skip '{ps.name}': manifest not found ({mp})", MessageType.Warning); continue; }
-                loaded.Add(new LoadedScreen { m = m, srcDir = Path.GetDirectoryName(mp) });
+                loaded.Add(new LoadedScreen { m = m, srcDir = Path.GetDirectoryName(mp), ps = ps });
             }
             if (loaded.Count == 0) { Log("no buildable screens in bundle", MessageType.Error); return; }
             _manifest = loaded[0].m; // for ResolveCanvas / PanelSettings / header
@@ -463,36 +493,59 @@ namespace FigForge
 
                 var canvas = ResolveCanvas();
                 var mgr = canvas.GetComponent<ScreenManager>() ?? canvas.gameObject.AddComponent<ScreenManager>();
+
+                // 1. Persistent Shell (optional) — built once; screens mount into its Content slot.
+                Transform shellContent = null;
+                string shellSection = null;
+                int idx = loaded.FindIndex(ls => ls.ps.role == "shell");
+                if (idx >= 0)
+                {
+                    var sh = loaded[idx];
+                    EditorUtility.DisplayProgressBar("FigForge", $"Building shell {sh.m.screen.name}…", 0.1f);
+                    var shSprites = TextureImportHelper.Import(sh.m, sh.srcDir, $"{_spriteFolder}/{SafeName(sh.m.screen.name)}", _tex);
+                    var shellGo = HierarchyBuilder.BuildPage(sh.m, canvas.transform, MakeContext(sh.m, shSprites));
+                    if (shellGo != null)
+                    {
+                        mgr.shell = shellGo;
+                        shellSection = sh.ps.section ?? "";
+                        shellContent = FindContentSlot(shellGo);
+                        if (shellContent == null) { Log("Shell has no 'Content' slot — screens mount at shell root.", MessageType.Warning); shellContent = shellGo.transform; }
+                    }
+                }
+
+                // 2. Screens.
                 int built = 0;
                 for (int i = 0; i < loaded.Count; i++)
                 {
+                    if (loaded[i].ps.role == "shell") continue;
                     var m = loaded[i].m;
                     EditorUtility.DisplayProgressBar("FigForge", $"Building {m.screen.name}…", (float)i / loaded.Count);
                     var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
-                    float fh = m.screen.figmaSize != null ? m.screen.figmaSize.h : 1080f;
-                    float sf = fh > 0 ? ReferenceHeight(fh) / fh : 1f;
-                    var ctx = new BuildContext
-                    {
-                        scaleFactor = sf, sprites = sprites, canonical = _canonicalLibrary, disableRaycasts = _disableRaycasts,
-                        resolveFont = (fam, sty) => _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null,
-                        log = mm => Log(mm, MessageType.Warning),
-                    };
-                    var page = HierarchyBuilder.BuildPage(m, canvas.transform, ctx);
+                    bool usesShell = shellContent != null && !string.IsNullOrEmpty(shellSection) && loaded[i].ps.section == shellSection;
+                    var parent = usesShell ? shellContent : canvas.transform;
+                    var page = HierarchyBuilder.BuildPage(m, parent, MakeContext(m, sprites));
                     if (page == null) continue;
+                    if (usesShell) StretchToParent(page);
                     var bs = page.GetComponent<BaseScreen>() ?? page.AddComponent<BaseScreen>();
                     bs.screenName = m.screen.name;
+                    bs.usesShell = usesShell;
                     mgr.Register(bs);
                     built++;
                 }
+
                 mgr.initialScreen = proj.initial;
-                // Editor convenience: show only the initial screen.
+                if (canvas.GetComponent<FigForgeNavBinder>() == null) canvas.gameObject.AddComponent<FigForgeNavBinder>();
+
+                // Editor convenience: show only the initial screen + the shell if it uses one.
                 foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(s.screenName == proj.initial);
+                var init = mgr.screens.Find(s => s != null && s.screenName == proj.initial);
+                if (mgr.shell != null) mgr.shell.SetActive(init != null && init.usesShell);
 
                 Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build Page");
                 EditorUtility.SetDirty(canvas);
                 UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
                     UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
-                Log($"built page '{proj.name}' — {built} screen(s), initial '{proj.initial}' ✓", MessageType.Info);
+                Log($"built page '{proj.name}' — {built} screen(s){(mgr.shell != null ? " + shell" : "")}, initial '{proj.initial}' ✓", MessageType.Info);
             }
             catch (System.Exception e) { Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); }
             finally { EditorUtility.ClearProgressBar(); AssetDatabase.SaveAssets(); }

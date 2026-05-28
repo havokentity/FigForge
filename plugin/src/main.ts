@@ -141,29 +141,34 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
     }
 
     case 'export-page': {
-      const frames = figma.currentPage.children.filter(
-        (n) => ['FRAME', 'COMPONENT'].includes(n.type) && (n as SceneNode).visible !== false
-      ) as SceneNode[];
-      if (frames.length === 0) {
-        figma.ui.postMessage({ type: 'export-error', message: 'No top-level frames on this page.' });
+      const found = collectScreens(figma.currentPage);
+      if (found.length === 0) {
+        figma.ui.postMessage({ type: 'export-error', message: 'No top-level frames (or frames in sections) on this page.' });
         break;
       }
       try {
         const scale = (msg.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
         const options = (msg.options as ExportOptions) || DEFAULT_EXPORT_OPTIONS;
-        const screens: { name: string; manifest: string; assets: { name: string; data: number[] }[] }[] = [];
-        for (let i = 0; i < frames.length; i++) {
-          figma.ui.postMessage({ type: 'progress', current: i, total: frames.length, label: frames[i].name });
-          const result = await exportDesign(frames[i], scale, options);
+        const screens: {
+          name: string; manifest: string; assets: { name: string; data: number[] }[];
+          section: string; role: string;
+        }[] = [];
+        for (let i = 0; i < found.length; i++) {
+          figma.ui.postMessage({ type: 'progress', current: i, total: found.length, label: found[i].node.name });
+          const result = await exportDesign(found[i].node, scale, options);
           screens.push({
-            name: sanitize(frames[i].name),
+            name: sanitize(found[i].node.name),
             manifest: JSON.stringify(result.manifest, null, 2),
             assets: result.assets,
+            section: found[i].section,
+            role: frameRole(found[i].node),
           });
         }
+        // Initial = first non-shell screen.
+        const firstScreen = screens.find((s) => s.role !== 'shell') || screens[0];
         figma.ui.postMessage({
           type: 'export-page-complete',
-          project: { name: figma.currentPage.name, initial: screens[0] ? screens[0].name : '' },
+          project: { name: figma.currentPage.name, initial: firstScreen ? firstScreen.name : '' },
           screens,
         });
       } catch (e) {
@@ -366,6 +371,34 @@ function stateRect(name: string, color: RGB, visible: boolean, w: number, h: num
   rect.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   rect.visible = visible;
   return rect;
+}
+
+// Collect screen frames on a page — top-level frames AND frames inside Sections,
+// each tagged with its enclosing section name (sanitized; '' if none).
+function collectScreens(page: PageNode): { node: SceneNode; section: string }[] {
+  const out: { node: SceneNode; section: string }[] = [];
+  for (const n of page.children) {
+    if ((n as SceneNode).visible === false) continue;
+    if (n.type === 'SECTION') {
+      const sec = sanitize(n.name);
+      for (const c of (n as SectionNode).children) {
+        if (['FRAME', 'COMPONENT'].includes(c.type) && (c as SceneNode).visible !== false) {
+          out.push({ node: c as SceneNode, section: sec });
+        }
+      }
+    } else if (['FRAME', 'COMPONENT'].includes(n.type)) {
+      out.push({ node: n as SceneNode, section: '' });
+    }
+  }
+  return out;
+}
+
+// A frame is the app "shell" if named Shell / Shell_* or tagged role=shell.
+function frameRole(node: SceneNode): string {
+  const n = node.name.toLowerCase();
+  if (n === 'shell' || n.startsWith('shell_') || n.startsWith('shell ')) return 'shell';
+  if (node.getSharedPluginData('figforge', 'role') === 'shell') return 'shell';
+  return 'screen';
 }
 
 async function createCanonicalButton(): Promise<ComponentNode> {

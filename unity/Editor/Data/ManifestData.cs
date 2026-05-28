@@ -157,7 +157,13 @@ namespace FigForge
     public class FontEntry { public string family; public List<string> styles = new List<string>(); }
 
     // ---- project bundle (whole-page export) -------------------------------
-    public class ProjectScreen { public string name; public string manifest; }
+    public class ProjectScreen
+    {
+        public string name;
+        public string manifest;
+        public string section;       // enclosing Figma section ('' if none)
+        public string role = "screen"; // "screen" | "shell"
+    }
 
     public class ProjectData
     {

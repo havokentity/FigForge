@@ -14,6 +14,9 @@ namespace FigForge
         [Tooltip("Unique key used by ScreenManager.Show(name).")]
         public string screenName;
 
+        [Tooltip("If true this screen mounts inside the persistent Shell's content slot; the Shell stays visible. If false it's full-screen and the Shell hides.")]
+        public bool usesShell;
+
         public bool IsVisible => gameObject.activeSelf;
 
         public virtual void OnShow() { }

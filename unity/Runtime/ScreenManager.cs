@@ -18,6 +18,9 @@ namespace FigForge
         [Tooltip("screenName shown on Start. Empty = first registered screen.")]
         public string initialScreen;
 
+        [Tooltip("Persistent chrome (top/nav menus). Shown only while a screen with usesShell=true is active.")]
+        public GameObject shell;
+
         public BaseScreen Current { get; private set; }
 
         void Start()
@@ -42,7 +45,11 @@ namespace FigForge
                 s.SetVisible(match);
                 if (match) target = s;
             }
-            if (target != null) Current = target;
+            if (target != null)
+            {
+                Current = target;
+                if (shell != null) shell.SetActive(target.usesShell);
+            }
             else Debug.LogWarning($"[FigForge] ScreenManager: no screen named '{screenName}'.");
             return target != null;
         }

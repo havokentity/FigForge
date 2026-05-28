@@ -201,7 +201,13 @@ async function downloadBundle(manifestJson: string, assets: { name: string; data
   URL.revokeObjectURL(url);
 }
 
-interface PageScreen { name: string; manifest: string; assets: { name: string; data: number[] }[] }
+interface PageScreen {
+  name: string;
+  manifest: string;
+  assets: { name: string; data: number[] }[];
+  section?: string;
+  role?: string;
+}
 async function downloadProjectBundle(project: { name: string; initial: string }, screens: PageScreen[]) {
   const zip = new JSZip();
   const used = new Set<string>();
@@ -212,7 +218,7 @@ async function downloadProjectBundle(project: { name: string; initial: string },
     name: project.name,
     exportedAt: new Date().toISOString(),
     initial: project.initial,
-    screens: [] as { name: string; manifest: string }[],
+    screens: [] as { name: string; manifest: string; section: string; role: string }[],
   };
   for (const s of screens) {
     let folder = s.name || 'screen';
@@ -221,7 +227,7 @@ async function downloadProjectBundle(project: { name: string; initial: string },
     used.add(folder);
     zip.file(`${folder}/manifest.json`, s.manifest);
     for (const a of s.assets) zip.file(`${folder}/${a.name}`, new Uint8Array(a.data));
-    index.screens.push({ name: s.name, manifest: `${folder}/manifest.json` });
+    index.screens.push({ name: s.name, manifest: `${folder}/manifest.json`, section: s.section || '', role: s.role || 'screen' });
   }
   zip.file('project.json', JSON.stringify(index, null, 2));
   const blob = await zip.generateAsync({ type: 'blob' });
