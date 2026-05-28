@@ -181,11 +181,43 @@ $('#exportBtn').addEventListener('click', () => {
   post({ type: 'export', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
 });
 
+// Where the next page export goes: download a .zip, or POST straight to Unity.
+let pageExportTarget: 'zip' | 'unity' = 'zip';
+
 $('#exportPageBtn').addEventListener('click', () => {
+  pageExportTarget = 'zip';
   setStatus('Exporting whole page…');
   showProgress(true);
   post({ type: 'export-page', scale: parseScale(), options: currentOptions() });
 });
+
+$('#exportUnityBtn').addEventListener('click', () => {
+  pageExportTarget = 'unity';
+  setStatus('Exporting whole page → Unity…');
+  showProgress(true);
+  post({ type: 'export-page', scale: parseScale(), options: currentOptions() });
+});
+
+function unityImportUrl(): string {
+  const raw = ($('#unityPort') as HTMLInputElement)?.value;
+  const port = Math.min(65535, Math.max(1024, parseInt(raw, 10) || 1995));
+  return `http://127.0.0.1:${port}/import`;
+}
+
+async function sendToUnity(project: { name: string; initial: string }, screens: PageScreen[]) {
+  const url = unityImportUrl();
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project, screens }),
+    });
+    if (res.ok) setStatus(`Sent ${screens.length} screen(s) → Unity. Building in the FigForge importer.`);
+    else setStatus(`Unity refused the import (HTTP ${res.status}).`, true);
+  } catch (e) {
+    setStatus(`Couldn't reach Unity at ${url} — is the FigForge importer open with live import enabled?`, true);
+  }
+}
 
 async function downloadBundle(manifestJson: string, assets: { name: string; data: number[] }[]) {
   const zip = new JSZip();
@@ -366,8 +398,12 @@ window.onmessage = (event: MessageEvent) => {
     case 'export-page-complete':
       showProgress(false);
       setProgress(0);
-      downloadProjectBundle(msg.project, msg.screens);
-      setStatus(`Exported ${msg.screens.length} screen(s). Project bundle downloaded.`);
+      if (pageExportTarget === 'unity') {
+        sendToUnity(msg.project, msg.screens);
+      } else {
+        downloadProjectBundle(msg.project, msg.screens);
+        setStatus(`Exported ${msg.screens.length} screen(s). Project bundle downloaded.`);
+      }
       break;
 
     case 'export-error':

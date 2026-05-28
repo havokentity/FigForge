@@ -54,7 +54,7 @@ namespace FigForge
         // ---- ui state ----
         Vector2 _scroll, _logScroll;
         readonly List<(string msg, MessageType kind)> _log = new List<(string, MessageType)>();
-        bool _showCanvas = true, _showFonts = true, _showTextures, _showAtlas, _showCanonical = true;
+        bool _showCanvas = true, _showFonts = true, _showTextures, _showAtlas, _showCanonical = true, _showLive = true;
 
         GUIStyle _h1;
 
@@ -144,6 +144,7 @@ namespace FigForge
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
 
             Header();
+            LiveImportSection();
             ManifestPicker();
             if (_manifest != null)
             {
@@ -172,6 +173,40 @@ namespace FigForge
             }
             EditorGUILayout.LabelField("Figma → Unity UI importer", EditorStyles.miniLabel);
             Divider();
+        }
+
+        void LiveImportSection()
+        {
+            _showLive = Foldout(_showLive, "Live import (Figma → Unity)");
+            if (!_showLive) return;
+            using (new EditorGUI.IndentLevelScope())
+            {
+                bool en = EditorGUILayout.ToggleLeft("Run live import server", FigForgeLiveImport.Enabled);
+                if (en != FigForgeLiveImport.Enabled) FigForgeLiveImport.Enabled = en;
+
+                using (new EditorGUI.DisabledScope(!en))
+                {
+                    int port = EditorGUILayout.DelayedIntField("Port", FigForgeLiveImport.Port);
+                    if (port != FigForgeLiveImport.Port) FigForgeLiveImport.Port = port;
+                }
+
+                EditorGUILayout.LabelField(
+                    (FigForgeLiveImport.Listening ? "● " : "○ ") + FigForgeLiveImport.Status,
+                    EditorStyles.miniLabel);
+                EditorGUILayout.HelpBox(
+                    "In the Figma plugin, hit “Export → Unity” to build the page here automatically — no zip, loopback only.",
+                    MessageType.None);
+            }
+            Divider();
+        }
+
+        /// <summary>Entry point used by the live-import HTTP receiver: discover
+        /// the freshly-written bundle and build it with the window's settings.</summary>
+        public void LiveBuildPage(string projectJsonAssetPath)
+        {
+            RefreshManifests();
+            BuildPageProject(projectJsonAssetPath);
+            Repaint();
         }
 
         string _version;

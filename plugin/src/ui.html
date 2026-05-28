@@ -204,6 +204,8 @@
       <div class="toolbar subtools">
         <span class="toolbar-label">Create</span>
         <button class="chip" id="createBtnBtn" title="Create a canonical Button component on the FigForge Components page">＋ Button</button>
+        <div class="spacer"></div>
+        <label class="chip" title="Unity live-import port (FigForge importer must have live import enabled)">Unity :<input type="number" id="unityPort" value="1995" min="1024" max="65535" style="width:54px; background:transparent; border:none; color:inherit;" /></label>
       </div>
 
       <div class="split">
@@ -222,7 +224,8 @@
         <div class="progress" id="progress"><div></div></div>
         <div style="display:flex; gap:6px;">
           <button class="btn-primary" id="exportBtn" style="flex:2" disabled>Export Frame</button>
-          <button class="btn-ghost" id="exportPageBtn" style="flex:1" title="Export every top-level frame on this page as a connected project bundle">Export Page</button>
+          <button class="btn-ghost" id="exportPageBtn" style="flex:1" title="Export every top-level frame on this page as a connected project bundle (.zip)">Export Page</button>
+          <button class="btn-ghost" id="exportUnityBtn" style="flex:1" title="Send every frame on this page straight to Unity (FigForge importer with live import enabled) — no zip">→ Unity</button>
         </div>
       </footer>
     </section>
