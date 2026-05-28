@@ -62,25 +62,24 @@ namespace FigForge
 
         static GameObject BuildElement(ElementData e, Dictionary<string, ElementData> index, Transform parent, BuildContext ctx)
         {
-            // ---- Canonical element: instantiate a library prefab instead -------
+            // ---- Canonical element: instantiate a prefab (generated once from the
+            // Figma component, or a hand-made one from the CanonicalLibrary) ------
             if (e.canonical != null)
             {
-                var prefab = ctx.canonical != null ? ctx.canonical.Resolve(e.canonical.kind, e.canonical.Ref) : null;
+                var prefab = ResolveOrGenerateCanonicalPrefab(e, ctx);
                 GameObject inst;
                 if (prefab != null)
                 {
-                    // Optional override: a hand-made prefab in the CanonicalLibrary.
                     inst = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, parent);
                     inst.name = e.name;
                 }
                 else if (e.canonical.kind == "button" && e.canonical.states != null)
                 {
-                    // Built entirely from the Figma component's state layers.
-                    inst = BuildStateButton(e, parent, ctx);
+                    inst = BuildStateButton(e, parent, ctx); // fallback: inline build
                 }
                 else
                 {
-                    ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' has no states or library prefab → placeholder");
+                    ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' → placeholder");
                     inst = BuildPlaceholderButton(e, parent, ctx);
                 }
                 ApplyTransform(inst.GetComponent<RectTransform>() ?? inst.AddComponent<RectTransform>(), e, ctx);
@@ -347,6 +346,94 @@ namespace FigForge
             if (tmp != null) { tmp.text = label; return; }
             var ui = inst.GetComponentInChildren<Text>(true);
             if (ui != null) ui.text = label;
+        }
+
+        // ---- Canonical prefab: one Figma component → one reusable Unity prefab --
+        const string CanonicalFolder = "Assets/FigForge/Canonical";
+        const string CanonicalLibraryPath = "Assets/FigForge/FigForgeCanonicalLibrary.asset";
+
+        /// <summary>
+        /// Resolve a canonical (kind, ref) to a reusable prefab — the heart of the
+        /// "define once, reference everywhere" model. A hand-made library prefab
+        /// wins; otherwise an existing generated prefab is reused; otherwise one is
+        /// generated from the Figma component (state sprites → SpriteSwap, else a
+        /// placeholder), saved, and registered in the auto-managed library. Reuse
+        /// is deliberate so manual skinning survives re-imports.
+        /// </summary>
+        static GameObject ResolveOrGenerateCanonicalPrefab(ElementData e, BuildContext ctx)
+        {
+            string kind = string.IsNullOrEmpty(e.canonical.kind) ? "button" : e.canonical.kind;
+            string refName = e.canonical.Ref;
+            if (string.IsNullOrEmpty(refName)) return null;
+
+            // 1. Already mapped in the library (hand-made or previously generated).
+            if (ctx.canonical != null)
+            {
+                var mapped = ctx.canonical.Resolve(kind, refName);
+                if (mapped != null) return mapped;
+            }
+
+            // 2. A generated prefab already exists on disk — reuse, don't clobber.
+            string path = $"{CanonicalFolder}/{SafeAsset(refName)}.prefab";
+            var existing = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (existing != null) { RegisterInLibrary(ctx, kind, refName, existing); return existing; }
+
+            // 3. Generate from the canonical definition, save, register.
+            GameObject temp = (kind == "button" && e.canonical.states != null)
+                ? BuildStateButton(e, null, ctx)
+                : BuildPlaceholderButton(e, null, ctx);
+            if (temp == null) return null;
+            temp.name = SafeAsset(refName);
+
+            // Wire binding slots so per-instance label/value apply onto the prefab.
+            var bind = temp.GetComponent<FigForgeBindings>() ?? temp.AddComponent<FigForgeBindings>();
+            bind.label = temp.GetComponentInChildren<TMP_Text>(true);
+            bind.control = temp.GetComponent<Selectable>();
+
+            TextureImportHelper.EnsureFolder(CanonicalFolder);
+            var prefab = UnityEditor.PrefabUtility.SaveAsPrefabAsset(temp, path);
+            UnityEngine.Object.DestroyImmediate(temp);
+            if (prefab != null)
+            {
+                ctx.log($"generated canonical {kind} '{refName}' → {path}");
+                RegisterInLibrary(ctx, kind, refName, prefab);
+            }
+            return prefab;
+        }
+
+        static void RegisterInLibrary(BuildContext ctx, string kind, string refName, GameObject prefab)
+        {
+            var lib = ctx.canonical ?? LoadOrCreateCanonicalLibrary();
+            ctx.canonical = lib; // reuse for the rest of this build
+            if (!CanonicalLibrary.TryParseKind(kind, out var k)) return;
+            var entry = lib.entries.Find(en => en != null && en.kind == k && en.referenceName == refName);
+            if (entry == null) { entry = new CanonicalLibrary.Entry { kind = k, referenceName = refName }; lib.entries.Add(entry); }
+            if (entry.prefab == null) entry.prefab = prefab;
+            UnityEditor.EditorUtility.SetDirty(lib);
+            UnityEditor.AssetDatabase.SaveAssets();
+        }
+
+        static CanonicalLibrary LoadOrCreateCanonicalLibrary()
+        {
+            var lib = UnityEditor.AssetDatabase.LoadAssetAtPath<CanonicalLibrary>(CanonicalLibraryPath);
+            if (lib != null) return lib;
+            var guids = UnityEditor.AssetDatabase.FindAssets("t:CanonicalLibrary");
+            if (guids.Length > 0)
+                return UnityEditor.AssetDatabase.LoadAssetAtPath<CanonicalLibrary>(
+                    UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]));
+            TextureImportHelper.EnsureFolder("Assets/FigForge");
+            lib = ScriptableObject.CreateInstance<CanonicalLibrary>();
+            UnityEditor.AssetDatabase.CreateAsset(lib, CanonicalLibraryPath);
+            UnityEditor.AssetDatabase.SaveAssets();
+            return lib;
+        }
+
+        static string SafeAsset(string s)
+        {
+            s = string.IsNullOrEmpty(s) ? "Canonical" : s;
+            var a = new char[s.Length];
+            for (int i = 0; i < s.Length; i++) a[i] = char.IsLetterOrDigit(s[i]) ? s[i] : '_';
+            return new string(a);
         }
 
         static void AddTransparentRaycastTarget(GameObject go)
