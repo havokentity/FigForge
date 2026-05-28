@@ -99,15 +99,23 @@ function isIconContainer(node: SceneNode): boolean {
 
 /**
  * Should this node be rasterized to a PNG (vs. rebuilt structurally)?
- * Vectors always; text only when explicitly forced; containers when they carry
- * their own visible fill/stroke or are icon-only groups.
+ * Vectors always; text only when explicitly forced; icon-only groups flatten to
+ * one sprite; childless filled/stroked containers and rectangles bake as a
+ * panel. A container that still has its own visible children is STRUCTURAL — its
+ * fill/stroke is captured via style and the children are built separately.
+ * Auto-rasterizing it would bake the children's pixels into the parent's PNG
+ * (the double-render bug); use the explicit Merge toggle for that instead.
  */
 export function isExportable(node: SceneNode): boolean {
   if (!isVisible(node)) return false;
   if (VECTOR_TYPES.has(node.type)) return true;
   if (node.type === 'TEXT') return false; // structural by default
-  if (isIconContainer(node)) return true;
-  if (CONTAINER_TYPES.has(node.type) || node.type === 'RECTANGLE') {
+  if (isIconContainer(node)) return true; // all-vector children → single icon
+  if (CONTAINER_TYPES.has(node.type)) {
+    if (hasChildren(node) && node.children.some(isVisible)) return false; // structural container
+    return hasMeaningfulFill(node) || hasVisibleStroke(node);
+  }
+  if (node.type === 'RECTANGLE') {
     return hasMeaningfulFill(node) || hasVisibleStroke(node);
   }
   return false;
