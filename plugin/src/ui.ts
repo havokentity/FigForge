@@ -46,6 +46,10 @@ minBtn.addEventListener('click', () => {
 });
 
 $('#reloadBtn').addEventListener('click', () => post({ type: 'reload' }));
+$('#createBtnBtn').addEventListener('click', () => {
+  setStatus('Creating button component…');
+  post({ type: 'create-button' });
+});
 
 // option chips
 function wireChip(id: string) {
@@ -363,6 +367,10 @@ window.onmessage = (event: MessageEvent) => {
     case 'export-error':
       showProgress(false);
       setStatus(msg.message, true);
+      break;
+
+    case 'status':
+      setStatus(msg.message);
       break;
 
     case 'mcp-response':

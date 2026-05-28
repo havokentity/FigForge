@@ -29,8 +29,9 @@ import {
   type Style,
   type TextProps,
 } from './types';
-import { generateFileName, parseCanonical, sanitize } from './naming';
+import { generateFileName, sanitize } from './naming';
 import {
+  detectCanonical,
   hasMeaningfulFill,
   hasVisibleStroke,
   isEmptyPaint,
@@ -233,7 +234,7 @@ interface Plan {
   node: SceneNode;
   parentId: string | null;
   merged: boolean;
-  canonicalRef: ReturnType<typeof parseCanonical>;
+  canonicalRef: CanonicalRef | null;
   exportable: boolean;
   children: SceneNode[];
 }
@@ -349,7 +350,7 @@ export async function exportDesign(
     if ((node as unknown as { visible?: boolean }).visible === false) return;
     if (excludedIds.has(node.id)) return;
 
-    const canonicalRef = parseCanonical(node.name);
+    const canonicalRef = detectCanonical(node);
     const isMergeRoot =
       !insideMerge &&
       (mergedIds.has(node.id) ||

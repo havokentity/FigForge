@@ -172,6 +172,19 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       break;
     }
 
+    case 'create-button': {
+      try {
+        const comp = await createCanonicalButton();
+        figma.ui.postMessage({
+          type: 'status',
+          message: `Created button "${comp.name}" on the "FigForge Components" page — skin it, then drop instances into your screens.`,
+        });
+      } catch (e) {
+        figma.ui.postMessage({ type: 'export-error', message: 'Create button failed: ' + String((e as Error)?.message || e) });
+      }
+      break;
+    }
+
     case 'mcp-request':
       await handleMcp(msg.payload as McpRequest);
       break;
@@ -307,4 +320,72 @@ async function handleMcp(req: McpRequest) {
     response.error = String((e as Error)?.message || e);
   }
   figma.ui.postMessage({ type: 'mcp-response', payload: response });
+}
+
+// ---------------------------------------------------------------------------
+// Create Button tool — scaffolds a tagged canonical-button Component on a
+// dedicated "FigForge Components" page. Skin it, then drop instances anywhere;
+// the exporter detects them via the plugin-data tag.
+// ---------------------------------------------------------------------------
+const COMPONENTS_PAGE = 'FigForge Components';
+
+async function loadUiFont(): Promise<FontName> {
+  const candidates: FontName[] = [
+    { family: 'Inter', style: 'Regular' },
+    { family: 'Roboto', style: 'Regular' },
+    { family: 'Arial', style: 'Regular' },
+  ];
+  for (const f of candidates) {
+    try {
+      await figma.loadFontAsync(f);
+      return f;
+    } catch {
+      /* try next */
+    }
+  }
+  const all = await figma.listAvailableFontsAsync();
+  const f = all[0].fontName;
+  await figma.loadFontAsync(f);
+  return f;
+}
+
+async function createCanonicalButton(): Promise<ComponentNode> {
+  let page = figma.root.children.find((p) => p.name === COMPONENTS_PAGE) as PageNode | undefined;
+  if (!page) {
+    page = figma.createPage();
+    page.name = COMPONENTS_PAGE;
+  }
+
+  // Unique name within the page → becomes the canonical ref.
+  let name = 'Button';
+  let i = 2;
+  while (page.children.some((n) => n.name === name)) name = `Button${i++}`;
+
+  const font = await loadUiFont();
+
+  const comp = figma.createComponent();
+  comp.name = name;
+  comp.layoutMode = 'HORIZONTAL';
+  comp.primaryAxisSizingMode = 'FIXED';
+  comp.counterAxisSizingMode = 'FIXED';
+  comp.primaryAxisAlignItems = 'CENTER';
+  comp.counterAxisAlignItems = 'CENTER';
+  comp.resize(160, 48);
+  comp.cornerRadius = 8;
+  comp.fills = [{ type: 'SOLID', color: { r: 0.49, g: 0.36, b: 1 } }];
+
+  const label = figma.createText();
+  label.fontName = font;
+  label.characters = 'Button';
+  label.fontSize = 16;
+  label.name = 'Label';
+  label.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  comp.appendChild(label);
+
+  comp.setPluginData('figforge', JSON.stringify({ kind: 'button', ref: name }));
+
+  page.appendChild(comp);
+  comp.x = page.children.filter((n) => n !== comp).length * 200;
+  comp.y = 0;
+  return comp;
 }

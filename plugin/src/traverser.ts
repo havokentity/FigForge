@@ -2,8 +2,39 @@
 // FigForge — tree traversal, exportability, paint helpers
 // =============================================================================
 
-import type { TreeNode } from './types';
+import type { CanonicalKind, CanonicalRef, TreeNode } from './types';
 import { sanitize, parseCanonical } from './naming';
+
+const PLUGIN_DATA_KEY = 'figforge';
+
+function parseTag(data: string): { kind: CanonicalKind; ref: string } | null {
+  if (!data) return null;
+  try {
+    const t = JSON.parse(data);
+    if (t && t.kind && t.ref) return { kind: t.kind as CanonicalKind, ref: String(t.ref) };
+  } catch {
+    /* not a FigForge tag */
+  }
+  return null;
+}
+
+/**
+ * Resolve an element's canonical binding. Priority:
+ *   1. an INSTANCE of a FigForge-tagged master Component (robust — survives
+ *      skinning/renaming),
+ *   2. a node carrying the tag itself,
+ *   3. the `Btn_<instance>_<ref>` name convention (fallback).
+ */
+export function detectCanonical(node: SceneNode): CanonicalRef | null {
+  if (node.type === 'INSTANCE') {
+    const mc = (node as InstanceNode).mainComponent;
+    const tag = mc ? parseTag(mc.getPluginData(PLUGIN_DATA_KEY)) : null;
+    if (tag) return { kind: tag.kind, ref: sanitize(tag.ref) || tag.ref, instanceName: sanitize(node.name) };
+  }
+  const selfTag = parseTag(node.getPluginData(PLUGIN_DATA_KEY));
+  if (selfTag) return { kind: selfTag.kind, ref: sanitize(selfTag.ref) || selfTag.ref, instanceName: sanitize(node.name) };
+  return parseCanonical(node.name);
+}
 
 const VECTOR_TYPES = new Set([
   'VECTOR',
@@ -86,7 +117,7 @@ export function canMerge(node: SceneNode): boolean {
 /** Build the UI layer tree for a selected root node. */
 export function buildTree(root: SceneNode, excluded: Set<string>): TreeNode {
   function walk(node: SceneNode, depth: number): TreeNode {
-    const canonical = parseCanonical(node.name);
+    const canonical = detectCanonical(node);
     const childNodes: TreeNode[] =
       hasChildren(node) && !isIconContainer(node)
         ? node.children.map((c) => walk(c, depth + 1))
