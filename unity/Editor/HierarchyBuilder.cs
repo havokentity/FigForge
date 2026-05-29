@@ -248,6 +248,14 @@ namespace FigForge
         static float BorderAlignFactor(string align)
             => align == "outside" ? 1f : align == "center" ? 0.5f : 0f;
 
+        // Strokes render ~1px thinner than their Figma weight because the SDF edge
+        // is anti-aliased on BOTH sides (a thin border has little solid core). Add a
+        // small px bias so outlines read at (or a hair above) the design weight.
+        // Returns 0 for no stroke so we never fabricate a border.
+        const float OutlineThickenPx = 1f;
+        static float StrokePx(float weight, float sf)
+            => weight > 0.001f ? Mathf.Max(1f, (weight + OutlineThickenPx) * sf) : 0f;
+
         // Per-corner radii (tl,tr,br,bl) in scaled px, from style.corners or the uniform radius.
         static Vector4 CornerRadii(StyleData s, float sf)
         {
@@ -290,7 +298,7 @@ namespace FigForge
             rr.raycastTarget = !ctx.disableRaycasts;
             var s = e.style;
             Color border = s.stroke != null ? ToColor(s.stroke.color) : new Color(0, 0, 0, 0);
-            float bw = s.stroke != null ? Mathf.Max(1f, s.stroke.weight * ctx.scaleFactor) : 0f;
+            float bw = s.stroke != null ? StrokePx(s.stroke.weight, ctx.scaleFactor) : 0f;
             float align = s.stroke != null ? BorderAlignFactor(s.stroke.align) : 0f;
 
             Color fill, fill2; Vector2 dir;
@@ -400,7 +408,8 @@ namespace FigForge
             if (t.outline == null || t.outline.weight <= 0.001f || t.outline.color == null) return;
             var mat = tmp.fontMaterial; // instance — does not touch the shared asset material
             mat.SetColor(TMPro.ShaderUtilities.ID_OutlineColor, ToColor(t.outline.color));
-            float w = Mathf.Clamp(t.outline.weight / Mathf.Max(1f, t.fontSize) * 1.4f, 0f, 0.5f);
+            // ~2.2 reads close to the Figma stroke (TMP outlineWidth is normalised; 1.4 was thin).
+            float w = Mathf.Clamp(t.outline.weight / Mathf.Max(1f, t.fontSize) * 2.2f, 0f, 0.5f);
             mat.SetFloat(TMPro.ShaderUtilities.ID_OutlineWidth, w);
             tmp.UpdateMeshPadding();
         }
@@ -516,7 +525,7 @@ namespace FigForge
             Vector2 dir = gradient ? GradientDir(sh.gradientTransform) : Vector2.zero;
             var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
             float br = sh.cornerRadius * ctx.scaleFactor;
-            rr.Configure(fill, fill2, dir, border, sh.borderWidth * ctx.scaleFactor, new Vector4(br, br, br, br), BorderAlignFactor(sh.borderAlign));
+            rr.Configure(fill, fill2, dir, border, StrokePx(sh.borderWidth, ctx.scaleFactor), new Vector4(br, br, br, br), BorderAlignFactor(sh.borderAlign));
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = rr;
