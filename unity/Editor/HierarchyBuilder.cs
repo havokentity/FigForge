@@ -629,31 +629,48 @@ namespace FigForge
             string refName = e.canonical.Ref;
             if (string.IsNullOrEmpty(refName)) return null;
 
-            // 1. Already mapped in the library (hand-made or previously generated).
-            if (ctx.canonical != null)
+            string sig = CanonicalSignature(e.canonical, kind, ctx.scaleFactor);
+
+            // Candidate prefab: a library-mapped one (hand-made or previously
+            // generated) wins lookup; else an existing generated prefab on disk.
+            string path = $"{CanonicalFolder}/{SafeAsset(refName)}.prefab";
+            GameObject candidate = ctx.canonical != null ? ctx.canonical.Resolve(kind, refName) : null;
+            if (candidate == null) candidate = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
+
+            if (candidate != null)
             {
-                var mapped = ctx.canonical.Resolve(kind, refName);
-                if (mapped != null) return mapped;
+                // Regenerate ONLY a FigForge-managed prefab (one living in the auto-
+                // managed Canonical folder) whose Figma definition changed — so design
+                // edits (stroke weight, fill, colours, font…) actually apply. A hand-made
+                // prefab mapped from elsewhere is ALWAYS reused (manual skin survives).
+                // A managed prefab with no/old signature (made before signatures existed)
+                // regenerates once, then tracks changes.
+                bool managed = UnityEditor.AssetDatabase.GetAssetPath(candidate) == path;
+                var stamp = candidate.GetComponent<FigForgeBindings>();
+                string prevSig = stamp != null ? stamp.signature : null;
+                bool stale = managed && prevSig != sig;
+                if (!stale)
+                {
+                    RegisterInLibrary(ctx, kind, refName, candidate);
+                    return candidate;
+                }
+                ctx.log($"canonical {kind} '{refName}' definition changed — regenerating prefab.");
             }
 
-            // 2. A generated prefab already exists on disk — reuse, don't clobber.
-            string path = $"{CanonicalFolder}/{SafeAsset(refName)}.prefab";
-            var existing = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
-            if (existing != null) { RegisterInLibrary(ctx, kind, refName, existing); return existing; }
-
-            // 3. Generate from the canonical definition, save, register.
+            // Generate from the canonical definition, save (overwrites if present), register.
             GameObject temp = (kind == "button" && e.canonical.shape != null)
                 ? BuildShapeButton(e, null, ctx)                          // crisp SDF shader (preferred)
                 : (kind == "button" && e.canonical.states != null)
                     ? BuildStateButton(e, null, ctx)                      // exported state PNGs
                     : BuildPlaceholderButton(e, null, ctx);
-            if (temp == null) return null;
+            if (temp == null) return candidate; // generation failed — keep whatever we had
             temp.name = SafeAsset(refName);
 
             // Wire binding slots so per-instance label/value apply onto the prefab.
             var bind = temp.GetComponent<FigForgeBindings>() ?? temp.AddComponent<FigForgeBindings>();
             bind.label = temp.GetComponentInChildren<TMP_Text>(true);
             bind.control = temp.GetComponent<Selectable>();
+            bind.signature = sig; // stamp so a later definition change triggers regen
 
             TextureImportHelper.EnsureFolder(CanonicalFolder);
             var prefab = UnityEditor.PrefabUtility.SaveAsPrefabAsset(temp, path);
@@ -666,6 +683,34 @@ namespace FigForge
             return prefab;
         }
 
+        // A stable string of the DEFINITION fields that determine the generated
+        // prefab's look. When it changes, the prefab is regenerated. Excludes
+        // per-instance data (label text, position) and state-PNG filenames (which
+        // embed the instance name) so distinct instances don't thrash regeneration.
+        static string CanonicalSignature(CanonicalRef c, string kind, float sf)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("k=").Append(kind).Append(";sf=").Append(sf.ToString("0.###"));
+            var sh = c.shape;
+            if (sh != null)
+                sb.Append(";cr=").Append(sh.cornerRadius.ToString("0.###"))
+                  .Append(";f=").Append(SigF(sh.fill)).Append(";f2=").Append(SigF(sh.fill2))
+                  .Append(";gt=").Append(SigF(sh.gradientTransform))
+                  .Append(";bc=").Append(SigF(sh.borderColor)).Append(";bw=").Append(sh.borderWidth.ToString("0.###"))
+                  .Append(";ba=").Append(sh.borderAlign ?? "");
+            var sc = c.stateColors;
+            if (sc != null)
+                sb.Append(";sn=").Append(SigF(sc.normal)).Append(";sh=").Append(SigF(sc.highlighted)).Append(";sp=").Append(SigF(sc.pressed));
+            bool hasStates = c.states != null && (c.states.normal != null || c.states.highlighted != null || c.states.pressed != null);
+            sb.Append(";hasShape=").Append(sh != null ? 1 : 0).Append(";hasStates=").Append(hasStates ? 1 : 0);
+            if (c.defLabelFont != null)
+                sb.Append(";lf=").Append(c.defLabelFont.family ?? "").Append('/').Append(c.defLabelFont.style ?? "");
+            return sb.ToString();
+        }
+
+        static string SigF(float[] a)
+            => a == null ? "_" : string.Join(",", System.Array.ConvertAll(a, x => x.ToString("0.###")));
+
         static void RegisterInLibrary(BuildContext ctx, string kind, string refName, GameObject prefab)
         {
             var lib = ctx.canonical ?? LoadOrCreateCanonicalLibrary();
@@ -673,7 +718,7 @@ namespace FigForge
             if (!CanonicalLibrary.TryParseKind(kind, out var k)) return;
             var entry = lib.entries.Find(en => en != null && en.kind == k && en.referenceName == refName);
             if (entry == null) { entry = new CanonicalLibrary.Entry { kind = k, referenceName = refName }; lib.entries.Add(entry); }
-            if (entry.prefab == null) entry.prefab = prefab;
+            entry.prefab = prefab; // keep current (updates on regen; same ref on plain reuse)
             UnityEditor.EditorUtility.SetDirty(lib);
             UnityEditor.AssetDatabase.SaveAssets();
         }

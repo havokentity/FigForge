@@ -26,6 +26,12 @@ namespace FigForge
         public TMP_Text valueText;     // input display / value label
         public TMP_Dropdown optionsTarget; // dropdown
 
+        // Signature of the canonical DEFINITION this prefab was generated from
+        // (shape/colours/font/scale). The importer regenerates the prefab when the
+        // Figma component changes (signature differs). Empty = hand-made → never
+        // auto-regenerated. Editor-only concern; ignored at runtime.
+        [HideInInspector] public string signature;
+
         /// <summary>Apply manifest canonical data to the bound slots. Editor-time.</summary>
         public void Apply(string labelText, string value, List<string> options)
         {
