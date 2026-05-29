@@ -104,6 +104,11 @@ namespace FigForge
                     ApplyFont(labelTmp, e.canonical.labelFont, ctx);
                 }
 
+                // Per-instance shape override — an instance whose stroke/fill/corner
+                // was tweaked in Figma re-skins just this button (shared prefab intact).
+                if (e.canonical.instanceShape != null)
+                    ApplyInstanceShape(inst, e.canonical.instanceShape, ctx);
+
                 AttachNav(inst, e, ctx);
                 if (!string.IsNullOrEmpty(e.canonical.instanceName))
                     ctx.registered.Add(new KeyValuePair<string, GameObject>(e.canonical.instanceName, inst));
@@ -519,13 +524,8 @@ namespace FigForge
             if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>(); // Graphic needs it
             var rr = go.AddComponent<FigForgeRoundedRect>();
             rr.raycastTarget = true;
-            var fill = ToColor(sh.fill);
             bool gradient = sh.fill2 != null;
-            Color fill2 = gradient ? ToColor(sh.fill2) : fill;
-            Vector2 dir = gradient ? GradientDir(sh.gradientTransform) : Vector2.zero;
-            var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
-            float br = sh.cornerRadius * ctx.scaleFactor;
-            rr.Configure(fill, fill2, dir, border, StrokePx(sh.borderWidth, ctx.scaleFactor), new Vector4(br, br, br, br), BorderAlignFactor(sh.borderAlign));
+            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill, out var fill2, out var dir);
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = rr;
@@ -558,6 +558,43 @@ namespace FigForge
             tmp.raycastTarget = false;
             ApplyFont(tmp, e.canonical.defLabelFont, ctx);
             return go;
+        }
+
+        // Push a CanonicalShape onto a FigForgeRoundedRect (fill/gradient/border/
+        // corners/align). Outputs the resolved base fill so callers can keep
+        // FigForgeButtonStateColors' normal state in sync.
+        static void ApplyShapeToRR(FigForgeRoundedRect rr, CanonicalShape sh, float sf,
+                                   out Color fill, out Color fill2, out Vector2 dir)
+        {
+            fill = ToColor(sh.fill);
+            bool gradient = sh.fill2 != null;
+            fill2 = gradient ? ToColor(sh.fill2) : fill;
+            dir = gradient ? GradientDir(sh.gradientTransform) : Vector2.zero;
+            var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
+            float br = sh.cornerRadius * sf;
+            rr.Configure(fill, fill2, dir, border, StrokePx(sh.borderWidth, sf), new Vector4(br, br, br, br), BorderAlignFactor(sh.borderAlign));
+        }
+
+        // Apply a per-instance shape override onto an instantiated canonical button:
+        // re-skin its FigForgeRoundedRect (so an instance-level stroke/fill/corner
+        // tweak in Figma shows) and re-sync the base (normal) fill of its state-colour
+        // swapper. No-op for non-SDF (state-PNG) buttons. Creates prefab overrides on
+        // just this instance — the shared prefab is untouched.
+        static void ApplyInstanceShape(GameObject inst, CanonicalShape sh, BuildContext ctx)
+        {
+            var rr = inst.GetComponentInChildren<FigForgeRoundedRect>(true);
+            if (rr == null) return;
+            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill, out var fill2, out var dir);
+            var states = rr.GetComponent<FigForgeButtonStateColors>();
+            if (states != null)
+            {
+                states.normal = fill; states.normal2 = fill2; states.normalDir = dir;
+                if (sh.fill2 != null) // gradient instance: keep the gradient across states (matches BuildShapeButton)
+                {
+                    states.highlighted = fill; states.highlighted2 = fill2; states.highlightedDir = dir;
+                    states.pressed = fill; states.pressed2 = fill2; states.pressedDir = dir;
+                }
+            }
         }
 
         static Sprite SpriteByFile(string file, BuildContext ctx)

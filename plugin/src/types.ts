@@ -115,6 +115,17 @@ export interface CanonicalStates {
   pressed?: string;
 }
 
+/** Procedural background of a button (rendered by the SDF shader). */
+export interface ButtonShape {
+  cornerRadius: number;
+  fill?: RGBA; // solid colour, or gradient stop 0
+  fill2?: RGBA; // gradient stop 1 (present → 2-stop linear gradient background)
+  gradientTransform?: number[]; // gradient affine (Figma row-major), present with fill2
+  borderColor?: RGBA;
+  borderWidth?: number;
+  borderAlign?: StrokeAlign; // inside|outside|center (default inside)
+}
+
 export interface CanonicalRef {
   kind: CanonicalKind;
   ref: string; // canonical definition name to instantiate in Unity
@@ -127,15 +138,8 @@ export interface CanonicalRef {
   defLabelFont?: { family: string; style: string }; // the canonical COMPONENT's label font — the prefab/definition uses this
   // Procedural background shape (solid buttons): the importer renders this with a
   // crisp SDF shader instead of the exported state PNGs. Absent → PNG fallback.
-  shape?: {
-    cornerRadius: number;
-    fill?: RGBA; // solid colour, or gradient stop 0
-    fill2?: RGBA; // gradient stop 1 (present → 2-stop linear gradient background)
-    gradientTransform?: number[]; // gradient affine (Figma row-major), present with fill2
-    borderColor?: RGBA;
-    borderWidth?: number;
-    borderAlign?: StrokeAlign; // inside|outside|center (default inside)
-  };
+  shape?: ButtonShape; // the COMPONENT's background (drives the generated prefab)
+  instanceShape?: ButtonShape; // THIS instance's background, when it differs from the component (per-instance override)
   stateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA };
 }
 

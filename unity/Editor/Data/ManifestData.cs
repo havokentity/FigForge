@@ -122,6 +122,7 @@ namespace FigForge
         public CanonicalLabelFont labelFont;    // THIS instance's label font (per-instance override when it differs)
         public CanonicalLabelFont defLabelFont; // the canonical COMPONENT's label font (the prefab/definition uses this)
         public CanonicalShape shape;            // procedural background (SDF shader) — overrides the state PNGs when present
+        public CanonicalShape instanceShape;    // THIS instance's background when it differs from the component (per-instance override)
         public CanonicalStateColors stateColors; // per-state fill colours for the procedural background
     }
 

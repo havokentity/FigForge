@@ -13,6 +13,7 @@ import {
   DEFAULT_EXPORT_OPTIONS,
   MANIFEST_SCHEMA,
   MANIFEST_VERSION,
+  type ButtonShape,
   type CanonicalKind,
   type CanonicalRef,
   type CanonicalStates,
@@ -565,13 +566,13 @@ export async function exportDesign(
 
   // Procedural background shape from a button master's state layers: solid OR
   // linear gradient (SDF shader). Other fills → null → exported-PNG path.
-  function captureButtonShape(master: SceneNode) {
+  function captureButtonShape(master: SceneNode, silent = false) {
     if (!('children' in master)) return null;
     const kids = (master as ChildrenMixin).children as SceneNode[];
     const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
-    if (!reg) { shapeDiag.push(`'${master.name}': no layer named 'regular'`); return null; }
+    if (!reg) { if (!silent) shapeDiag.push(`'${master.name}': no layer named 'regular'`); return null; }
     const sf = shapeFill(reg);
-    if (!sf) { shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
+    if (!sf) { if (!silent) shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
     const radius = typeof (reg as unknown as { cornerRadius?: number }).cornerRadius === 'number'
       ? (reg as unknown as { cornerRadius: number }).cornerRadius : 0;
     const shape: {
@@ -598,6 +599,7 @@ export async function exportDesign(
 
   const stateByNode = new Map<string, CanonicalStates>();
   const shapeByNode = new Map<string, ReturnType<typeof captureButtonShape>>();
+  const instShapeByNode = new Map<string, ButtonShape>(); // per-instance shape override (differs from component)
   for (const p of plans) {
     if (!p.canonicalRef || p.canonicalRef.kind !== 'button') continue;
     const master =
@@ -609,6 +611,13 @@ export async function exportDesign(
     if (states) stateByNode.set(p.node.id, states);
     const sh = captureButtonShape(master);
     if (sh) shapeByNode.set(p.node.id, sh);
+    // Per-instance override: read THIS instance's own 'regular' layer (with its
+    // overrides) and keep it when it differs from the component definition, so an
+    // instance-level stroke/fill/corner tweak applies to just that button.
+    if (sh && p.node.type === 'INSTANCE') {
+      const inst = captureButtonShape(p.node, true);
+      if (inst && JSON.stringify(inst.shape) !== JSON.stringify(sh.shape)) instShapeByNode.set(p.node.id, inst.shape);
+    }
   }
   if (shapeDiag.length) {
     // Tell the designer exactly why a button used a baked PNG instead of the crisp shader.
@@ -668,6 +677,7 @@ export async function exportDesign(
       const sh = shapeByNode.get(node.id);
       if (sh) { canonical.shape = sh.shape; canonical.stateColors = sh.stateColors; }
     }
+    if (canonical && instShapeByNode.has(node.id)) canonical.instanceShape = instShapeByNode.get(node.id);
     const nav = navFor(node);
 
     const element: ManifestElement = {
