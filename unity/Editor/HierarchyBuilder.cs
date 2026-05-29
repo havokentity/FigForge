@@ -218,7 +218,18 @@ namespace FigForge
             if (s.fill != null && s.fill.kind == "gradient") return IsSdfGradient(s.fill);
             bool rounded = s.cornerRadius > 0.01f || AnyCorner(s.corners);
             bool border = s.stroke != null;
-            return rounded || border;
+            bool hasShadow = s.shadows != null && s.shadows.Count > 0; // drop shadow → SDF panel renders it
+            return rounded || border || hasShadow;
+        }
+
+        // Apply a captured Figma drop shadow to the SDF graphic. Figma offset is +y
+        // DOWN; flip for Unity's +y-up. color.a==0 / null → no-op.
+        static void ApplyShadow(FigForgeRoundedRect rr, ShadowData s, float sf)
+        {
+            if (s == null || s.color == null) return;
+            var c = ToColor(s.color);
+            if (c.a <= 0.001f) return;
+            rr.SetShadow(c, new Vector2(s.offsetX * sf, -s.offsetY * sf), s.blur * sf, s.spread * sf);
         }
 
         // A gradient the SDF shader can render exactly: linear with two stops.
@@ -319,6 +330,7 @@ namespace FigForge
                 fill2 = fill; dir = Vector2.zero;
             }
             rr.Configure(fill, fill2, dir, border, bw, CornerRadii(s, ctx.scaleFactor), align);
+            if (s.shadows != null && s.shadows.Count > 0) ApplyShadow(rr, s.shadows[0], ctx.scaleFactor);
             ApplyOpacity(go, e, fill);
         }
 
@@ -573,6 +585,7 @@ namespace FigForge
             var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
             float br = sh.cornerRadius * sf;
             rr.Configure(fill, fill2, dir, border, StrokePx(sh.borderWidth, sf), new Vector4(br, br, br, br), BorderAlignFactor(sh.borderAlign));
+            ApplyShadow(rr, sh.shadow, sf); // null/transparent → no-op
         }
 
         // Apply a per-instance shape override onto an instantiated canonical button:
@@ -735,6 +748,12 @@ namespace FigForge
                   .Append(";gt=").Append(SigF(sh.gradientTransform))
                   .Append(";bc=").Append(SigF(sh.borderColor)).Append(";bw=").Append(sh.borderWidth.ToString("0.###"))
                   .Append(";ba=").Append(sh.borderAlign ?? "");
+            if (sh != null && sh.shadow != null)
+            {
+                var sd = sh.shadow;
+                sb.Append(";shc=").Append(SigF(sd.color)).Append(";sho=").Append(sd.offsetX.ToString("0.###")).Append(',').Append(sd.offsetY.ToString("0.###"))
+                  .Append(";shb=").Append(sd.blur.ToString("0.###")).Append(";shs=").Append(sd.spread.ToString("0.###"));
+            }
             var sc = c.stateColors;
             if (sc != null)
                 sb.Append(";sn=").Append(SigF(sc.normal)).Append(";sh=").Append(SigF(sc.highlighted)).Append(";sp=").Append(SigF(sc.pressed));

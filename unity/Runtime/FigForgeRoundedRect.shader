@@ -16,7 +16,11 @@ Shader "FigForge/RoundedRect"
         _Radius ("Corner Radii px (tl,tr,br,bl)", Vector) = (0,0,0,0)
         _Size ("Rect Size (px)", Vector) = (100,100,0,0)
         _GradientDir ("Gradient Dir (xy, 0=off)", Vector) = (0,0,0,0)
-        _Pad ("Stroke outset px (0=inside, w/2=center, w=outside)", Float) = 0
+        _Pad ("Mesh pad px (max of stroke outset + shadow reach)", Float) = 0
+        _StrokeOutset ("Stroke outset px (0=inside, w/2=center, w=outside)", Float) = 0
+        _ShadowColor ("Drop Shadow Color", Color) = (0,0,0,0)
+        _ShadowOffset ("Shadow Offset px (xy)", Vector) = (0,0,0,0)
+        _ShadowParams ("Shadow (x=blur, y=spread) px", Vector) = (0,0,0,0)
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -45,10 +49,11 @@ Shader "FigForge/RoundedRect"
             struct appdata { float4 vertex:POSITION; float4 color:COLOR; float2 uv:TEXCOORD0; };
             struct v2f { float4 pos:SV_POSITION; fixed4 color:COLOR; float2 uv:TEXCOORD0; };
 
-            fixed4 _FillColor, _Fill2, _BorderColor;
-            float4 _Size, _GradientDir, _Radius; // _Radius = (tl, tr, br, bl)
+            fixed4 _FillColor, _Fill2, _BorderColor, _ShadowColor;
+            float4 _Size, _GradientDir, _Radius, _ShadowOffset, _ShadowParams; // _Radius=(tl,tr,br,bl); _ShadowParams=(blur,spread)
             float _BorderWidth;
-            float _Pad; // how far the stroke extends OUTSIDE the fill edge (px)
+            float _Pad;         // total mesh half-pad (px): max(stroke outset, shadow reach)
+            float _StrokeOutset; // how far the stroke extends OUTSIDE the fill edge (px)
 
             v2f vert(appdata v) { v2f o; o.pos = UnityObjectToClipPos(v.vertex); o.color = v.color; o.uv = v.uv; return o; }
 
@@ -71,19 +76,16 @@ Shader "FigForge/RoundedRect"
                 // pick this quadrant's corner radius: tl=x, tr=y, br=z, bl=w
                 float rad = (p.x > 0.0) ? (p.y > 0.0 ? _Radius.y : _Radius.z)
                                         : (p.y > 0.0 ? _Radius.x : _Radius.w);
-                float d = sdRoundBox(p, size * 0.5, rad);  // d=0 at the FILL edge; d=_Pad at the stroke's outer edge
+                float d = sdRoundBox(p, size * 0.5, rad);  // d=0 at the FILL edge; d=_StrokeOutset at the stroke's outer edge
                 float aa = max(fwidth(d), 1e-4);
 
-                // base fill (optional linear gradient)
+                // ---- fill (optional linear gradient, mixed in sRGB to match Figma) ----
                 fixed4 base = _FillColor;
                 if (dot(_GradientDir.xy, _GradientDir.xy) > 1e-6)
                 {
-                    float t = saturate(dot(i.uv - 0.5, normalize(_GradientDir.xy)) + 0.5);
-                    // Figma mixes gradient stops in sRGB (gamma) space. In a Linear
-                    // project the shader receives LINEAR colours, so a straight lerp
-                    // interpolates in linear and the midpoint reads brighter/more
-                    // saturated than Figma. Convert to gamma, lerp, convert back so
-                    // the mix matches Figma exactly. (Gamma project: already sRGB.)
+                    // Fill-relative coordinate so the gradient spans the FILL rect,
+                    // independent of the mesh padding (stroke/shadow).
+                    float t = saturate(dot(p / size, normalize(_GradientDir.xy)) + 0.5);
                     #ifdef UNITY_COLORSPACE_GAMMA
                         base = lerp(_FillColor, _Fill2, t);
                     #else
@@ -94,28 +96,42 @@ Shader "FigForge/RoundedRect"
                     #endif
                 }
 
-                fixed4 col = base;
+                // ---- shape colour (fill + optional stroke ring) ----
+                fixed3 shapeRGB = base.rgb;
+                float shapeFillA = base.a;
                 if (_BorderWidth > 0.001)
                 {
-                    // fill ends at d = _Pad - _BorderWidth, stroke ring runs out to d = _Pad.
-                    // inside:  _Pad=0     → ring [-w, 0]  (inward)
-                    // center:  _Pad=w/2   → ring [-w/2, w/2]
-                    // outside: _Pad=w     → ring [0, w]   (outward, fill stays full size)
-                    float inner = _Pad - _BorderWidth;
-                    float inBorder = smoothstep(-aa, aa, d - inner); // 0 in fill → 1 in stroke ring
-                    col.rgb = lerp(base.rgb, _BorderColor.rgb, inBorder);
-                    col.a = lerp(base.a, _BorderColor.a, inBorder);
+                    // stroke ring runs [_StrokeOutset - width, _StrokeOutset]:
+                    // inside _StrokeOutset=0, center=w/2, outside=w (fill stays full size).
+                    float inner = _StrokeOutset - _BorderWidth;
+                    float inBorder = smoothstep(-aa, aa, d - inner);
+                    shapeRGB = lerp(base.rgb, _BorderColor.rgb, inBorder);
+                    shapeFillA = lerp(base.a, _BorderColor.a, inBorder);
+                }
+                float shapeCov = 1.0 - smoothstep(-aa, aa, d - _StrokeOutset); // AA edge at the outer stroke edge
+                float shapeA = shapeFillA * shapeCov;
+
+                // ---- drop shadow (soft, offset, spread silhouette BEHIND the shape) ----
+                float shadowA = 0.0;
+                if (_ShadowColor.a > 0.001)
+                {
+                    float ds = sdRoundBox(p - _ShadowOffset.xy, size * 0.5, rad); // cast by the fill silhouette
+                    float spread = _ShadowParams.y;
+                    float bl = max(_ShadowParams.x, aa);                          // blur radius (>= AA)
+                    float scov = 1.0 - smoothstep(spread - bl, spread + bl, ds);
+                    shadowA = _ShadowColor.a * scov;
                 }
 
-                float coverage = 1.0 - smoothstep(-aa, aa, d - _Pad);   // crisp AA edge at the outer stroke edge
-                col *= i.color;                                  // CanvasRenderer tint
-                col.a *= coverage;
-                // Discard fragments outside the rounded shape so this graphic can
-                // double as a UGUI Mask: the stencil is only written inside the
-                // rounded coverage, clipping children to the rounded corners
-                // (independent of fill alpha — a transparent fill still masks).
-                clip(coverage - 0.001);
-                return col;
+                // ---- composite shadow UNDER shape (straight alpha) ----
+                float outA = shapeA + shadowA * (1.0 - shapeA);
+                fixed3 outRGB = (shapeRGB * shapeA + _ShadowColor.rgb * shadowA * (1.0 - shapeA)) / max(outA, 1e-4);
+                fixed4 outc = fixed4(outRGB, outA) * i.color;     // CanvasRenderer tint
+
+                // With a shadow, keep the (larger) shadow footprint; otherwise clip to
+                // the shape so this graphic can still serve as a rounded UGUI Mask.
+                float clipv = (_ShadowColor.a > 0.001) ? outA : shapeCov;
+                clip(clipv - 0.001);
+                return outc;
             }
             ENDCG
         }

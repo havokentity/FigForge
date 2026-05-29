@@ -59,12 +59,22 @@ export interface Stroke {
   dashed: boolean;
 }
 
+export interface Shadow {
+  color: RGBA;
+  offsetX: number;
+  offsetY: number;
+  blur: number;   // Figma effect radius
+  spread: number;
+  inner: boolean; // false = drop shadow (rendered); true = inner shadow (captured, not yet rendered)
+}
+
 export interface Style {
   opacity: number;
   cornerRadius: number; // max corner; per-corner detail in `corners`
   corners?: [number, number, number, number]; // tl, tr, br, bl
   fill?: Fill;
   stroke?: Stroke;
+  shadows?: Shadow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +134,7 @@ export interface ButtonShape {
   borderColor?: RGBA;
   borderWidth?: number;
   borderAlign?: StrokeAlign; // inside|outside|center (default inside)
+  shadow?: Shadow; // first drop shadow on the regular layer
 }
 
 export interface CanonicalRef {

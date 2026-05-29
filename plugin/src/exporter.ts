@@ -22,6 +22,7 @@ import {
   type Fill,
   type GradientKind,
   type Manifest,
+  type Shadow,
   type ManifestAsset,
   type ManifestElement,
   type ManifestFont,
@@ -136,19 +137,42 @@ function cornerData(node: SceneNode): { radius: number; corners?: [number, numbe
   return { radius: Math.max(tl, tr, br, bl), corners: [tl, tr, br, bl] };
 }
 
+// Visible Figma DROP_SHADOW effects on a node → Shadow data (first one drives the
+// SDF shader; the array is captured for future multi-shadow / inner-shadow support).
+function extractShadows(node: SceneNode): Shadow[] {
+  const effects = (node as unknown as { effects?: readonly Effect[] }).effects;
+  if (!Array.isArray(effects)) return [];
+  const out: Shadow[] = [];
+  for (const e of effects) {
+    if (e.visible === false || e.type !== 'DROP_SHADOW') continue;
+    const ds = e as DropShadowEffect & { spread?: number };
+    out.push({
+      color: [ds.color.r, ds.color.g, ds.color.b, ds.color.a],
+      offsetX: ds.offset?.x ?? 0,
+      offsetY: ds.offset?.y ?? 0,
+      blur: ds.radius ?? 0,
+      spread: ds.spread ?? 0,
+      inner: false,
+    });
+  }
+  return out;
+}
+
 function buildStyle(node: SceneNode, options: ExportOptions, hasAsset: boolean): Style | undefined {
   const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
   const fill = firstFill(node, options);
   const stroke = options.rasterizeStrokes ? undefined : extractStroke(node);
   const { radius, corners } = cornerData(node);
+  const shadows = extractShadows(node);
 
   // No real fill → transparent, NOT opaque white. Fabricated white is the cause
-  // of stray white boxes on fill-less styled containers. (FigmaTest fix.)
+  // of stray white boxes on fill-less styled containers. (FigmaTest fix.) A shadow
+  // also needs a (transparent) SDF panel to render against.
   const resolvedFill: Fill | undefined =
-    fill || (!hasAsset && (stroke || radius > 0) ? { kind: 'solid', color: [0, 0, 0, 0] } : fill);
+    fill || (!hasAsset && (stroke || radius > 0 || shadows.length > 0) ? { kind: 'solid', color: [0, 0, 0, 0] } : fill);
 
-  if (!resolvedFill && !stroke && radius === 0 && opacity === 1) return undefined;
-  return { opacity, cornerRadius: radius, corners, fill: resolvedFill, stroke };
+  if (!resolvedFill && !stroke && radius === 0 && opacity === 1 && shadows.length === 0) return undefined;
+  return { opacity, cornerRadius: radius, corners, fill: resolvedFill, stroke, shadows: shadows.length ? shadows : undefined };
 }
 
 function alignH(v: string | undefined): TextProps['alignH'] {
@@ -578,8 +602,11 @@ export async function exportDesign(
     const shape: {
       cornerRadius: number; fill: RGBA; fill2?: RGBA; gradientTransform?: number[];
       borderColor?: RGBA; borderWidth?: number; borderAlign?: 'inside' | 'outside' | 'center';
+      shadow?: Shadow;
     } = { cornerRadius: radius, fill: sf.fill };
     if (sf.fill2) { shape.fill2 = sf.fill2; shape.gradientTransform = sf.gradientTransform; }
+    const sh0 = extractShadows(reg)[0];
+    if (sh0) shape.shadow = sh0;
     const strokes = (reg as unknown as { strokes?: Paint[] }).strokes;
     const sw = (reg as unknown as { strokeWeight?: number }).strokeWeight;
     if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {

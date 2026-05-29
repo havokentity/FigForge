@@ -21,6 +21,10 @@ namespace FigForge
         [SerializeField] float borderWidth = 0f;             // px
         [SerializeField] float borderAlign = 0f;             // 0=inside, 0.5=center, 1=outside
         [SerializeField] Vector4 corners = Vector4.zero;     // per-corner radii px: (tl, tr, br, bl)
+        [SerializeField] Color shadowColor = new Color(0, 0, 0, 0); // drop shadow (a==0 → off)
+        [SerializeField] Vector2 shadowOffset = Vector2.zero;        // px, Unity space (+y up)
+        [SerializeField] float shadowBlur = 0f;              // px
+        [SerializeField] float shadowSpread = 0f;            // px
 
         Material _mat;
         static readonly int IdFill = Shader.PropertyToID("_FillColor");
@@ -31,10 +35,19 @@ namespace FigForge
         static readonly int IdSize = Shader.PropertyToID("_Size");
         static readonly int IdGrad = Shader.PropertyToID("_GradientDir");
         static readonly int IdPad = Shader.PropertyToID("_Pad");
+        static readonly int IdStrokeOutset = Shader.PropertyToID("_StrokeOutset");
+        static readonly int IdShadowColor = Shader.PropertyToID("_ShadowColor");
+        static readonly int IdShadowOffset = Shader.PropertyToID("_ShadowOffset");
+        static readonly int IdShadowParams = Shader.PropertyToID("_ShadowParams");
 
-        // How far the stroke extends OUTSIDE the fill edge (scaled px). Drives both
-        // the shader (_Pad) and the mesh padding so an outside/center stroke isn't clipped.
+        // How far the stroke extends OUTSIDE the fill edge (scaled px).
         float StrokeOutset() => Mathf.Max(0f, borderWidth) * Mathf.Clamp01(borderAlign);
+        // How far the drop shadow reaches beyond the fill edge (offset + blur + spread, + margin).
+        float ShadowReach() => shadowColor.a <= 0.001f ? 0f
+            : Mathf.Max(Mathf.Abs(shadowOffset.x), Mathf.Abs(shadowOffset.y))
+              + Mathf.Max(0f, shadowBlur) + Mathf.Max(0f, shadowSpread) + 1f;
+        // Total mesh padding so stroke AND shadow have geometry to draw on.
+        float MeshPad() => Mathf.Max(StrokeOutset(), ShadowReach());
 
         public Color FillColor { get => fillColor; set { fillColor = value; Push(); } }
 
@@ -52,6 +65,15 @@ namespace FigForge
             fillColor = fill; fillColor2 = fill2; gradientDir = grad;
             borderColor = border; borderWidth = borderW; corners = cornerRadii;
             borderAlign = borderAlignment;
+            Push();
+        }
+
+        // Drop shadow behind the shape. color.a==0 → no shadow. offset is Unity-space
+        // px (+y up); blur/spread in px. The mesh auto-grows to fit the shadow.
+        public void SetShadow(Color color, Vector2 offset, float blur, float spread)
+        {
+            shadowColor = color; shadowOffset = offset; shadowBlur = blur; shadowSpread = spread;
+            SetVerticesDirty(); // mesh padding may have changed
             Push();
         }
 
@@ -80,7 +102,11 @@ namespace FigForge
             m.SetVector(IdRadius, corners);
             m.SetVector(IdSize, new Vector4(r.width, r.height, 0, 0));
             m.SetVector(IdGrad, new Vector4(gradientDir.x, gradientDir.y, 0, 0));
-            m.SetFloat(IdPad, StrokeOutset());
+            m.SetFloat(IdStrokeOutset, StrokeOutset());
+            m.SetFloat(IdPad, MeshPad());
+            m.SetColor(IdShadowColor, shadowColor);
+            m.SetVector(IdShadowOffset, new Vector4(shadowOffset.x, shadowOffset.y, 0, 0));
+            m.SetVector(IdShadowParams, new Vector4(shadowBlur, shadowSpread, 0, 0));
         }
 
         void Push()
@@ -109,10 +135,10 @@ namespace FigForge
         protected override void OnPopulateMesh(VertexHelper vh)
         {
             var r = GetPixelAdjustedRect();
-            // Pad the quad by the stroke outset so an outside/center stroke has
-            // geometry to draw on (the shader maps UV across this padded span and
-            // keeps the SDF box at the rect size). UV stays 0..1.
-            float pad = StrokeOutset();
+            // Pad the quad by the stroke outset AND shadow reach so both have geometry
+            // to draw on (the shader maps UV across this padded span and keeps the SDF
+            // box at the rect size). UV stays 0..1.
+            float pad = MeshPad();
             float x0 = r.x - pad, y0 = r.y - pad, x1 = r.xMax + pad, y1 = r.yMax + pad;
             var c = Color.white;
             vh.Clear();

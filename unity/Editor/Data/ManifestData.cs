@@ -70,6 +70,15 @@ namespace FigForge
         public bool dashed;
     }
 
+    public class ShadowData
+    {
+        public float[] color;            // rgba 0..1
+        public float offsetX, offsetY;   // Figma px (+y down)
+        public float blur;               // Figma effect radius
+        public float spread;
+        public bool inner;               // false = drop shadow (rendered)
+    }
+
     public class StyleData
     {
         public float opacity = 1f;
@@ -77,6 +86,7 @@ namespace FigForge
         public float[] corners;          // tl,tr,br,bl
         public Fill fill;
         public Stroke stroke;
+        public List<ShadowData> shadows;
     }
 
     public class OutlineData { public float[] color; public float weight; } // text stroke → TMP outline
@@ -107,6 +117,7 @@ namespace FigForge
         public float[] borderColor;
         public float borderWidth;
         public string borderAlign;        // inside|outside|center (null = inside)
+        public ShadowData shadow;         // first drop shadow on the regular layer
     }
     public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }
 
