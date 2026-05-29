@@ -79,7 +79,19 @@ Shader "FigForge/RoundedRect"
                 if (dot(_GradientDir.xy, _GradientDir.xy) > 1e-6)
                 {
                     float t = saturate(dot(i.uv - 0.5, normalize(_GradientDir.xy)) + 0.5);
-                    base = lerp(_FillColor, _Fill2, t);
+                    // Figma mixes gradient stops in sRGB (gamma) space. In a Linear
+                    // project the shader receives LINEAR colours, so a straight lerp
+                    // interpolates in linear and the midpoint reads brighter/more
+                    // saturated than Figma. Convert to gamma, lerp, convert back so
+                    // the mix matches Figma exactly. (Gamma project: already sRGB.)
+                    #ifdef UNITY_COLORSPACE_GAMMA
+                        base = lerp(_FillColor, _Fill2, t);
+                    #else
+                        float3 ga = LinearToGammaSpace(_FillColor.rgb);
+                        float3 gb = LinearToGammaSpace(_Fill2.rgb);
+                        base.rgb = GammaToLinearSpace(lerp(ga, gb, t));
+                        base.a = lerp(_FillColor.a, _Fill2.a, t);
+                    #endif
                 }
 
                 fixed4 col = base;
