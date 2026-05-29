@@ -184,6 +184,13 @@ function buildText(node: TextNode): TextProps {
     ? (node.lineHeight as { value: number }).value
     : undefined;
   const ls = node.letterSpacing !== figma.mixed ? node.letterSpacing.value : undefined;
+  // A stroke on the text layer → a TMP outline (color + px weight).
+  const strokes = Array.isArray(node.strokes) ? node.strokes : [];
+  const strokePaint = strokes.find((f) => !isEmptyPaint(f) && f.type === 'SOLID') as SolidPaint | undefined;
+  const strokeWeight = typeof node.strokeWeight === 'number' ? node.strokeWeight : 0;
+  const outline = strokePaint && strokeWeight > 0
+    ? { color: toRGBA(strokePaint.color, strokePaint.opacity), weight: strokeWeight }
+    : undefined;
   return {
     content: node.characters,
     fontFamily: family,
@@ -195,6 +202,7 @@ function buildText(node: TextNode): TextProps {
     lineHeight: lh,
     letterSpacing: ls,
     autoResize: node.textAutoResize,
+    outline,
   };
 }
 
@@ -550,14 +558,19 @@ export async function exportDesign(
       ? (reg as unknown as { cornerRadius: number }).cornerRadius : 0;
     const shape: {
       cornerRadius: number; fill: RGBA; fill2?: RGBA; gradientTransform?: number[];
-      borderColor?: RGBA; borderWidth?: number;
+      borderColor?: RGBA; borderWidth?: number; borderAlign?: 'inside' | 'outside' | 'center';
     } = { cornerRadius: radius, fill: sf.fill };
     if (sf.fill2) { shape.fill2 = sf.fill2; shape.gradientTransform = sf.gradientTransform; }
     const strokes = (reg as unknown as { strokes?: Paint[] }).strokes;
     const sw = (reg as unknown as { strokeWeight?: number }).strokeWeight;
     if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
       const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
-      if (sc) { shape.borderColor = toRGBA(sc.color, sc.opacity); shape.borderWidth = sw; }
+      if (sc) {
+        shape.borderColor = toRGBA(sc.color, sc.opacity);
+        shape.borderWidth = sw;
+        const al = (reg as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
+        shape.borderAlign = al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center';
+      }
     }
     const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: sf.fill };
     const ro = kids.find((c) => c.name.toLowerCase() === 'rollover'); const rc = ro ? solidRGBA(ro) : null; if (rc) stateColors.highlighted = rc;

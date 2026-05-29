@@ -16,6 +16,7 @@ Shader "FigForge/RoundedRect"
         _Radius ("Corner Radii px (tl,tr,br,bl)", Vector) = (0,0,0,0)
         _Size ("Rect Size (px)", Vector) = (100,100,0,0)
         _GradientDir ("Gradient Dir (xy, 0=off)", Vector) = (0,0,0,0)
+        _Pad ("Stroke outset px (0=inside, w/2=center, w=outside)", Float) = 0
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -47,6 +48,7 @@ Shader "FigForge/RoundedRect"
             fixed4 _FillColor, _Fill2, _BorderColor;
             float4 _Size, _GradientDir, _Radius; // _Radius = (tl, tr, br, bl)
             float _BorderWidth;
+            float _Pad; // how far the stroke extends OUTSIDE the fill edge (px)
 
             v2f vert(appdata v) { v2f o; o.pos = UnityObjectToClipPos(v.vertex); o.color = v.color; o.uv = v.uv; return o; }
 
@@ -61,11 +63,15 @@ Shader "FigForge/RoundedRect"
             fixed4 frag(v2f i) : SV_Target
             {
                 float2 size = max(_Size.xy, float2(1,1));
-                float2 p = (i.uv - 0.5) * size;            // pixel coords from centre (+x right, +y up)
+                // The mesh is padded by _Pad on every side so an OUTSIDE/CENTER
+                // stroke has geometry to draw on; map UV across that padded span
+                // but keep the SDF box at the original rect size.
+                float2 full = size + 2.0 * _Pad;
+                float2 p = (i.uv - 0.5) * full;            // pixel coords from centre (+x right, +y up)
                 // pick this quadrant's corner radius: tl=x, tr=y, br=z, bl=w
                 float rad = (p.x > 0.0) ? (p.y > 0.0 ? _Radius.y : _Radius.z)
                                         : (p.y > 0.0 ? _Radius.x : _Radius.w);
-                float d = sdRoundBox(p, size * 0.5, rad);
+                float d = sdRoundBox(p, size * 0.5, rad);  // d=0 at the FILL edge; d=_Pad at the stroke's outer edge
                 float aa = max(fwidth(d), 1e-4);
 
                 // base fill (optional linear gradient)
@@ -79,12 +85,17 @@ Shader "FigForge/RoundedRect"
                 fixed4 col = base;
                 if (_BorderWidth > 0.001)
                 {
-                    float inBorder = smoothstep(-aa, aa, d + _BorderWidth); // 0 centre → 1 border ring
+                    // fill ends at d = _Pad - _BorderWidth, stroke ring runs out to d = _Pad.
+                    // inside:  _Pad=0     → ring [-w, 0]  (inward)
+                    // center:  _Pad=w/2   → ring [-w/2, w/2]
+                    // outside: _Pad=w     → ring [0, w]   (outward, fill stays full size)
+                    float inner = _Pad - _BorderWidth;
+                    float inBorder = smoothstep(-aa, aa, d - inner); // 0 in fill → 1 in stroke ring
                     col.rgb = lerp(base.rgb, _BorderColor.rgb, inBorder);
                     col.a = lerp(base.a, _BorderColor.a, inBorder);
                 }
 
-                float coverage = 1.0 - smoothstep(-aa, aa, d);   // crisp AA edge
+                float coverage = 1.0 - smoothstep(-aa, aa, d - _Pad);   // crisp AA edge at the outer stroke edge
                 col *= i.color;                                  // CanvasRenderer tint
                 col.a *= coverage;
                 // Discard fragments outside the rounded shape so this graphic can

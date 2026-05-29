@@ -79,6 +79,8 @@ namespace FigForge
         public Stroke stroke;
     }
 
+    public class OutlineData { public float[] color; public float weight; } // text stroke → TMP outline
+
     public class TextData
     {
         public string content;
@@ -91,6 +93,7 @@ namespace FigForge
         public float? lineHeight;
         public float? letterSpacing;
         public string autoResize;
+        public OutlineData outline;      // null = no outline
     }
 
     public class CanonicalStates { public string normal; public string highlighted; public string pressed; }
@@ -103,6 +106,7 @@ namespace FigForge
         public float[] gradientTransform; // gradient affine (null = solid fill)
         public float[] borderColor;
         public float borderWidth;
+        public string borderAlign;        // inside|outside|center (null = inside)
     }
     public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }
 

@@ -243,6 +243,11 @@ namespace FigForge
             return false;
         }
 
+        // Figma stroke alignment → outward-extension factor for the SDF shader:
+        // 0 = inside (stroke inward), 0.5 = center (straddles edge), 1 = outside.
+        static float BorderAlignFactor(string align)
+            => align == "outside" ? 1f : align == "center" ? 0.5f : 0f;
+
         // Per-corner radii (tl,tr,br,bl) in scaled px, from style.corners or the uniform radius.
         static Vector4 CornerRadii(StyleData s, float sf)
         {
@@ -286,6 +291,7 @@ namespace FigForge
             var s = e.style;
             Color border = s.stroke != null ? ToColor(s.stroke.color) : new Color(0, 0, 0, 0);
             float bw = s.stroke != null ? Mathf.Max(1f, s.stroke.weight * ctx.scaleFactor) : 0f;
+            float align = s.stroke != null ? BorderAlignFactor(s.stroke.align) : 0f;
 
             Color fill, fill2; Vector2 dir;
             if (s.fill != null && IsSdfGradient(s.fill))
@@ -299,7 +305,7 @@ namespace FigForge
                 fill = s.fill != null && s.fill.kind == "solid" ? ToColor(s.fill.color) : new Color(0, 0, 0, 0);
                 fill2 = fill; dir = Vector2.zero;
             }
-            rr.Configure(fill, fill2, dir, border, bw, CornerRadii(s, ctx.scaleFactor));
+            rr.Configure(fill, fill2, dir, border, bw, CornerRadii(s, ctx.scaleFactor), align);
             ApplyOpacity(go, e, fill);
         }
 
@@ -381,7 +387,22 @@ namespace FigForge
             // wraps — so don't wrap, else a hair of width difference pushes a word
             // to the next line. Fixed-width/auto-height text still wraps.
             tmp.enableWordWrapping = !string.Equals(t.autoResize, "WIDTH_AND_HEIGHT", System.StringComparison.OrdinalIgnoreCase);
+            ApplyText_Outline(tmp, t);
             ApplyOpacity(go, e, tmp.color);
+        }
+
+        // A Figma text stroke → a TMP outline. Uses the per-instance fontMaterial
+        // (so the shared font asset isn't outlined globally). TMP's outline width is
+        // normalised (0..~0.5 usable) against the SDF spread, so map the px weight
+        // relative to the font size (scale-independent) and clamp.
+        static void ApplyText_Outline(TMP_Text tmp, TextData t)
+        {
+            if (t.outline == null || t.outline.weight <= 0.001f || t.outline.color == null) return;
+            var mat = tmp.fontMaterial; // instance — does not touch the shared asset material
+            mat.SetColor(TMPro.ShaderUtilities.ID_OutlineColor, ToColor(t.outline.color));
+            float w = Mathf.Clamp(t.outline.weight / Mathf.Max(1f, t.fontSize) * 1.4f, 0f, 0.5f);
+            mat.SetFloat(TMPro.ShaderUtilities.ID_OutlineWidth, w);
+            tmp.UpdateMeshPadding();
         }
 
         // Faux bold/italic only when the resolved face doesn't already encode that
@@ -495,7 +516,7 @@ namespace FigForge
             Vector2 dir = gradient ? GradientDir(sh.gradientTransform) : Vector2.zero;
             var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
             float br = sh.cornerRadius * ctx.scaleFactor;
-            rr.Configure(fill, fill2, dir, border, sh.borderWidth * ctx.scaleFactor, new Vector4(br, br, br, br));
+            rr.Configure(fill, fill2, dir, border, sh.borderWidth * ctx.scaleFactor, new Vector4(br, br, br, br), BorderAlignFactor(sh.borderAlign));
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = rr;

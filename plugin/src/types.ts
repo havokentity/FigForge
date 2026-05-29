@@ -98,6 +98,7 @@ export interface TextProps {
   lineHeight?: number;
   letterSpacing?: number;
   autoResize?: string;
+  outline?: { color: RGBA; weight: number }; // text stroke → TMP outline
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ export interface CanonicalRef {
     gradientTransform?: number[]; // gradient affine (Figma row-major), present with fill2
     borderColor?: RGBA;
     borderWidth?: number;
+    borderAlign?: StrokeAlign; // inside|outside|center (default inside)
   };
   stateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA };
 }
