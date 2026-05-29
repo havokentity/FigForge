@@ -533,8 +533,10 @@ export async function exportDesign(
     if (paint.type === 'GRADIENT_LINEAR') {
       const g = paint as GradientPaint;
       const stops = g.gradientStops;
-      if (stops.length === 2) {
-        const c0 = stops[0].color, c1 = stops[1].color;
+      if (stops.length >= 2) {
+        // 2 stops = exact; 3+ stops are approximated by first→last (the SDF
+        // shader is a 2-colour lerp). Better than baking a PNG for the crisp look.
+        const c0 = stops[0].color, c1 = stops[stops.length - 1].color;
         return {
           fill: [c0.r, c0.g, c0.b, c0.a] as RGBA,
           fill2: [c1.r, c1.g, c1.b, c1.a] as RGBA,
@@ -545,15 +547,31 @@ export async function exportDesign(
     return null;
   }
 
+  // Human-readable reason a 'regular' layer's fill can't drive the SDF shader —
+  // surfaced as a Figma toast so a PNG-fallback button is debuggable at a glance.
+  function fillDiag(node: SceneNode): string {
+    const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
+    if (!Array.isArray(fills)) return 'no fills array (is it a frame/group?)';
+    const paint = fills.find((f) => !isEmptyPaint(f));
+    if (!paint) return 'no visible fill';
+    if (paint.type.startsWith('GRADIENT')) {
+      const n = ((paint as GradientPaint).gradientStops || []).length;
+      return `${paint.type} (${n} stop${n === 1 ? '' : 's'})`;
+    }
+    return paint.type;
+  }
+
+  const shapeDiag: string[] = []; // why a button fell back to PNG (surfaced as a toast)
+
   // Procedural background shape from a button master's state layers: solid OR
-  // 2-stop linear gradient (SDF shader). Other fills → null → exported-PNG path.
+  // linear gradient (SDF shader). Other fills → null → exported-PNG path.
   function captureButtonShape(master: SceneNode) {
     if (!('children' in master)) return null;
     const kids = (master as ChildrenMixin).children as SceneNode[];
     const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
-    if (!reg) return null;
+    if (!reg) { shapeDiag.push(`'${master.name}': no layer named 'regular'`); return null; }
     const sf = shapeFill(reg);
-    if (!sf) return null; // unsupported fill → keep the PNG path
+    if (!sf) { shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
     const radius = typeof (reg as unknown as { cornerRadius?: number }).cornerRadius === 'number'
       ? (reg as unknown as { cornerRadius: number }).cornerRadius : 0;
     const shape: {
@@ -591,6 +609,11 @@ export async function exportDesign(
     if (states) stateByNode.set(p.node.id, states);
     const sh = captureButtonShape(master);
     if (sh) shapeByNode.set(p.node.id, sh);
+  }
+  if (shapeDiag.length) {
+    // Tell the designer exactly why a button used a baked PNG instead of the crisp shader.
+    try { figma.notify(`FigForge: ${shapeDiag.length} button(s) → PNG. ${shapeDiag[0]}`, { timeout: 7000 }); } catch { /* headless */ }
+    for (const d of shapeDiag) console.warn('[FigForge] button→PNG:', d);
   }
 
   // ---- 3. Assemble manifest elements ----------------------------------------
