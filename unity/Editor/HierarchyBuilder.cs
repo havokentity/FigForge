@@ -66,30 +66,31 @@ namespace FigForge
             // Figma component, or a hand-made one from the CanonicalLibrary) ------
             if (e.canonical != null)
             {
-                var prefab = ResolveOrGenerateCanonicalPrefab(e, ctx);
+                string canonicalKind = string.IsNullOrEmpty(e.canonical.kind) ? "button" : e.canonical.kind;
+                var prefab = canonicalKind == "list" ? null : ResolveOrGenerateCanonicalPrefab(e, ctx);
                 GameObject inst;
                 if (prefab != null)
                 {
                     inst = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, parent);
                     inst.name = e.name;
                 }
-                else if (e.canonical.kind == "button" && e.canonical.shape != null)
+                else if (canonicalKind == "button" && e.canonical.shape != null)
                 {
                     inst = BuildShapeButton(e, parent, ctx); // fallback: inline SDF shader
                 }
-                else if (e.canonical.kind == "button" && e.canonical.states != null)
+                else if (canonicalKind == "button" && e.canonical.states != null)
                 {
                     inst = BuildStateButton(e, parent, ctx); // fallback: inline state PNGs
                 }
-                else if ((e.canonical.kind == "toggle" || e.canonical.kind == "radio") && e.canonical.shape != null)
+                else if ((canonicalKind == "toggle" || canonicalKind == "radio") && e.canonical.shape != null)
                 {
                     inst = BuildToggle(e, parent, ctx);
                 }
-                else if (e.canonical.kind == "dropdown")
+                else if (canonicalKind == "dropdown")
                 {
                     inst = BuildDropdown(e, parent, ctx);
                 }
-                else if (e.canonical.kind == "list")
+                else if (canonicalKind == "list")
                 {
                     inst = BuildList(e, parent, ctx);
                 }
@@ -99,7 +100,7 @@ namespace FigForge
                     inst = BuildPlaceholderButton(e, parent, ctx);
                 }
                 // Radios under the same parent share one ToggleGroup → mutually exclusive.
-                if (e.canonical.kind == "radio")
+                if (canonicalKind == "radio")
                 {
                     var grp = parent.GetComponent<ToggleGroup>() ?? parent.gameObject.AddComponent<ToggleGroup>();
                     grp.allowSwitchOff = true;
@@ -1123,6 +1124,7 @@ namespace FigForge
         {
             string kind = string.IsNullOrEmpty(e.canonical.kind) ? "button" : e.canonical.kind;
             string refName = e.canonical.Ref;
+            if (kind == "list") return null;
             if (string.IsNullOrEmpty(refName)) return null;
             string sig = CanonicalSignature(e, kind, ctx.scaleFactor);
             bool signatureShare = CanShareCanonicalBySignature(e, kind);
@@ -1176,7 +1178,6 @@ namespace FigForge
                 : (kind == "button" && e.canonical.states != null) ? BuildStateButton(e, null, ctx) // exported state PNGs
                 : ((kind == "toggle" || kind == "radio") && e.canonical.shape != null) ? BuildToggle(e, null, ctx)
                 : (kind == "dropdown") ? BuildDropdown(e, null, ctx)
-                : (kind == "list") ? BuildList(e, null, ctx)
                 : BuildPlaceholderButton(e, null, ctx);
             if (temp == null) return candidate; // generation failed — keep whatever we had
             temp.name = SafeAsset(refName);

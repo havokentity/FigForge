@@ -338,15 +338,17 @@ function canonicalValue(node: SceneNode, kind: CanonicalKind): string | undefine
 
 function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef | undefined {
   if (!ref) return undefined;
+  const textLabel = firstTextLabel(node);
   const c: CanonicalRef = {
     kind: ref.kind,
     ref: ref.ref,
     instanceName: ref.instanceName,
-    label: firstTextLabel(node) || ref.instanceName,
+    label: textLabel || ref.instanceName,
   };
   const value = canonicalValue(node, ref.kind);
   if (value !== undefined) c.value = value;
   if (ref.kind === 'dropdown') {
+    if (c.value === undefined && textLabel) c.value = textLabel;
     const opts = gatherTexts(node);
     if (opts.length) c.options = opts;
   }
@@ -901,7 +903,7 @@ export async function exportDesign(
     } else if (ref.kind === 'dropdown') {
       const d = await captureDropdown(master, ref.value);
       controlByNode.set(p.node.id, {
-        shape: d.shape, options: d.options, value: d.value, label: d.label,
+        shape: d.shape, options: d.options,
         optionShape: d.optionShape,
         popupShape: d.popupShape,
         optionRolloverShape: d.optionRolloverShape,
@@ -1000,7 +1002,15 @@ export async function exportDesign(
     }
     if (canonical && instShapeByNode.has(node.id)) canonical.instanceShape = instShapeByNode.get(node.id);
     if (canonical && instStateColorsByNode.has(node.id)) canonical.instanceStateColors = instStateColorsByNode.get(node.id);
-    if (canonical && controlByNode.has(node.id)) Object.assign(canonical, controlByNode.get(node.id));
+    if (canonical && controlByNode.has(node.id)) {
+      const instanceDropdownLabel = canonical.kind === 'dropdown' ? canonical.label : undefined;
+      const instanceDropdownValue = canonical.kind === 'dropdown' ? canonical.value : undefined;
+      Object.assign(canonical, controlByNode.get(node.id));
+      if (canonical.kind === 'dropdown') {
+        if (instanceDropdownLabel !== undefined) canonical.label = instanceDropdownLabel;
+        if (instanceDropdownValue !== undefined) canonical.value = instanceDropdownValue;
+      }
+    }
     const nav = navFor(node);
 
     const element: ManifestElement = {

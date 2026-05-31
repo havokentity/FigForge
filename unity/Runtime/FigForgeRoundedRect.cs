@@ -101,26 +101,38 @@ namespace FigForge
 
         public void Configure(Color fill, Color fill2, Vector2 grad, Color border, float borderW, Vector4 cornerRadii, float borderAlignment = 0f)
         {
-            fillColor = fill; fillColor2 = fill2; gradientDir = grad;
-            borderColor = border; borderWidth = borderW; corners = cornerRadii;
-            borderAlign = borderAlignment;
+            SetShapeFields(fill, fill2, grad, border, borderW, cornerRadii, borderAlignment);
             Push();
         }
 
         public void SetStyle(FigForgeShapeStyle style)
         {
-            Configure(style.fill.color, style.fill.color2, style.fill.dir,
+            SetShapeFields(style.fill.color, style.fill.color2, style.fill.dir,
                 style.borderColor, style.borderWidth, style.corners, style.borderAlign);
-            SetShadow(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread);
+            SetShadowFields(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread);
+            SetVerticesDirty(); // mesh padding may have changed
+            Push();
         }
 
         // Drop shadow behind the shape. color.a==0 → no shadow. offset is Unity-space
         // px (+y up); blur/spread in px. The mesh auto-grows to fit the shadow.
         public void SetShadow(Color color, Vector2 offset, float blur, float spread)
         {
-            shadowColor = color; shadowOffset = offset; shadowBlur = blur; shadowSpread = spread;
+            SetShadowFields(color, offset, blur, spread);
             SetVerticesDirty(); // mesh padding may have changed
             Push();
+        }
+
+        void SetShapeFields(Color fill, Color fill2, Vector2 grad, Color border, float borderW, Vector4 cornerRadii, float borderAlignment)
+        {
+            fillColor = fill; fillColor2 = fill2; gradientDir = grad;
+            borderColor = border; borderWidth = borderW; corners = cornerRadii;
+            borderAlign = borderAlignment;
+        }
+
+        void SetShadowFields(Color color, Vector2 offset, float blur, float spread)
+        {
+            shadowColor = color; shadowOffset = offset; shadowBlur = blur; shadowSpread = spread;
         }
 
         Material EnsureMat()
