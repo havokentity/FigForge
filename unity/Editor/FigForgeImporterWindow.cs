@@ -226,13 +226,10 @@ namespace FigForge
             Repaint();
         }
 
-        string _version;
         string PackageVersion()
         {
-            if (_version != null) return _version;
             var info = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(FigForgeImporterWindow).Assembly);
-            _version = info != null ? info.version : "dev";
-            return _version;
+            return info != null ? info.version : "dev";
         }
 
         void ManifestPicker()
