@@ -143,6 +143,23 @@ namespace FigForge
         public float[] itemRollover;      // list: the row hover colour (from the 'Item' template's Rollover)
         public float itemHeight;          // list: row height in Figma px (drives Unity row sizing)
         public int count;                 // list: number of rows to generate
+        public CanonicalShape optionShape; // dropdown: option row Regular shape
+        public CanonicalShape popupShape;  // dropdown popup shell/background (Options frame)
+        public CanonicalShape optionRolloverShape; // dropdown: option row Rollover full shape
+        public CanonicalShape optionPressedShape;  // dropdown: option row Pressed full shape
+        public CanonicalShape optionSelectedShape; // dropdown: option row Selected/current-value full shape
+        public float[] optionRollover;     // dropdown: option row Rollover colour
+        public float[] optionPressed;      // dropdown: option row Pressed colour
+        public float[] optionSelected;     // dropdown: option row Selected/current-value colour
+        public float optionHeight;         // dropdown: option row height in Figma px
+        public string arrowAsset;          // dropdown: Arrow frame rendered as a sprite (supports nested vectors/text/shapes)
+        public string arrowRolloverAsset;  // dropdown: Arrow/Rollover rendered as a sprite
+        public string arrowPressedAsset;   // dropdown: Arrow/Pressed rendered as a sprite
+        public float[] arrowColor;         // dropdown: closed chevron Regular colour
+        public float[] arrowRollover;      // dropdown: closed chevron Rollover colour
+        public float[] arrowPressed;       // dropdown: closed chevron Pressed colour
+        public float[] bgRollover;         // dropdown: closed background Rollover fill
+        public float[] bgPressed;          // dropdown: closed background Pressed fill
         public Dictionary<string, float[]> parts; // normalized anchors [minX,minY,maxX,maxY] of named sub-layers
     }
 

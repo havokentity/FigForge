@@ -598,14 +598,48 @@ namespace FigForge
         static void ApplyShapeToRR(FigForgeRoundedRect rr, CanonicalShape sh, float sf,
                                    out Color fill, out Color fill2, out Vector2 dir)
         {
+            ApplyShapeValues(sh, sf, out fill, out fill2, out dir, out var border, out var borderWidth, out var corners, out var borderAlign);
+            rr.Configure(fill, fill2, dir, border, borderWidth, corners, borderAlign);
+            ApplyShadow(rr, sh.shadow, sf); // null/transparent → no-op
+        }
+
+        static void ApplyShapeValues(CanonicalShape sh, float sf, out Color fill, out Color fill2, out Vector2 dir,
+                                     out Color border, out float borderWidth, out Vector4 corners, out float borderAlign)
+        {
             fill = ToColor(sh.fill);
             bool gradient = sh.fill2 != null;
             fill2 = gradient ? ToColor(sh.fill2) : fill;
             dir = gradient ? GradientDir(sh.gradientTransform) : Vector2.zero;
-            var border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
+            border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
             float br = sh.cornerRadius * sf;
-            rr.Configure(fill, fill2, dir, border, StrokePx(sh.borderWidth, sf), new Vector4(br, br, br, br), BorderAlignFactor(sh.borderAlign));
-            ApplyShadow(rr, sh.shadow, sf); // null/transparent → no-op
+            borderWidth = StrokePx(sh.borderWidth, sf);
+            corners = new Vector4(br, br, br, br);
+            borderAlign = BorderAlignFactor(sh.borderAlign);
+        }
+
+        static FigForgeShapeStyle ShapeStyle(CanonicalShape sh, BuildContext ctx)
+        {
+            ApplyShapeValues(sh, ctx.scaleFactor, out var fill, out var fill2, out var dir, out var border, out var borderWidth, out var corners, out var borderAlign);
+            var style = new FigForgeShapeStyle
+            {
+                fill = new FigForgeFill(fill, fill2, dir),
+                borderColor = border,
+                borderWidth = borderWidth,
+                corners = corners,
+                borderAlign = borderAlign,
+                shadowColor = new Color(0, 0, 0, 0),
+                shadowOffset = Vector2.zero,
+                shadowBlur = 0f,
+                shadowSpread = 0f,
+            };
+            if (sh.shadow != null && sh.shadow.color != null)
+            {
+                style.shadowColor = ToColor(sh.shadow.color);
+                style.shadowOffset = new Vector2(sh.shadow.offsetX * ctx.scaleFactor, -sh.shadow.offsetY * ctx.scaleFactor);
+                style.shadowBlur = sh.shadow.blur * ctx.scaleFactor;
+                style.shadowSpread = sh.shadow.spread * ctx.scaleFactor;
+            }
+            return style;
         }
 
         // Apply a per-instance shape override onto an instantiated canonical button:
@@ -674,6 +708,7 @@ namespace FigForge
         {
             if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>();
             if (sh == null) { var img = go.AddComponent<Image>(); img.color = new Color(1, 1, 1, 0); return img; }
+            EnsureSdfShaderIncluded();
             var rr = go.AddComponent<FigForgeRoundedRect>();
             ApplyShapeToRR(rr, sh, ctx.scaleFactor, out _, out _, out _);
             return rr;
@@ -753,32 +788,128 @@ namespace FigForge
         {
             var c = e.canonical;
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "Dropdown" : e.name, parent);
-            var bg = AddShapeGraphic(go, c.shape, ctx);
             var dd = go.AddComponent<TMP_Dropdown>();
             dd.transition = Selectable.Transition.None;
+
+            var bgGo = NewRect("Background", go.transform);
+            AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
+            var bg = AddShapeGraphic(bgGo, c.shape, ctx);
             dd.targetGraphic = bg;
+            ApplyDropdownBackgroundStates(bg, c, ctx);
 
             var caption = AddControlLabel(go, "Label", c.value, c.parts, "Label", ctx, TextAlignmentOptions.MidlineLeft);
             dd.captionText = caption;
             if (c.parts != null && c.parts.ContainsKey("Arrow"))
-                AddControlLabel(go, "Arrow", "▾", c.parts, "Arrow", ctx, TextAlignmentOptions.Center);
+            {
+                if (!string.IsNullOrEmpty(c.arrowAsset))
+                {
+                    var arrow = AddControlImage(go, "Arrow", c.parts, "Arrow", c.arrowAsset, ctx);
+                    ApplyDropdownArrowSpriteStates(go, arrow, c, ctx);
+                }
+                else
+                {
+                    var arrow = AddControlLabel(go, "Arrow", "v", c.parts, "Arrow", ctx, TextAlignmentOptions.Center);
+                    ApplyDropdownArrowStates(go, arrow, c);
+                }
+            }
 
-            BuildDropdownTemplate(go, ctx, dd);
+            BuildDropdownTemplate(go, c, ctx, dd);
             if (c.options != null && c.options.Count > 0) { dd.ClearOptions(); dd.AddOptions(c.options); }
+            if (c.optionShape != null)
+            {
+                var edgeStyler = go.AddComponent<FigForgeDropdownOptionEdges>();
+                edgeStyler.dropdown = dd;
+            }
 
             var bind = go.AddComponent<FigForgeBindings>();
             bind.control = dd; bind.optionsTarget = dd; bind.valueText = caption; bind.background = bg;
             return go;
         }
 
-        // Build the standard (Viewport/Content/Item) TMP_Dropdown popup template, hidden.
-        static void BuildDropdownTemplate(GameObject root, BuildContext ctx, TMP_Dropdown dd)
+        static void ApplyDropdownArrowStates(GameObject control, TMP_Text arrow, CanonicalRef c)
         {
+            if (arrow == null) return;
+            var normal = c.arrowColor != null ? ToColor(c.arrowColor) : arrow.color;
+            arrow.color = normal;
+            if (c.arrowRollover == null && c.arrowPressed == null) return;
+
+            var states = control.AddComponent<FigForgeGraphicStateColors>();
+            states.target = arrow;
+            states.normal = normal;
+            states.highlighted = c.arrowRollover != null ? ToColor(c.arrowRollover) : normal;
+            states.pressed = c.arrowPressed != null ? ToColor(c.arrowPressed) : states.highlighted;
+        }
+
+        static Image AddControlImage(GameObject parent, string name, Dictionary<string, float[]> parts, string part, string asset, BuildContext ctx)
+        {
+            var go = NewRect(name, parent.transform);
+            AnchorPart(go.GetComponent<RectTransform>(), parts, part);
+            var img = go.AddComponent<Image>();
+            if (ctx.sprites != null && ctx.sprites.TryGetValue(asset, out var sprite)) img.sprite = sprite;
+            else ctx.log($"sprite asset '{asset}' missing for {name}");
+            img.color = Color.white;
+            img.raycastTarget = false;
+            return img;
+        }
+
+        static void ApplyDropdownArrowSpriteStates(GameObject control, Image arrow, CanonicalRef c, BuildContext ctx)
+        {
+            if (arrow == null) return;
+            Sprite rollover = !string.IsNullOrEmpty(c.arrowRolloverAsset) && ctx.sprites.ContainsKey(c.arrowRolloverAsset)
+                ? ctx.sprites[c.arrowRolloverAsset]
+                : null;
+            Sprite pressed = !string.IsNullOrEmpty(c.arrowPressedAsset) && ctx.sprites.ContainsKey(c.arrowPressedAsset)
+                ? ctx.sprites[c.arrowPressedAsset]
+                : null;
+            if (rollover == null && pressed == null) return;
+
+            var states = control.AddComponent<FigForgeGraphicStateSprites>();
+            states.target = arrow;
+            states.normal = arrow.sprite;
+            states.highlighted = rollover != null ? rollover : arrow.sprite;
+            states.pressed = pressed != null ? pressed : states.highlighted;
+        }
+
+        static void ApplyDropdownBackgroundStates(Graphic bg, CanonicalRef c, BuildContext ctx)
+        {
+            if (bg == null || (c.bgRollover == null && c.bgPressed == null)) return;
+            if (bg is FigForgeRoundedRect rr && c.shape != null)
+            {
+                ApplyShapeToRR(rr, c.shape, ctx.scaleFactor, out var fill, out var fill2, out var dir);
+                var states = bg.gameObject.AddComponent<FigForgeButtonStateColors>();
+                SetStates(states, new FigForgeFill(fill, fill2, dir), new CanonicalStateColors
+                {
+                    highlighted = c.bgRollover,
+                    pressed = c.bgPressed,
+                });
+                return;
+            }
+
+            var graphicStates = bg.gameObject.AddComponent<FigForgeGraphicStateColors>();
+            graphicStates.target = bg;
+            graphicStates.normal = bg.color;
+            graphicStates.highlighted = c.bgRollover != null ? ToColor(c.bgRollover) : bg.color;
+            graphicStates.pressed = c.bgPressed != null ? ToColor(c.bgPressed) : graphicStates.highlighted;
+        }
+
+        // Build the standard (Viewport/Content/Item) TMP_Dropdown popup template, hidden.
+        static void BuildDropdownTemplate(GameObject root, CanonicalRef c, BuildContext ctx, TMP_Dropdown dd)
+        {
+            float sf = ctx.scaleFactor;
+            float itemHeight = c.optionHeight > 0.01f ? c.optionHeight * sf : 28f * sf;
             var template = NewRect("Template", root.transform);
             var trt = template.GetComponent<RectTransform>();
             trt.anchorMin = new Vector2(0, 0); trt.anchorMax = new Vector2(1, 0); trt.pivot = new Vector2(0.5f, 1);
-            trt.anchoredPosition = new Vector2(0, 2); trt.sizeDelta = new Vector2(0, 150);
-            template.AddComponent<Image>().color = Color.white;
+            trt.anchoredPosition = new Vector2(0, 2 * sf);
+            trt.sizeDelta = new Vector2(0, Mathf.Max(itemHeight, itemHeight * Mathf.Min(Mathf.Max(c.options != null ? c.options.Count : 3, 1), 6)));
+            var popupShape = c.popupShape ?? c.shape ?? c.optionShape;
+            if (popupShape != null)
+            {
+                AddShapeGraphic(template, popupShape, ctx);
+                template.AddComponent<Mask>().showMaskGraphic = true;
+            }
+            else
+                template.AddComponent<Image>().color = Color.white;
             var scroll = template.AddComponent<ScrollRect>();
             scroll.horizontal = false; scroll.vertical = true; scroll.movementType = ScrollRect.MovementType.Clamped;
 
@@ -792,34 +923,78 @@ namespace FigForge
             var content = NewRect("Content", viewport.transform);
             var crt = content.GetComponent<RectTransform>();
             crt.anchorMin = new Vector2(0, 1); crt.anchorMax = new Vector2(1, 1); crt.pivot = new Vector2(0.5f, 1);
-            crt.sizeDelta = new Vector2(0, 28);
+            crt.sizeDelta = new Vector2(0, itemHeight);
             scroll.content = crt;
 
             var item = NewRect("Item", content.transform);
             var irt = item.GetComponent<RectTransform>();
-            irt.anchorMin = new Vector2(0, 0.5f); irt.anchorMax = new Vector2(1, 0.5f); irt.sizeDelta = new Vector2(0, 28);
+            irt.anchorMin = new Vector2(0, 0.5f); irt.anchorMax = new Vector2(1, 0.5f); irt.sizeDelta = new Vector2(0, itemHeight);
             var itemToggle = item.AddComponent<Toggle>(); itemToggle.transition = Selectable.Transition.None;
 
             var itemBg = NewRect("Item Background", item.transform);
             Stretch(itemBg.GetComponent<RectTransform>());
-            var ibImg = itemBg.AddComponent<Image>(); ibImg.color = new Color(0.96f, 0.96f, 0.98f);
-            itemToggle.targetGraphic = ibImg;
-
-            var itemCk = NewRect("Item Checkmark", item.transform);
-            var ickrt = itemCk.GetComponent<RectTransform>();
-            ickrt.anchorMin = new Vector2(1, 0.5f); ickrt.anchorMax = new Vector2(1, 0.5f); ickrt.sizeDelta = new Vector2(16, 16); ickrt.anchoredPosition = new Vector2(-12, 0);
-            itemToggle.graphic = itemCk.AddComponent<Image>(); ((Image)itemToggle.graphic).color = new Color(0.49f, 0.36f, 1f);
+            Graphic itemGraphic;
+            if (c.optionShape != null)
+            {
+                var rr = (FigForgeRoundedRect)AddShapeGraphic(itemBg, c.optionShape, ctx);
+                ApplyDropdownOptionStates(item, rr, itemToggle, c, ctx);
+                itemGraphic = rr;
+            }
+            else
+            {
+                var ibImg = itemBg.AddComponent<Image>(); ibImg.color = new Color(0.96f, 0.96f, 0.98f);
+                var colors = itemToggle.colors;
+                if (c.optionRollover != null) colors.highlightedColor = ToColor(c.optionRollover);
+                if (c.optionPressed != null) colors.pressedColor = ToColor(c.optionPressed);
+                if (c.optionSelected != null) colors.selectedColor = ToColor(c.optionSelected);
+                itemToggle.colors = colors;
+                itemToggle.transition = Selectable.Transition.None;
+                itemGraphic = ibImg;
+            }
+            itemToggle.targetGraphic = itemGraphic;
+            itemToggle.graphic = null; // selected state is represented by optionSelected fill, not a TMP checkmark box
 
             var itemLbl = NewRect("Item Label", item.transform);
             var ilrt = itemLbl.GetComponent<RectTransform>();
-            ilrt.anchorMin = Vector2.zero; ilrt.anchorMax = Vector2.one; ilrt.offsetMin = new Vector2(12, 1); ilrt.offsetMax = new Vector2(-30, -2);
+            ilrt.anchorMin = Vector2.zero; ilrt.anchorMax = Vector2.one; ilrt.offsetMin = new Vector2(12 * sf, 1 * sf); ilrt.offsetMax = new Vector2(-12 * sf, -2 * sf);
             var itemText = itemLbl.AddComponent<TextMeshProUGUI>();
             itemText.text = "Option"; itemText.color = new Color(0.1f, 0.1f, 0.12f); itemText.fontSize = 14f * ctx.scaleFactor;
+            itemText.raycastTarget = false;
             itemText.alignment = TextAlignmentOptions.MidlineLeft; ApplyFont(itemText, null, ctx);
 
             dd.template = trt;
             dd.itemText = itemText;
             template.SetActive(false);
+        }
+
+        static void ApplyDropdownOptionStates(GameObject item, FigForgeRoundedRect rr, Toggle itemToggle, CanonicalRef c, BuildContext ctx)
+        {
+            if (rr == null || c.optionShape == null) return;
+            var normal = ShapeStyle(c.optionShape, ctx);
+            var highlighted = c.optionRolloverShape != null
+                ? ShapeStyle(c.optionRolloverShape, ctx)
+                : (c.optionRollover != null ? normal.WithFill(FigForgeFill.Solid(ToColor(c.optionRollover))) : normal);
+            var pressed = c.optionPressedShape != null
+                ? ShapeStyle(c.optionPressedShape, ctx)
+                : (c.optionPressed != null ? normal.WithFill(FigForgeFill.Solid(ToColor(c.optionPressed))) : highlighted);
+            bool hasSelected = c.optionSelectedShape != null || c.optionSelected != null;
+            var selected = c.optionSelectedShape != null
+                ? ShapeStyle(c.optionSelectedShape, ctx)
+                : (c.optionSelected != null ? normal.WithFill(FigForgeFill.Solid(ToColor(c.optionSelected))) : normal);
+
+            var states = item.AddComponent<FigForgeToggleStateColors>();
+            states.target = rr;
+            states.toggle = itemToggle;
+            states.useShapeStyles = true;
+            states.normalShape = normal;
+            states.highlightedShape = highlighted;
+            states.pressedShape = pressed;
+            states.selectedShape = selected;
+            states.hasSelected = hasSelected;
+            states.normal = normal.fill;
+            states.highlighted = highlighted.fill;
+            states.pressed = pressed.fill;
+            states.selected = selected.fill;
         }
 
         // List: a scrollable, masked, rounded container that repeats ONE interactive Item
@@ -857,35 +1032,28 @@ namespace FigForge
             bool hasHover = c.itemRollover != null;
             Color hover = hasHover ? ToColor(c.itemRollover) : Color.white;
             string labelTmpl = string.IsNullOrEmpty(c.label) ? "Item" : c.label;
-            for (int i = 0; i < count; i++)
-            {
-                var row = NewRect("Item " + (i + 1), content.transform);
-                var le = row.AddComponent<LayoutElement>(); le.minHeight = rowH; le.preferredHeight = rowH;
-                var btn = row.AddComponent<Button>(); btn.transition = Selectable.Transition.None;
-
-                Graphic rowBg;
-                if (c.itemShape != null)
-                {
-                    if (row.GetComponent<CanvasRenderer>() == null) row.AddComponent<CanvasRenderer>();
-                    var rr = row.AddComponent<FigForgeRoundedRect>();
-                    ApplyShapeToRR(rr, c.itemShape, sf, out var f, out var f2, out var d);
-                    var baseFill = new FigForgeFill(f, f2, d);
-                    var states = row.AddComponent<FigForgeButtonStateColors>();
-                    states.normal = baseFill;
-                    states.highlighted = hasHover ? FigForgeFill.Solid(hover) : baseFill;
-                    states.pressed = hasHover ? FigForgeFill.Solid(hover) : baseFill;
-                    rowBg = rr;
-                }
-                else { rowBg = row.AddComponent<Image>(); ((Image)rowBg).color = new Color(1, 1, 1, 0); }
-                btn.targetGraphic = rowBg;
-
-                var lbl = AddControlLabel(row, "Label", labelTmpl + " " + (i + 1), null, null, ctx, TextAlignmentOptions.MidlineLeft);
-                var lrt = lbl.GetComponent<RectTransform>(); lrt.offsetMin = new Vector2(16f * sf, 0); lrt.offsetMax = new Vector2(-12f * sf, 0);
-                lbl.raycastTarget = false;
-            }
+            var list = go.AddComponent<FigForgeList>();
+            list.Configure(crt, rowH, labelTmpl, ToListRowStyle(c.itemShape, sf), hover, hasHover);
+            list.CreatePreviewRows(count);
 
             var bind = go.AddComponent<FigForgeBindings>(); bind.background = bg;
             return go;
+        }
+
+        static FigForgeListRowStyle ToListRowStyle(CanonicalShape sh, float sf)
+        {
+            var style = new FigForgeListRowStyle { enabled = sh != null };
+            if (sh == null) return style;
+            ApplyShapeValues(sh, sf, out style.fill, out style.fill2, out style.gradientDir,
+                out style.borderColor, out style.borderWidth, out style.corners, out style.borderAlign);
+            if (sh.shadow != null && sh.shadow.color != null)
+            {
+                style.shadowColor = ToColor(sh.shadow.color);
+                style.shadowOffset = new Vector2(sh.shadow.offsetX * sf, -sh.shadow.offsetY * sf);
+                style.shadowBlur = sh.shadow.blur * sf;
+                style.shadowSpread = sh.shadow.spread * sf;
+            }
+            return style;
         }
 
         static Sprite SpriteByFile(string file, BuildContext ctx)
@@ -956,16 +1124,16 @@ namespace FigForge
             string kind = string.IsNullOrEmpty(e.canonical.kind) ? "button" : e.canonical.kind;
             string refName = e.canonical.Ref;
             if (string.IsNullOrEmpty(refName)) return null;
-            // Lists build inline per-instance — each instance's height sets its row count,
-            // so a single shared prefab can't represent them. Skip prefab generation.
-            if (kind == "list") return null;
-
-            string sig = CanonicalSignature(e.canonical, kind, ctx.scaleFactor);
+            string sig = CanonicalSignature(e, kind, ctx.scaleFactor);
+            bool signatureShare = CanShareCanonicalBySignature(e, kind);
 
             // Candidate prefab: a library-mapped one (hand-made or previously
             // generated) wins lookup; else an existing generated prefab on disk.
             string path = $"{CanonicalFolder}/{SafeAsset(refName)}.prefab";
-            GameObject candidate = ctx.canonical != null ? ctx.canonical.Resolve(kind, refName) : null;
+            var lib = ctx.canonical ?? LoadOrCreateCanonicalLibrary();
+            ctx.canonical = lib;
+            var refEntry = lib.ResolveEntry(kind, refName);
+            GameObject candidate = refEntry != null ? refEntry.prefab : null;
             if (candidate == null) candidate = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
 
             if (candidate != null)
@@ -976,16 +1144,30 @@ namespace FigForge
                 // prefab mapped from elsewhere is ALWAYS reused (manual skin survives).
                 // A managed prefab with no/old signature (made before signatures existed)
                 // regenerates once, then tracks changes.
-                bool managed = UnityEditor.AssetDatabase.GetAssetPath(candidate) == path;
+                string candidatePath = UnityEditor.AssetDatabase.GetAssetPath(candidate);
+                bool managed = candidatePath != null && candidatePath.StartsWith(CanonicalFolder + "/", StringComparison.Ordinal);
                 var stamp = candidate.GetComponent<FigForgeBindings>();
-                string prevSig = stamp != null ? stamp.signature : null;
+                string prevSig = !string.IsNullOrEmpty(refEntry != null ? refEntry.signature : null)
+                    ? refEntry.signature
+                    : (stamp != null ? stamp.signature : null);
                 bool stale = managed && prevSig != sig;
                 if (!stale)
                 {
-                    RegisterInLibrary(ctx, kind, refName, candidate);
+                    RegisterInLibrary(ctx, kind, refName, candidate, signatureShare && managed ? sig : null);
                     return candidate;
                 }
                 ctx.log($"canonical {kind} '{refName}' definition changed — regenerating prefab.");
+            }
+
+            if (signatureShare)
+            {
+                var sigEntry = lib.ResolveSignature(kind, sig);
+                if (sigEntry != null && sigEntry.prefab != null)
+                {
+                    ctx.log($"canonical {kind} '{refName}' shares prefab with '{sigEntry.referenceName}' (signature match).");
+                    RegisterInLibrary(ctx, kind, refName, sigEntry.prefab, sig);
+                    return sigEntry.prefab;
+                }
             }
 
             // Generate from the canonical definition, save (overwrites if present), register.
@@ -1011,7 +1193,7 @@ namespace FigForge
             if (prefab != null)
             {
                 ctx.log($"generated canonical {kind} '{refName}' → {path}");
-                RegisterInLibrary(ctx, kind, refName, prefab);
+                RegisterInLibrary(ctx, kind, refName, prefab, signatureShare ? sig : null);
             }
             return prefab;
         }
@@ -1020,15 +1202,32 @@ namespace FigForge
         // prefab's look. When it changes, the prefab is regenerated. Excludes
         // per-instance data (label text, position) and state-PNG filenames (which
         // embed the instance name) so distinct instances don't thrash regeneration.
+        // Size is included because a component's visual definition includes the master
+        // bounds used to author the canonical control.
         // Bump when the GENERATED prefab's component layout changes (not its data) so an
         // importer upgrade auto-regenerates managed prefabs instead of leaving stale
         // serialization behind. v2: FigForgeButtonStateColors → grouped FigForgeFill.
-        const int CanonicalSchema = 2;
+        // v4: dropdown selected option fill + closed background hover/press fills.
+        // v5: dropdown arrow glyph switched to ASCII to avoid TMP fallback warnings.
+        // v6: dropdown background SDF moved to a child targetGraphic.
+        // v7: popup options no longer use TMP's checkmark box or ColorTint.
+        // v8: popup item hover state driven from Toggle item root.
+        // v9: dropdown Arrow renders from Figma sprite(s), not a TMP fallback glyph.
+        // v10: dropdown popup option states carry full shape style, not fill only.
+        // v11: dropdown popup rows get edge-aware first/middle/last corner rules.
+        // v12: dropdown popup shell uses option shape styling instead of a hard-edged white backing.
+        // v13: popup shell can be styled independently from the Options frame.
+        // v14: popup shell also masks dropdown option rows to its rounded silhouette.
+        // v15: popup shell falls back to the closed select-box shape before option rows.
+        const int CanonicalSchema = 15;
 
-        static string CanonicalSignature(CanonicalRef c, string kind, float sf)
+        static string CanonicalSignature(ElementData e, string kind, float sf)
         {
+            var c = e.canonical;
             var sb = new System.Text.StringBuilder();
             sb.Append("v=").Append(CanonicalSchema).Append(";k=").Append(kind).Append(";sf=").Append(sf.ToString("0.###"));
+            if (e.rect != null)
+                sb.Append(";sz=").Append(e.rect.w.ToString("0.###")).Append('x').Append(e.rect.h.ToString("0.###"));
             var sh = c.shape;
             if (sh != null)
                 sb.Append(";cr=").Append(sh.cornerRadius.ToString("0.###"))
@@ -1045,6 +1244,60 @@ namespace FigForge
             var sc = c.stateColors;
             if (sc != null)
                 sb.Append(";sn=").Append(SigF(sc.normal)).Append(";sh=").Append(SigF(sc.highlighted)).Append(";sp=").Append(SigF(sc.pressed));
+            if (c.checkShape != null)
+            {
+                var cs = c.checkShape;
+                sb.Append(";ckcr=").Append(cs.cornerRadius.ToString("0.###"))
+                  .Append(";ckf=").Append(SigF(cs.fill)).Append(";ckf2=").Append(SigF(cs.fill2))
+                  .Append(";ckgt=").Append(SigF(cs.gradientTransform))
+                  .Append(";ckbc=").Append(SigF(cs.borderColor)).Append(";ckbw=").Append(cs.borderWidth.ToString("0.###"))
+                  .Append(";ckba=").Append(cs.borderAlign ?? "");
+            }
+            if (c.optionShape != null)
+            {
+                var os = c.optionShape;
+                sb.Append(";oh=").Append(c.optionHeight.ToString("0.###"))
+                  .Append(";ocr=").Append(os.cornerRadius.ToString("0.###"))
+                  .Append(";of=").Append(SigF(os.fill)).Append(";of2=").Append(SigF(os.fill2))
+                  .Append(";ogt=").Append(SigF(os.gradientTransform))
+                  .Append(";obc=").Append(SigF(os.borderColor)).Append(";obw=").Append(os.borderWidth.ToString("0.###"))
+                  .Append(";oba=").Append(os.borderAlign ?? "");
+                if (os.shadow != null)
+                {
+                    var sd = os.shadow;
+                    sb.Append(";oshc=").Append(SigF(sd.color)).Append(";osho=").Append(sd.offsetX.ToString("0.###")).Append(',').Append(sd.offsetY.ToString("0.###"))
+                      .Append(";oshb=").Append(sd.blur.ToString("0.###")).Append(";oshs=").Append(sd.spread.ToString("0.###"));
+                }
+            }
+            AppendShapeSig(sb, "pop", c.popupShape);
+            AppendShapeSig(sb, "ors", c.optionRolloverShape);
+            AppendShapeSig(sb, "ops", c.optionPressedShape);
+            AppendShapeSig(sb, "oss", c.optionSelectedShape);
+            sb.Append(";or=").Append(SigF(c.optionRollover)).Append(";op=").Append(SigF(c.optionPressed)).Append(";osel=").Append(SigF(c.optionSelected));
+            sb.Append(";aa=").Append(c.arrowAsset ?? "").Append(";aar=").Append(c.arrowRolloverAsset ?? "").Append(";aap=").Append(c.arrowPressedAsset ?? "");
+            sb.Append(";ac=").Append(SigF(c.arrowColor)).Append(";ar=").Append(SigF(c.arrowRollover)).Append(";ap=").Append(SigF(c.arrowPressed));
+            sb.Append(";bgr=").Append(SigF(c.bgRollover)).Append(";bgp=").Append(SigF(c.bgPressed));
+            if (c.itemShape != null)
+            {
+                var ish = c.itemShape;
+                sb.Append(";ih=").Append(c.itemHeight.ToString("0.###")).Append(";icount=").Append(c.count)
+                  .Append(";icr=").Append(ish.cornerRadius.ToString("0.###"))
+                  .Append(";if=").Append(SigF(ish.fill)).Append(";if2=").Append(SigF(ish.fill2))
+                  .Append(";igt=").Append(SigF(ish.gradientTransform))
+                  .Append(";ibc=").Append(SigF(ish.borderColor)).Append(";ibw=").Append(ish.borderWidth.ToString("0.###"))
+                  .Append(";iba=").Append(ish.borderAlign ?? "");
+            }
+            sb.Append(";iro=").Append(SigF(c.itemRollover));
+            if (c.parts != null && c.parts.Count > 0)
+            {
+                var keys = new List<string>(c.parts.Keys);
+                keys.Sort(StringComparer.Ordinal);
+                foreach (var key in keys)
+                {
+                    var a = c.parts[key];
+                    sb.Append(";part=").Append(key).Append(':').Append(SigF(a));
+                }
+            }
             bool hasStates = c.states != null && (c.states.normal != null || c.states.highlighted != null || c.states.pressed != null);
             sb.Append(";hasShape=").Append(sh != null ? 1 : 0).Append(";hasStates=").Append(hasStates ? 1 : 0);
             if (c.defLabelFont != null)
@@ -1052,16 +1305,42 @@ namespace FigForge
             return sb.ToString();
         }
 
+        static void AppendShapeSig(System.Text.StringBuilder sb, string prefix, CanonicalShape sh)
+        {
+            if (sh == null) return;
+            sb.Append(';').Append(prefix).Append("cr=").Append(sh.cornerRadius.ToString("0.###"))
+              .Append(';').Append(prefix).Append("f=").Append(SigF(sh.fill))
+              .Append(';').Append(prefix).Append("f2=").Append(SigF(sh.fill2))
+              .Append(';').Append(prefix).Append("gt=").Append(SigF(sh.gradientTransform))
+              .Append(';').Append(prefix).Append("bc=").Append(SigF(sh.borderColor))
+              .Append(';').Append(prefix).Append("bw=").Append(sh.borderWidth.ToString("0.###"))
+              .Append(';').Append(prefix).Append("ba=").Append(sh.borderAlign ?? "");
+            if (sh.shadow != null)
+            {
+                sb.Append(';').Append(prefix).Append("sh=").Append(SigF(sh.shadow.color)).Append(',')
+                  .Append(sh.shadow.offsetX.ToString("0.###")).Append(',')
+                  .Append(sh.shadow.offsetY.ToString("0.###")).Append(',')
+                  .Append(sh.shadow.blur.ToString("0.###")).Append(',')
+                  .Append(sh.shadow.spread.ToString("0.###"));
+            }
+        }
+
+        static bool CanShareCanonicalBySignature(ElementData e, string kind)
+        {
+            return e.canonical != null;
+        }
+
         static string SigF(float[] a)
             => a == null ? "_" : string.Join(",", System.Array.ConvertAll(a, x => x.ToString("0.###")));
 
-        static void RegisterInLibrary(BuildContext ctx, string kind, string refName, GameObject prefab)
+        static void RegisterInLibrary(BuildContext ctx, string kind, string refName, GameObject prefab, string signature = null)
         {
             var lib = ctx.canonical ?? LoadOrCreateCanonicalLibrary();
             ctx.canonical = lib; // reuse for the rest of this build
             if (!CanonicalLibrary.TryParseKind(kind, out var k)) return;
             var entry = lib.entries.Find(en => en != null && en.kind == k && en.referenceName == refName);
             if (entry == null) { entry = new CanonicalLibrary.Entry { kind = k, referenceName = refName }; lib.entries.Add(entry); }
+            entry.signature = signature;
             entry.prefab = prefab; // keep current (updates on regen; same ref on plain reuse)
             UnityEditor.EditorUtility.SetDirty(lib);
             UnityEditor.AssetDatabase.SaveAssets();

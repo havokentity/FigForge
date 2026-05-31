@@ -8,6 +8,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Newtonsoft.Json;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
@@ -489,7 +490,7 @@ namespace FigForge
         }
 
         // ---- Whole-page (project bundle) build ---------------------------------
-        struct LoadedScreen { public Manifest m; public string srcDir; public ProjectScreen ps; }
+        struct LoadedScreen { public Manifest m; public string srcDir; public ProjectScreen ps; public string importKey; public string manifestHash; }
 
         BuildContext MakeContext(Manifest m, Dictionary<string, Sprite> sprites)
         {
@@ -511,6 +512,109 @@ namespace FigForge
                 if (n == "content" || n == "content_slot") return t;
             }
             return null;
+        }
+
+        static string StableHash(string text)
+        {
+            unchecked
+            {
+                ulong hash = 14695981039346656037UL;
+                for (int i = 0; i < (text ?? "").Length; i++)
+                {
+                    hash ^= text[i];
+                    hash *= 1099511628211UL;
+                }
+                return hash.ToString("x16");
+            }
+        }
+
+        static string ImportKey(ProjectScreen ps, Manifest m)
+        {
+            string role = string.IsNullOrEmpty(ps.role) ? "screen" : ps.role;
+            string section = ps.section ?? "";
+            string name = m.screen != null && !string.IsNullOrEmpty(m.screen.name)
+                ? m.screen.name
+                : (!string.IsNullOrEmpty(ps.name) ? ps.name : "screen");
+            return $"{role}|{section}|{name}";
+        }
+
+        static string ManifestHash(Manifest m, ProjectScreen ps)
+        {
+            string exportedAt = m.exportedAt;
+            m.exportedAt = "";
+            try
+            {
+                string role = string.IsNullOrEmpty(ps.role) ? "screen" : ps.role;
+                string section = ps.section ?? "";
+                return StableHash(JsonConvert.SerializeObject(m) + "\nrole=" + role + "\nsection=" + section);
+            }
+            finally
+            {
+                m.exportedAt = exportedAt;
+            }
+        }
+
+        static FigForgeImportStamp FindImported(Transform scope, string projectName, string importKey)
+        {
+            if (scope == null) return null;
+            foreach (var stamp in scope.GetComponentsInChildren<FigForgeImportStamp>(true))
+                if (stamp != null && stamp.projectName == projectName && stamp.importKey == importKey)
+                    return stamp;
+            return null;
+        }
+
+        static Transform ImportScope(Transform parent)
+        {
+            var canvas = parent != null ? parent.GetComponentInParent<Canvas>() : null;
+            return canvas != null ? canvas.transform : (parent != null ? parent.root : null);
+        }
+
+        static void StampImported(GameObject go, string projectName, LoadedScreen screen)
+        {
+            if (go == null) return;
+            var stamp = go.GetComponent<FigForgeImportStamp>() ?? go.AddComponent<FigForgeImportStamp>();
+            stamp.projectName = projectName;
+            stamp.screenName = screen.m.screen != null ? screen.m.screen.name : screen.ps.name;
+            stamp.role = string.IsNullOrEmpty(screen.ps.role) ? "screen" : screen.ps.role;
+            stamp.section = screen.ps.section ?? "";
+            stamp.importKey = screen.importKey;
+            stamp.manifestHash = screen.manifestHash;
+        }
+
+        void RemoveStaleImported(Transform scope, string projectName, HashSet<string> expectedKeys)
+        {
+            if (scope == null) return;
+            var stamps = scope.GetComponentsInChildren<FigForgeImportStamp>(true).ToArray();
+            foreach (var stamp in stamps)
+            {
+                if (stamp == null || stamp.projectName != projectName) continue;
+                if (expectedKeys.Contains(stamp.importKey)) continue;
+                Log($"removed stale screen '{stamp.screenName}'", MessageType.Info);
+                DestroyImmediate(stamp.gameObject);
+            }
+        }
+
+        GameObject ReuseOrBuildScreen(LoadedScreen screen, string projectName, Transform parent, Dictionary<string, Sprite> sprites, bool stretch)
+        {
+            var existing = FindImported(ImportScope(parent), projectName, screen.importKey);
+            if (existing != null && existing.manifestHash == screen.manifestHash)
+            {
+                existing.transform.SetParent(parent, false);
+                if (stretch) StretchToParent(existing.gameObject);
+                Log($"reused unchanged '{screen.m.screen.name}'", MessageType.Info);
+                return existing.gameObject;
+            }
+            if (existing != null)
+            {
+                Log($"patched changed '{screen.m.screen.name}'", MessageType.Info);
+                DestroyImmediate(existing.gameObject);
+            }
+
+            var page = HierarchyBuilder.BuildPage(screen.m, parent, MakeContext(screen.m, sprites));
+            if (page == null) return null;
+            if (stretch) StretchToParent(page);
+            StampImported(page, projectName, screen);
+            return page;
         }
 
         static void StretchToParent(GameObject go)
@@ -535,7 +639,14 @@ namespace FigForge
                 var mp = $"{baseDir}/{ps.manifest}".Replace('\\', '/');
                 var m = ManifestParser.Load(mp);
                 if (m == null) { Log($"skip '{ps.name}': manifest not found ({mp})", MessageType.Warning); continue; }
-                loaded.Add(new LoadedScreen { m = m, srcDir = Path.GetDirectoryName(mp), ps = ps });
+                loaded.Add(new LoadedScreen
+                {
+                    m = m,
+                    srcDir = Path.GetDirectoryName(mp),
+                    ps = ps,
+                    importKey = ImportKey(ps, m),
+                    manifestHash = ManifestHash(m, ps),
+                });
             }
             if (loaded.Count == 0) { Log("no buildable screens in bundle", MessageType.Error); return; }
             _manifest = loaded[0].m; // for ResolveCanvas / PanelSettings / header
@@ -546,6 +657,9 @@ namespace FigForge
 
                 var canvas = ResolveCanvas();
                 var mgr = canvas.GetComponent<ScreenManager>() ?? canvas.gameObject.AddComponent<ScreenManager>();
+                mgr.screens.Clear();
+                mgr.shell = null;
+                RemoveStaleImported(canvas.transform, proj.name, new HashSet<string>(loaded.Select(s => s.importKey)));
 
                 // 1. Persistent Shell (optional) — built once; screens mount into its Content slot.
                 Transform shellContent = null;
@@ -556,7 +670,7 @@ namespace FigForge
                     var sh = loaded[idx];
                     EditorUtility.DisplayProgressBar("FigForge", $"Building shell {sh.m.screen.name}…", 0.1f);
                     var shSprites = TextureImportHelper.Import(sh.m, sh.srcDir, $"{_spriteFolder}/{SafeName(sh.m.screen.name)}", _tex);
-                    var shellGo = HierarchyBuilder.BuildPage(sh.m, canvas.transform, MakeContext(sh.m, shSprites));
+                    var shellGo = ReuseOrBuildScreen(sh, proj.name, canvas.transform, shSprites, false);
                     if (shellGo != null)
                     {
                         mgr.shell = shellGo;
@@ -576,9 +690,8 @@ namespace FigForge
                     var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
                     bool usesShell = shellContent != null && !string.IsNullOrEmpty(shellSection) && loaded[i].ps.section == shellSection;
                     var parent = usesShell ? shellContent : canvas.transform;
-                    var page = HierarchyBuilder.BuildPage(m, parent, MakeContext(m, sprites));
+                    var page = ReuseOrBuildScreen(loaded[i], proj.name, parent, sprites, usesShell);
                     if (page == null) continue;
-                    if (usesShell) StretchToParent(page);
                     var bs = page.GetComponent<BaseScreen>() ?? page.AddComponent<BaseScreen>();
                     bs.screenName = m.screen.name;
                     bs.usesShell = usesShell;

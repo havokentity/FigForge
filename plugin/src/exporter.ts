@@ -535,6 +535,47 @@ export async function exportDesign(
     return out.normal || out.highlighted || out.pressed ? out : undefined;
   }
 
+  async function exportNodeAsset(node: SceneNode, nameHint: string): Promise<string | undefined> {
+    if (!('exportAsync' in node)) return undefined;
+    try {
+      const bytes = await (node as unknown as {
+        exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
+      }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
+      const hash = fnv1a(bytes);
+      let file = hashToFile.get(hash);
+      if (!file) {
+        file = generateFileName(root.name, nameHint, scaleNum);
+        let n = 1;
+        while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
+        hashToFile.set(hash, file);
+        assets.push({ name: file, data: Array.from(bytes) });
+        assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
+      }
+      return file;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function exportCompositeState(container: SceneNode, stateName?: string): Promise<string | undefined> {
+    if (!('children' in container)) return exportNodeAsset(container, `${container.name}_${stateName || 'asset'}`);
+    const kids = (container as ChildrenMixin).children as SceneNode[];
+    const stateNames = new Set(['regular', 'rollover', 'pressed']);
+    const target = stateName ? kids.find((c) => c.name.toLowerCase() === stateName.toLowerCase()) : undefined;
+    if (stateName && !target) return undefined;
+    const restore = kids
+      .filter((c) => stateNames.has(c.name.toLowerCase()))
+      .map((c) => ({ node: c, visible: (c as unknown as { visible: boolean }).visible }));
+    if (target) {
+      for (const r of restore) (r.node as unknown as { visible: boolean }).visible = r.node.id === target.id;
+    }
+    try {
+      return await exportNodeAsset(container, `${container.name}_${stateName || 'asset'}`);
+    } finally {
+      for (const r of restore) (r.node as unknown as { visible: boolean }).visible = r.visible;
+    }
+  }
+
   // First solid-fill colour of a node → RGBA (null if no solid fill).
   function solidRGBA(node: SceneNode): RGBA | null {
     const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
@@ -635,6 +676,36 @@ export async function exportDesign(
     return shape;
   }
 
+  function mergeShapeFallbacks(shape: ButtonShape | null, fallbacks: SceneNode[]): ButtonShape | null {
+    if (!shape) return null;
+    for (const src of fallbacks) {
+      const radius = typeof (src as unknown as { cornerRadius?: number }).cornerRadius === 'number'
+        ? (src as unknown as { cornerRadius: number }).cornerRadius
+        : 0;
+      if (shape.cornerRadius === 0 && radius > 0) shape.cornerRadius = radius;
+
+      if (!shape.borderColor || !shape.borderWidth) {
+        const strokes = (src as unknown as { strokes?: Paint[] }).strokes;
+        const sw = (src as unknown as { strokeWeight?: number }).strokeWeight;
+        if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
+          const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
+          if (sc) {
+            shape.borderColor = toRGBA(sc.color, sc.opacity);
+            shape.borderWidth = sw;
+            const al = (src as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
+            shape.borderAlign = al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center';
+          }
+        }
+      }
+
+      if (!shape.shadow) {
+        const s = extractShadows(src)[0];
+        if (s) shape.shadow = s;
+      }
+    }
+    return shape;
+  }
+
   const childByName = (master: SceneNode, name: string): SceneNode | undefined =>
     'children' in master
       ? ((master as ChildrenMixin).children as SceneNode[]).find((c) => c.name.toLowerCase() === name.toLowerCase())
@@ -697,15 +768,66 @@ export async function exportDesign(
 
   // Capture a dropdown: Background, the option list (each text in the 'Options' frame),
   // and the selected value.
-  function captureDropdown(master: SceneNode, tagValue?: string) {
+  async function captureDropdown(master: SceneNode, tagValue?: string) {
     const bg = childByName(master, 'Background');
     const shape = bg ? shapeOf(bg, [master]) : null;
+    const arrow = childByName(master, 'Arrow');
+    const arrowReg = arrow ? childByName(arrow, 'Regular') : undefined;
+    const arrowRoll = arrow ? childByName(arrow, 'Rollover') : undefined;
+    const arrowPress = arrow ? childByName(arrow, 'Pressed') : undefined;
+    const arrowColor = arrowReg ? (stateSolid(arrowReg) ?? undefined) : undefined;
+    const arrowRollover = arrowRoll ? (stateSolid(arrowRoll) ?? undefined) : undefined;
+    const arrowPressed = arrowPress ? (stateSolid(arrowPress) ?? undefined) : undefined;
+    const arrowAsset = arrow ? await exportCompositeState(arrow, arrowReg ? 'Regular' : undefined) : undefined;
+    const arrowRolloverAsset = arrow ? await exportCompositeState(arrow, 'Rollover') : undefined;
+    const arrowPressedAsset = arrow ? await exportCompositeState(arrow, 'Pressed') : undefined;
+    const bgRoll = childByName(master, 'BgRollover');
+    const bgPress = childByName(master, 'BgPressed');
+    const bgRollover = bgRoll ? (stateSolid(bgRoll) ?? undefined) : undefined;
+    const bgPressed = bgPress ? (stateSolid(bgPress) ?? undefined) : undefined;
     const optsFrame = childByName(master, 'Options');
-    const options = optsFrame && 'children' in optsFrame
-      ? ((optsFrame as ChildrenMixin).children as SceneNode[]).map((c) => textOf(c)).filter((t): t is string => !!t)
+    const popupShape = (optsFrame ? shapeOf(optsFrame, [master]) : null) ?? shape ?? undefined;
+    const optionNodes = optsFrame && 'children' in optsFrame
+      ? ((optsFrame as ChildrenMixin).children as SceneNode[])
       : [];
+    const options = optionNodes.map((c) => textOf(c)).filter((t): t is string => !!t);
+    const optionInst = optionNodes.find((c) => c.name.toLowerCase() === 'option' && c.type === 'INSTANCE') as InstanceNode | undefined;
+    const optionMaster =
+      (optionInst && optionInst.mainComponent ? optionInst.mainComponent as SceneNode : null)
+      ?? childByName(master, 'DropdownOption')
+      ?? optionNodes.find((c) => c.name.toLowerCase() === 'dropdownoption');
+    const optionSource = (optionInst as SceneNode | undefined) ?? optionMaster;
+    const optionFallbacks = [optionSource, optionMaster].filter((n, i, arr): n is SceneNode => !!n && arr.findIndex((x) => x && x.id === n.id) === i);
+    const optReg = optionSource
+      ? (childByName(optionSource, 'Regular') ?? (optionMaster ? childByName(optionMaster, 'Regular') : undefined) ?? optionSource)
+      : undefined;
+    const optionShape = optReg ? (mergeShapeFallbacks(shapeOf(optReg, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
+    const optRoll = optionSource
+      ? (childByName(optionSource, 'Rollover') ?? (optionMaster ? childByName(optionMaster, 'Rollover') : undefined))
+      : undefined;
+    const optPressed = optionSource
+      ? (childByName(optionSource, 'Pressed') ?? (optionMaster ? childByName(optionMaster, 'Pressed') : undefined))
+      : undefined;
+    const optSelected = optionSource
+      ? (childByName(optionSource, 'Selected') ?? (optionMaster ? childByName(optionMaster, 'Selected') : undefined))
+      : undefined;
+    const optionRolloverShape = optRoll ? (mergeShapeFallbacks(shapeOf(optRoll, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
+    const optionPressedShape = optPressed ? (mergeShapeFallbacks(shapeOf(optPressed, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
+    const optionSelectedShape = optSelected ? (mergeShapeFallbacks(shapeOf(optSelected, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
+    const optionRollover = optRoll ? (stateSolid(optRoll) ?? undefined) : undefined;
+    const optionPressed = optPressed ? (stateSolid(optPressed) ?? undefined) : undefined;
+    const optionSelected = optSelected ? (stateSolid(optSelected) ?? undefined) : undefined;
+    const optionHeight =
+      ((optionInst ?? optionNodes[0]) as unknown as { height?: number } | undefined)?.height
+      ?? (optionMaster ? ((optionMaster as unknown as { height?: number }).height ?? undefined) : undefined);
     const value = tagValue || textOf(childByName(master, 'Label')) || options[0];
     return { shape: shape ?? undefined, options, value, label: textOf(childByName(master, 'Label')),
+      optionShape, popupShape, optionRolloverShape, optionPressedShape, optionSelectedShape,
+      optionRollover, optionPressed, optionHeight,
+      optionSelected,
+      arrowAsset, arrowRolloverAsset, arrowPressedAsset,
+      arrowColor, arrowRollover, arrowPressed,
+      bgRollover, bgPressed,
       parts: partsOf(master, ['Background', 'Label', 'Arrow']) };
   }
 
@@ -777,8 +899,22 @@ export async function exportDesign(
       const t = captureToggle(master, ref.value);
       if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts });
     } else if (ref.kind === 'dropdown') {
-      const d = captureDropdown(master, ref.value);
-      controlByNode.set(p.node.id, { shape: d.shape, options: d.options, value: d.value, label: d.label, parts: d.parts });
+      const d = await captureDropdown(master, ref.value);
+      controlByNode.set(p.node.id, {
+        shape: d.shape, options: d.options, value: d.value, label: d.label,
+        optionShape: d.optionShape,
+        popupShape: d.popupShape,
+        optionRolloverShape: d.optionRolloverShape,
+        optionPressedShape: d.optionPressedShape,
+        optionSelectedShape: d.optionSelectedShape,
+        optionRollover: d.optionRollover,
+        optionPressed: d.optionPressed, optionSelected: d.optionSelected,
+        optionHeight: d.optionHeight,
+        arrowAsset: d.arrowAsset, arrowRolloverAsset: d.arrowRolloverAsset, arrowPressedAsset: d.arrowPressedAsset,
+        arrowColor: d.arrowColor, arrowRollover: d.arrowRollover, arrowPressed: d.arrowPressed,
+        bgRollover: d.bgRollover, bgPressed: d.bgPressed,
+        parts: d.parts,
+      });
     } else if (ref.kind === 'list') {
       const l = captureList(master);
       if (l) {

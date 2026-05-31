@@ -25,6 +25,26 @@ namespace FigForge
         public static FigForgeFill Gradient(Color a, Color b, Vector2 d) => new FigForgeFill(a, b, d);
     }
 
+    [System.Serializable]
+    public struct FigForgeShapeStyle
+    {
+        public FigForgeFill fill;
+        public Color borderColor;
+        public float borderWidth;
+        public Vector4 corners;
+        public float borderAlign;
+        public Color shadowColor;
+        public Vector2 shadowOffset;
+        public float shadowBlur;
+        public float shadowSpread;
+
+        public FigForgeShapeStyle WithFill(FigForgeFill f)
+        {
+            fill = f;
+            return this;
+        }
+    }
+
     [AddComponentMenu("FigForge/Rounded Rect")]
     public class FigForgeRoundedRect : MaskableGraphic
     {
@@ -85,6 +105,13 @@ namespace FigForge
             borderColor = border; borderWidth = borderW; corners = cornerRadii;
             borderAlign = borderAlignment;
             Push();
+        }
+
+        public void SetStyle(FigForgeShapeStyle style)
+        {
+            Configure(style.fill.color, style.fill.color2, style.fill.dir,
+                style.borderColor, style.borderWidth, style.corners, style.borderAlign);
+            SetShadow(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread);
         }
 
         // Drop shadow behind the shape. color.a==0 → no shadow. offset is Unity-space

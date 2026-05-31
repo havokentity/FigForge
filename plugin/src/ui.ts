@@ -46,9 +46,13 @@ minBtn.addEventListener('click', () => {
 });
 
 $('#reloadBtn').addEventListener('click', () => post({ type: 'reload' }));
+const compPageOn = () => {
+  const el = document.getElementById('componentsPageChk') as HTMLInputElement | null;
+  return el ? el.checked : true; // default ON
+};
 $('#createBtnBtn').addEventListener('click', () => {
   setStatus('Creating button component…');
-  post({ type: 'create-button' });
+  post({ type: 'create-button', componentsPage: compPageOn() });
 });
 for (const [id, kind] of [
   ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
@@ -56,7 +60,7 @@ for (const [id, kind] of [
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
     setStatus(`Creating ${kind} component…`);
-    post({ type: 'create-canonical', kind });
+    post({ type: 'create-canonical', kind, componentsPage: compPageOn() });
   });
 }
 

@@ -160,6 +160,30 @@ export interface CanonicalRef {
   itemRollover?: RGBA;      // list: the row hover colour (from the 'Item' template's Rollover)
   itemHeight?: number;      // list: row height in Figma px (drives Unity row sizing)
   count?: number;           // list: number of rows to generate (derived from list height ÷ row height)
+  // dropdown: the option row is its own component (DropdownOption) with states; these
+  // drive the TMP_Dropdown item template (options[] above are the option texts)
+  optionShape?: ButtonShape; // DropdownOption Regular shape (corner/fill/border)
+  popupShape?: ButtonShape;  // dropdown popup shell/background (Options frame)
+  optionRolloverShape?: ButtonShape; // DropdownOption Rollover full shape override
+  optionPressedShape?: ButtonShape;  // DropdownOption Pressed full shape override
+  optionSelectedShape?: ButtonShape; // DropdownOption Selected/current-value full shape override
+  optionRollover?: RGBA;     // DropdownOption Rollover colour (hover)
+  optionPressed?: RGBA;      // DropdownOption Pressed colour
+  optionSelected?: RGBA;     // DropdownOption Selected colour (current value, distinct from hover)
+  optionHeight?: number;     // option row height in Figma px
+  // dropdown arrow visual exported from the Arrow frame. The Arrow frame may
+  // contain vectors, shapes, text, groups, or Regular/Rollover/Pressed state
+  // layers; Unity uses these sprites instead of rebuilding the arrow from text.
+  arrowAsset?: string;
+  arrowRolloverAsset?: string;
+  arrowPressedAsset?: string;
+  // dropdown arrow chevron glyph colours per state (Arrow frame Regular/Rollover/Pressed)
+  arrowColor?: RGBA;         // Regular chevron colour
+  arrowRollover?: RGBA;      // Rollover chevron colour (dropdown hover)
+  arrowPressed?: RGBA;       // Pressed chevron colour
+  // dropdown CLOSED-control (Background) hover/press fills (the box itself)
+  bgRollover?: RGBA;         // closed box hover fill
+  bgPressed?: RGBA;          // closed box press fill
   // Normalized Unity anchors [minX,minY,maxX,maxY] of named sub-layers (Background,
   // Checkmark, Label, Arrow, Item) so composite controls lay out precisely at any size.
   parts?: Record<string, number[]>;

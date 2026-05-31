@@ -13,7 +13,7 @@ import {
   type ExportOptions,
   type ExportScale,
 } from './types';
-import { buildTree } from './traverser';
+import { buildTree, detectCanonical } from './traverser';
 import { exportDesign } from './exporter';
 import { sanitize } from './naming';
 
@@ -147,6 +147,14 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         figma.ui.postMessage({ type: 'export-error', message: 'No top-level frames (or frames in sections) on this page.' });
         break;
       }
+      const detached = detachedCanonicalInstances(figma.currentPage, found.map((s) => s.node));
+      if (detached.length > 0) {
+        const examples = detached.slice(0, 4).map((d) => `${d.kind}:${d.name}`).join(', ');
+        const more = detached.length > 4 ? ` (+${detached.length - 4} more)` : '';
+        const message = `FigForge controls outside exported frames will be skipped: ${examples}${more}`;
+        figma.notify(message);
+        figma.ui.postMessage({ type: 'status', message });
+      }
       try {
         const scale = (msg.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
         const options = (msg.options as ExportOptions) || DEFAULT_EXPORT_OPTIONS;
@@ -180,10 +188,13 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
 
     case 'create-button': {
       try {
+        useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
         await createCanonicalButton();
         figma.ui.postMessage({
           type: 'status',
-          message: `Button instance placed. Skin the master on the FigForge Components page; click ＋Button again to add more.`,
+          message: useComponentsPage
+            ? `Button instance placed. Master is on the FigForge Components page — skin it there. Click ＋Button again for more.`
+            : `Button placed (master parked on this page, off to the left). Skin the master; click ＋Button again for more.`,
         });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create button failed: ' + String((e as Error)?.message || e) });
@@ -193,8 +204,10 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
 
     case 'create-canonical': {
       try {
+        useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
         const comp = await createCanonical(String((msg as { kind?: string }).kind || ''));
-        figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Skin the master on the FigForge Components page; click again to add more (group radios under one frame).` });
+        const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
+        figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group radios under one frame).` });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create failed: ' + String((e as Error)?.message || e) });
       }
@@ -344,6 +357,10 @@ async function handleMcp(req: McpRequest) {
 // the exporter detects them via the plugin-data tag.
 // ---------------------------------------------------------------------------
 const COMPONENTS_PAGE = 'FigForge Components';
+// UI checkbox "Components page" (default ON): masters go to the dedicated FigForge
+// Components page. When OFF, masters are parked loose on the current design page.
+// Set from each create-* message before the creator runs (single-threaded plugin).
+let useComponentsPage = true;
 
 async function loadUiFont(): Promise<FontName> {
   const candidates: FontName[] = [
@@ -388,18 +405,45 @@ function stateRect(name: string, color: RGB, visible: boolean, w: number, h: num
 // each tagged with its enclosing section name (sanitized; '' if none).
 function collectScreens(page: PageNode): { node: SceneNode; section: string }[] {
   const out: { node: SceneNode; section: string }[] = [];
+  if (page.name === COMPONENTS_PAGE) return out;
   for (const n of page.children) {
     if ((n as SceneNode).visible === false) continue;
     if (n.type === 'SECTION') {
       const sec = sanitize(n.name);
       for (const c of (n as SectionNode).children) {
-        if (['FRAME', 'COMPONENT'].includes(c.type) && (c as SceneNode).visible !== false) {
+        if (c.type === 'FRAME' && (c as SceneNode).visible !== false) {
           out.push({ node: c as SceneNode, section: sec });
         }
       }
-    } else if (['FRAME', 'COMPONENT'].includes(n.type)) {
+    } else if (n.type === 'FRAME') {
       out.push({ node: n as SceneNode, section: '' });
     }
+  }
+  return out;
+}
+
+function screenFrames(page: PageNode): FrameNode[] {
+  return collectScreens(page).map((s) => s.node).filter((n): n is FrameNode => n.type === 'FRAME');
+}
+
+function isInside(node: SceneNode, ancestor: SceneNode): boolean {
+  let cur: BaseNode | null = node;
+  while (cur && cur.type !== 'PAGE') {
+    if (cur.id === ancestor.id) return true;
+    cur = cur.parent;
+  }
+  return false;
+}
+
+function detachedCanonicalInstances(page: PageNode, screens: SceneNode[]): { name: string; kind: CanonicalKind }[] {
+  const out: { name: string; kind: CanonicalKind }[] = [];
+  if (page.name === COMPONENTS_PAGE) return out;
+  const nodes = page.findAll((n) => n.type === 'INSTANCE' && (n as SceneNode).visible !== false) as InstanceNode[];
+  for (const node of nodes) {
+    const canonical = detectCanonical(node);
+    if (!canonical) continue;
+    if (screens.some((screen) => isInside(node, screen))) continue;
+    out.push({ name: node.name, kind: canonical.kind });
   }
   return out;
 }
@@ -413,17 +457,9 @@ function frameRole(node: SceneNode): string {
 }
 
 async function createCanonicalButton(): Promise<ComponentNode> {
-  let page = figma.root.children.find((p) => p.name === COMPONENTS_PAGE) as PageNode | undefined;
-  if (!page) {
-    page = figma.createPage();
-    page.name = COMPONENTS_PAGE;
-  }
-
-  // Reuse the default "Button" master if it already exists — don't spam Button2/3;
-  // instead drop another INSTANCE on the current page so you can place many.
-  const existing = page.children.find(
-    (n) => n.type === 'COMPONENT' && n.name === 'Button'
-  ) as ComponentNode | undefined;
+  // Reuse the "Button" master wherever it lives — don't spam Button2/3; just drop
+  // another INSTANCE so you can place many.
+  const existing = findMaster('Button');
   if (existing) {
     placeInstance(existing);
     return existing;
@@ -468,36 +504,104 @@ async function createCanonicalButton(): Promise<ComponentNode> {
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'button', ref: 'Button' }));
 
-  page.appendChild(comp);
-  comp.x = 0;
-  comp.y = 0;
+  parkMaster(comp);
   placeInstance(comp);
   return comp;
 }
 
-// The shared FigForge Components page (created on first use).
-function componentsPage(): PageNode {
-  let page = figma.root.children.find((p) => p.name === COMPONENTS_PAGE) as PageNode | undefined;
-  if (!page) { page = figma.createPage(); page.name = COMPONENTS_PAGE; }
-  return page;
-}
-
-// Drop a usable INSTANCE of a canonical component onto the user's current page,
-// laid out in a grid near the viewport centre (offset per existing instance so
-// repeated clicks stack neatly). Selecting + framing it. This is what lets you
-// create more than one — each click places another instance to position/group.
+// Drop a usable INSTANCE of a canonical component onto a DESIGN page, laid out in a
+// grid near the viewport centre (offset per existing instance so repeated clicks
+// stack neatly), then select + frame it. This is what lets you create more than one.
+// Instances are NEVER placed on the FigForge Components page (where the masters live):
+// if that's the active page we switch to a real design page first — otherwise clicking
+// +Dropdown while viewing the components would drop the instance among the components.
 function placeInstance(comp: ComponentNode): InstanceNode {
+  let target = figma.currentPage;
+  if (target.name === COMPONENTS_PAGE) {
+    target = (figma.root.children.find((p) => p.name !== COMPONENTS_PAGE) as PageNode | undefined)
+      ?? (() => { const p = figma.createPage(); p.name = 'FigForge Sandbox'; return p; })();
+    figma.currentPage = target;
+  }
+  // Prefer dropping the instance INSIDE the screen frame the user is working in:
+  // a loose instance sitting on the page (outside any frame) is NOT a descendant of
+  // an exported screen, so the export skips it and Unity never sees the control.
+  const frame = enclosingScreenFrame(target.selection) ?? singleScreenFrame(target);
+  const parent: BaseNode & ChildrenMixin = frame ?? target;
   const inst = comp.createInstance();
-  figma.currentPage.appendChild(inst);
-  const prior = figma.currentPage.findAll(
+  parent.appendChild(inst);
+  const prior = parent.findAll(
     (n) => n.type === 'INSTANCE' && (n as InstanceNode).mainComponent === comp
   ).length - 1; // minus the one we just added
-  const c = figma.viewport.center;
-  inst.x = Math.round(c.x + (prior % 4) * (inst.width + 20));
-  inst.y = Math.round(c.y + Math.floor(prior / 4) * (inst.height + 20));
+  if (frame) {
+    // frame-local coords: stack a small grid inset from the frame's top-left.
+    inst.x = Math.round(24 + (prior % 4) * (inst.width + 20));
+    inst.y = Math.round(24 + Math.floor(prior / 4) * (inst.height + 20));
+  } else {
+    const c = figma.viewport.center;
+    inst.x = Math.round(c.x + (prior % 4) * (inst.width + 20));
+    inst.y = Math.round(c.y + Math.floor(prior / 4) * (inst.height + 20));
+    figma.notify('Placed on the page — drag it into a frame so it exports as part of a screen.');
+  }
   figma.currentPage.selection = [inst];
   figma.viewport.scrollAndZoomIntoView([inst]);
   return inst;
+}
+
+function singleScreenFrame(page: PageNode): FrameNode | undefined {
+  const frames = screenFrames(page).filter((frame) => frame.visible !== false);
+  return frames.length === 1 ? frames[0] : undefined;
+}
+
+// The screen FRAME enclosing any selected node. Screens can be top-level page
+// frames or frames inside Figma Sections; collectScreens exports both.
+function enclosingScreenFrame(nodes: readonly SceneNode[]): FrameNode | undefined {
+  for (const n of nodes) {
+    let cur: BaseNode | null = n;
+    while (cur && cur.type !== 'PAGE') {
+      if (cur.type === 'FRAME' && cur.parent && (cur.parent.type === 'PAGE' || cur.parent.type === 'SECTION')) {
+        return cur as FrameNode;
+      }
+      cur = cur.parent;
+    }
+  }
+  return undefined;
+}
+
+// Canonical master component names FigForge knows how to create.
+const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'Dropdown', 'List', 'ListItem'];
+
+// Find an existing canonical master by name ANYWHERE in the document (masters no
+// longer need to live on a dedicated page — they can sit loose on any design page,
+// and instances of one master collate to a single Unity prefab regardless of page).
+function findMaster(ref: string): ComponentNode | undefined {
+  for (const page of figma.root.children) {
+    const c = page.children.find((n) => n.type === 'COMPONENT' && n.name === ref);
+    if (c) return c as ComponentNode;
+  }
+  return undefined;
+}
+
+// Park a freshly-created master, stacked below existing FigForge masters. With the
+// "Components page" option ON (default) it goes to the dedicated FigForge Components
+// page; OFF, it's parked LOOSE off-canvas on the current design page (outside screen
+// frames, so it's never exported as part of a screen).
+function parkMaster(comp: ComponentNode): void {
+  let page: PageNode;
+  if (useComponentsPage) {
+    page = (figma.root.children.find((p) => p.name === COMPONENTS_PAGE) as PageNode | undefined)
+      ?? (() => { const p = figma.createPage(); p.name = COMPONENTS_PAGE; return p; })();
+  } else {
+    page = figma.currentPage;
+  }
+  page.appendChild(comp);
+  let y = 0;
+  for (const n of page.children) {
+    if (n !== comp && n.type === 'COMPONENT' && FIGFORGE_MASTERS.includes(n.name)) {
+      y = Math.max(y, (n as ComponentNode).y + (n as ComponentNode).height + 40);
+    }
+  }
+  comp.x = useComponentsPage ? 40 : -comp.width - 280;
+  comp.y = useComponentsPage ? y + 40 : y;
 }
 
 function solidRect(name: string, w: number, h: number, r: number, color: RGB, alpha = 1): RectangleNode {
@@ -522,8 +626,7 @@ async function createCanonical(kind: string): Promise<ComponentNode> {
 // when on (Toggle.graphic) + HitArea + Label. Radio is circular and grouped in Unity
 // by its parent frame. Off by default.
 async function createToggleLike(kind: CanonicalKind, ref: string, circular: boolean): Promise<ComponentNode> {
-  const page = componentsPage();
-  let comp = page.children.find((n) => n.type === 'COMPONENT' && n.name === ref) as ComponentNode | undefined;
+  let comp = findMaster(ref);
   if (!comp) {
     const font = await loadUiFont();
     const BOX = 24, W = 150, H = 24;
@@ -554,28 +657,74 @@ async function createToggleLike(kind: CanonicalKind, ref: string, circular: bool
     label.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
 
     comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind, ref, value: 'off' }));
-    page.appendChild(comp); comp.x = 0; comp.y = 0;
+    parkMaster(comp);
   }
   placeInstance(comp); // each click drops another instance on your page (so you can make many / group radios)
   return comp;
 }
 
-// Dropdown: a Background + caption Label + Arrow, plus a hidden Options frame whose
-// child text layers are the selectable options (captured into a TMP_Dropdown).
+// The reusable dropdown option row — its own component (Regular/Rollover/Pressed/
+// HitArea/Label) so the popup item template + its hover/press states are skinned once.
+async function ensureDropdownOption(font: FontName, W: number, ROW: number): Promise<ComponentNode> {
+  const found = findMaster('DropdownOption');
+  if (found) return found;
+  const item = figma.createComponent();
+  item.name = 'DropdownOption'; item.resize(W, ROW); item.fills = []; item.clipsContent = true;
+  const reg = solidRect('Regular', W, ROW, 0, { r: 1, g: 1, b: 1 });
+  reg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(reg);
+  const roll = solidRect('Rollover', W, ROW, 0, { r: 0.93, g: 0.95, b: 1 });
+  roll.visible = false; roll.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(roll);
+  const press = solidRect('Pressed', W, ROW, 0, { r: 0.85, g: 0.89, b: 1 });
+  press.visible = false; press.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(press);
+  // Selected = the current value, distinct from hover (a stronger accent fill).
+  const sel = solidRect('Selected', W, ROW, 0, { r: 0.80, g: 0.84, b: 1 });
+  sel.visible = false; sel.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(sel);
+  const hit = solidRect('HitArea', W, ROW, 0, { r: 0, g: 0, b: 0 }, 0);
+  hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(hit);
+  const t = figma.createText();
+  t.fontName = font; t.name = 'Label'; t.characters = 'Option'; t.fontSize = 14;
+  t.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]; t.textAlignVertical = 'CENTER';
+  item.appendChild(t); t.x = 12; t.y = (ROW - t.height) / 2; t.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+  parkMaster(item);
+  return item;
+}
+
+// Dropdown: a Background + caption Label + Arrow (closed look, 40px), referencing a
+// DropdownOption component for the popup item styling/states. The "Options" frame below
+// holds a few DropdownOption INSTANCES as a visible open-list preview (the importer reads
+// the option master's states; the closed control stays the Background's 40px in Unity).
+// Hide the open-list "Options" preview on a PLACED dropdown instance (a per-instance
+// override) so it only shows the closed box on the page. The MASTER keeps the preview
+// visible (that's where the option look/length is specified), and capture reads it there.
+function hideInstanceOptions(inst: InstanceNode): void {
+  const opts = inst.findOne((n) => n.name === 'Options');
+  if (opts) (opts as unknown as { visible: boolean }).visible = false;
+}
+
 async function createDropdown(): Promise<ComponentNode> {
-  const page = componentsPage();
-  const reuse = page.children.find((n) => n.type === 'COMPONENT' && n.name === 'Dropdown') as ComponentNode | undefined;
-  if (reuse) { placeInstance(reuse); return reuse; }
+  const reuse = findMaster('Dropdown');
+  if (reuse) { hideInstanceOptions(placeInstance(reuse)); return reuse; }
 
   const font = await loadUiFont();
-  const W = 220, H = 40, R = 8;
+  const W = 220, H = 40, R = 8, ROW = 36;
+  const optComp = await ensureDropdownOption(font, W, ROW);
+
   const comp = figma.createComponent();
-  comp.name = 'Dropdown'; comp.resize(W, H); comp.fills = [];
+  comp.name = 'Dropdown'; comp.resize(W, H); comp.fills = []; comp.clipsContent = false; // preview overflows below
 
   const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
   bg.strokes = [{ type: 'SOLID', color: { r: 0.8, g: 0.8, b: 0.85 } }]; bg.strokeWeight = 1;
   bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   comp.appendChild(bg);
+
+  // Closed-control hover/press fills for the box itself (hidden colour carriers; Unity
+  // swaps the Background fill on the dropdown's pointer state, like the arrow chevron).
+  const bgRoll = solidRect('BgRollover', W, H, R, { r: 0.96, g: 0.97, b: 1 });
+  bgRoll.visible = false; bgRoll.x = 0; bgRoll.y = 0; bgRoll.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(bgRoll);
+  const bgPress = solidRect('BgPressed', W, H, R, { r: 0.90, g: 0.92, b: 1 });
+  bgPress.visible = false; bgPress.x = 0; bgPress.y = 0; bgPress.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(bgPress);
 
   const label = figma.createText();
   label.fontName = font; label.name = 'Label'; label.characters = 'Option 1';
@@ -584,34 +733,62 @@ async function createDropdown(): Promise<ComponentNode> {
   comp.appendChild(label); label.x = 12; label.y = (H - label.height) / 2;
   label.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
 
-  const arrow = figma.createText();
-  arrow.fontName = font; arrow.name = 'Arrow'; arrow.characters = '▾';
-  arrow.fontSize = 14; arrow.fills = [{ type: 'SOLID', color: { r: 0.4, g: 0.4, b: 0.45 } }];
-  comp.appendChild(arrow); arrow.x = W - 24; arrow.y = (H - arrow.height) / 2;
-  arrow.constraints = { horizontal: 'MAX', vertical: 'CENTER' };
+  // Arrow — a stateful chevron (Regular / Rollover / Pressed glyph + HitArea) so the open
+  // affordance reacts to the dropdown's hover/press in Unity. Only Regular shows by default.
+  const ARROW = 28;
+  const arrow = figma.createFrame();
+  arrow.name = 'Arrow'; arrow.resize(ARROW, H); arrow.fills = []; arrow.x = W - ARROW - 6; arrow.y = 0;
+  arrow.constraints = { horizontal: 'MAX', vertical: 'STRETCH' };
+  comp.appendChild(arrow);
+  const chevron = (name: string, color: RGB, visible: boolean) => {
+    // Crisp downward-triangle VECTOR: createNodeFromSvg sizes correctly from the
+    // viewBox (raw createVector does not — it stays ~100×100 and renders as a block),
+    // then flatten to a single VectorNode whose solid fill the Unity capture reads
+    // exactly like the old text glyph did.
+    const svg = figma.createNodeFromSvg(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="7" viewBox="0 0 12 7"><path d="M0 0 L12 0 L6 7 Z" fill="#000000"/></svg>',
+    );
+    const v = figma.flatten([svg], arrow);
+    v.name = name;
+    v.fills = [{ type: 'SOLID', color }];
+    v.strokes = [];
+    v.visible = visible;
+    v.x = Math.round((ARROW - v.width) / 2);
+    v.y = Math.round((H - v.height) / 2);
+    v.constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+  };
+  chevron('Regular', { r: 0.4, g: 0.4, b: 0.45 }, true);
+  chevron('Rollover', { r: 0.18, g: 0.18, b: 0.22 }, false);
+  chevron('Pressed', { r: 0.49, g: 0.36, b: 1 }, false);
+  const arrowHit = solidRect('HitArea', ARROW, H, 0, { r: 0, g: 0, b: 0 }, 0);
+  arrowHit.x = 0; arrowHit.y = 0; arrowHit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  arrow.appendChild(arrowHit);
 
-  // Hidden options source — each child text is one option.
+  // Open-list preview: 3 DropdownOption instances stacked below (the importer reads the
+  // first one's master for the item template; the option texts come from the labels).
   const opts = figma.createFrame();
-  opts.name = 'Options'; opts.resize(W, 120); opts.fills = []; opts.visible = false;
-  opts.x = 0; opts.y = H + 4;
+  opts.name = 'Options'; opts.resize(W, ROW * 3); opts.fills = [];
+  opts.x = 0; opts.y = H + 4; opts.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
   comp.appendChild(opts);
   for (let i = 0; i < 3; i++) {
-    const t = figma.createText();
-    t.fontName = font; t.characters = `Option ${i + 1}`; t.fontSize = 14;
-    t.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
-    opts.appendChild(t); t.x = 12; t.y = 8 + i * 36;
+    const ins = optComp.createInstance();
+    ins.name = 'Option'; ins.resize(W, ROW); ins.x = 0; ins.y = i * ROW;
+    ins.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    opts.appendChild(ins);
+    const lbl = ins.findOne((n) => n.type === 'TEXT' && n.name === 'Label') as TextNode | null;
+    if (lbl) lbl.characters = `Option ${i + 1}`;
   }
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'dropdown', ref: 'Dropdown', value: 'Option 1' }));
-  page.appendChild(comp); comp.x = 0; comp.y = 0;
-  placeInstance(comp);
+  parkMaster(comp);
+  hideInstanceOptions(placeInstance(comp));
   return comp;
 }
 
 // The reusable row used by List — its own component (Regular/Rollover/HitArea/Label)
 // so every row in the composited list preview stays in sync when you skin it once.
-async function ensureListItem(page: PageNode, font: FontName, W: number, ROW: number): Promise<ComponentNode> {
-  const found = page.children.find((n) => n.type === 'COMPONENT' && n.name === 'ListItem') as ComponentNode | undefined;
+async function ensureListItem(font: FontName, W: number, ROW: number): Promise<ComponentNode> {
+  const found = findMaster('ListItem');
   if (found) return found;
   const item = figma.createComponent();
   item.name = 'ListItem'; item.resize(W, ROW); item.fills = []; item.clipsContent = true;
@@ -625,7 +802,7 @@ async function ensureListItem(page: PageNode, font: FontName, W: number, ROW: nu
   t.fontName = font; t.name = 'Label'; t.characters = 'Item'; t.fontSize = 14;
   t.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]; t.textAlignVertical = 'CENTER';
   item.appendChild(t); t.x = 16; t.y = (ROW - t.height) / 2; t.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
-  page.appendChild(item); item.x = 0; item.y = -ROW - 40; // park the master above the List
+  parkMaster(item); // loose on the current page, off-canvas
   return item;
 }
 
@@ -634,13 +811,12 @@ async function ensureListItem(page: PageNode, font: FontName, W: number, ROW: nu
 // ListItem master (Regular/Rollover states) and every row updates. In Unity the row
 // is repeated `count` times (count = list height ÷ row height) with the rollover swap.
 async function createList(): Promise<ComponentNode> {
-  const page = componentsPage();
-  const reuse = page.children.find((n) => n.type === 'COMPONENT' && n.name === 'List') as ComponentNode | undefined;
+  const reuse = findMaster('List');
   if (reuse) { placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const W = 260, ROW = 48, ROWS = 5, H = ROW * ROWS, R = 14;
-  const itemComp = await ensureListItem(page, font, W, ROW);
+  const itemComp = await ensureListItem(font, W, ROW);
 
   const comp = figma.createComponent();
   comp.name = 'List'; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
@@ -660,7 +836,7 @@ async function createList(): Promise<ComponentNode> {
   }
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: 'List' }));
-  page.appendChild(comp); comp.x = 0; comp.y = 0;
+  parkMaster(comp);
   placeInstance(comp);
   return comp;
 }
