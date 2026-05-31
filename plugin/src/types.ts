@@ -116,7 +116,7 @@ export interface TextProps {
 // in Unity as an instance of a named canonical Button definition rather than
 // rebuilt from PNG/text. Scoped to buttons for now; `kind` keeps it extensible.
 // ---------------------------------------------------------------------------
-export type CanonicalKind = 'button' | 'toggle' | 'input' | 'dropdown' | 'slider';
+export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'input' | 'dropdown' | 'slider' | 'list';
 
 /** Exported per-state background sprites for an interactive control. */
 export interface CanonicalStates {
@@ -151,7 +151,18 @@ export interface CanonicalRef {
   // crisp SDF shader instead of the exported state PNGs. Absent → PNG fallback.
   shape?: ButtonShape; // the COMPONENT's background (drives the generated prefab)
   instanceShape?: ButtonShape; // THIS instance's background, when it differs from the component (per-instance override)
-  stateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA };
+  stateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }; // the COMPONENT's per-state hover/press fills (drives the prefab)
+  instanceStateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }; // THIS instance's hover/press fills when they differ from the component
+  // --- control-specific (toggle/radio/dropdown/list) ---
+  checkShape?: ButtonShape; // toggle/radio: the "on" indicator (UGUI Toggle.graphic), shown when value=on
+  items?: string[];         // list: the text of each row (first row is the template)
+  itemShape?: ButtonShape;  // list: the row background shape (from the 'Item' template's Regular)
+  itemRollover?: RGBA;      // list: the row hover colour (from the 'Item' template's Rollover)
+  itemHeight?: number;      // list: row height in Figma px (drives Unity row sizing)
+  count?: number;           // list: number of rows to generate (derived from list height ÷ row height)
+  // Normalized Unity anchors [minX,minY,maxX,maxY] of named sub-layers (Background,
+  // Checkmark, Label, Arrow, Item) so composite controls lay out precisely at any size.
+  parts?: Record<string, number[]>;
 }
 
 /** Prototype navigation captured as data (no behaviour wired). */

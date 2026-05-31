@@ -50,6 +50,15 @@ $('#createBtnBtn').addEventListener('click', () => {
   setStatus('Creating button component…');
   post({ type: 'create-button' });
 });
+for (const [id, kind] of [
+  ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
+  ['createDropdownBtn', 'dropdown'], ['createListBtn', 'list'],
+] as const) {
+  $(`#${id}`).addEventListener('click', () => {
+    setStatus(`Creating ${kind} component…`);
+    post({ type: 'create-canonical', kind });
+  });
+}
 
 // option chips
 function wireChip(id: string) {

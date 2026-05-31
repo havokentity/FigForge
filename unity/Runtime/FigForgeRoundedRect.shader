@@ -65,6 +65,16 @@ Shader "FigForge/RoundedRect"
                 return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
             }
 
+            // erf approximation (Abramowitz & Stegun 7.1.26, ~1e-7 max error) — used
+            // for a true Gaussian drop-shadow falloff that matches Figma.
+            float erfApprox(float x)
+            {
+                float s = sign(x); x = abs(x);
+                float t = 1.0 / (1.0 + 0.3275911 * x);
+                float y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * exp(-x * x);
+                return s * y;
+            }
+
             fixed4 frag(v2f i) : SV_Target
             {
                 float2 size = max(_Size.xy, float2(1,1));
@@ -111,15 +121,29 @@ Shader "FigForge/RoundedRect"
                 float shapeCov = 1.0 - smoothstep(-aa, aa, d - _StrokeOutset); // AA edge at the outer stroke edge
                 float shapeA = shapeFillA * shapeCov;
 
-                // ---- drop shadow (soft, offset, spread silhouette BEHIND the shape) ----
+                // ---- drop shadow (Gaussian silhouette BEHIND the shape, matches Figma) ----
+                // The shadow is the fill silhouette (offset, expanded by spread) blurred by
+                // a Gaussian. Figma's "Blur" B maps to std dev sigma = B/2; coverage at a
+                // point is the Gaussian CDF of its signed distance to the expanded edge:
+                // scov = 0.5 * erfc((d - spread) / (sigma*sqrt2)). True Gaussian tail, not a
+                // linear ramp — so the softness reads the same as Figma.
                 float shadowA = 0.0;
                 if (_ShadowColor.a > 0.001)
                 {
                     float ds = sdRoundBox(p - _ShadowOffset.xy, size * 0.5, rad); // cast by the fill silhouette
                     float spread = _ShadowParams.y;
-                    float bl = max(_ShadowParams.x, aa);                          // blur radius (>= AA)
-                    float scov = 1.0 - smoothstep(spread - bl, spread + bl, ds);
-                    shadowA = _ShadowColor.a * scov;
+                    float sigma = max(_ShadowParams.x * 0.5, aa);                 // Figma blur → std dev (>= AA)
+                    float x = (ds - spread) / (sigma * 1.41421356);              // distance from expanded edge, in sqrt2*sigma
+                    float scov = 0.5 * (1.0 - erfApprox(x));                      // Gaussian CDF (1 inside → 0 outside)
+                    shadowA = _ShadowColor.a * saturate(scov);
+                    #ifndef UNITY_COLORSPACE_GAMMA
+                        // Figma composites the shadow in sRGB, but a Linear project blends
+                        // it over the background in LINEAR space — which makes a dark shadow
+                        // read too light. Pre-warp the alpha so the linear blend matches the
+                        // sRGB result (bg term cancels under the ~2.2 power curve → exact for
+                        // a black shadow, close for tinted ones).
+                        shadowA = 1.0 - pow(1.0 - shadowA, 2.2);
+                    #endif
                 }
 
                 // ---- composite shadow UNDER shape (straight alpha) ----

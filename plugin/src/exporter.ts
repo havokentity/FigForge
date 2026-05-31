@@ -543,6 +543,24 @@ export async function exportDesign(
     return s ? toRGBA(s.color, s.opacity) : null;
   }
 
+  // The SOLID colour a button STATE layer (rollover/pressed) renders as, honoring
+  // overrides AND nesting: the layer's own solid fill, else the first descendant
+  // shape's solid fill — a state is often a frame wrapping the coloured background,
+  // so reading only the layer's own fill grabs the (often default) frame colour
+  // instead of the real one. Called on an INSTANCE's state layer it picks up that
+  // instance's overridden colour. null = no solid fill (e.g. a gradient state).
+  function stateSolid(node: SceneNode): RGBA | null {
+    const own = solidRGBA(node);
+    if (own) return own;
+    if ('children' in node) {
+      for (const c of (node as ChildrenMixin).children as SceneNode[]) {
+        const f = stateSolid(c);
+        if (f) return f;
+      }
+    }
+    return null;
+  }
+
   // The renderable fill of a button state layer: a solid colour, or a 2-stop
   // linear gradient (the SDF shader renders both crisply). Other gradients /
   // image fills → null, so the button keeps the exported-PNG path.
@@ -588,6 +606,56 @@ export async function exportDesign(
 
   const shapeDiag: string[] = []; // why a button fell back to PNG (surfaced as a toast)
 
+  // Capture a procedural ButtonShape from ONE node: corner radius, fill (solid or
+  // 2-stop linear gradient), border (stroke), and drop shadow (scanned on the node
+  // and its children). null when the fill can't drive the SDF shader (→ PNG path).
+  // Shared by every canonical control (button background, toggle box, list row, …).
+  function shapeOf(node: SceneNode, extraShadowSources: SceneNode[] = []): ButtonShape | null {
+    const sf = shapeFill(node);
+    if (!sf) return null;
+    const radius = typeof (node as unknown as { cornerRadius?: number }).cornerRadius === 'number'
+      ? (node as unknown as { cornerRadius: number }).cornerRadius : 0;
+    const shape: ButtonShape = { cornerRadius: radius, fill: sf.fill };
+    if (sf.fill2) { shape.fill2 = sf.fill2; shape.gradientTransform = sf.gradientTransform; }
+    const kids = 'children' in node ? ((node as ChildrenMixin).children as SceneNode[]) : [];
+    for (const src of [node, ...extraShadowSources, ...kids]) {
+      const s = extractShadows(src)[0]; if (s) { shape.shadow = s; break; }
+    }
+    const strokes = (node as unknown as { strokes?: Paint[] }).strokes;
+    const sw = (node as unknown as { strokeWeight?: number }).strokeWeight;
+    if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
+      const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
+      if (sc) {
+        shape.borderColor = toRGBA(sc.color, sc.opacity);
+        shape.borderWidth = sw;
+        const al = (node as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
+        shape.borderAlign = al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center';
+      }
+    }
+    return shape;
+  }
+
+  const childByName = (master: SceneNode, name: string): SceneNode | undefined =>
+    'children' in master
+      ? ((master as ChildrenMixin).children as SceneNode[]).find((c) => c.name.toLowerCase() === name.toLowerCase())
+      : undefined;
+
+  // Normalized Unity anchors [minX,minY,maxX,maxY] of named children within `master`
+  // (Figma top-down → Unity bottom-up), so composite controls position precisely.
+  function partsOf(master: SceneNode, names: string[]): Record<string, number[]> {
+    const out: Record<string, number[]> = {};
+    const W = (master as unknown as { width?: number }).width || 1;
+    const H = (master as unknown as { height?: number }).height || 1;
+    for (const name of names) {
+      const c = childByName(master, name);
+      if (!c) continue;
+      const x = (c as unknown as { x?: number }).x ?? 0, y = (c as unknown as { y?: number }).y ?? 0;
+      const w = (c as unknown as { width?: number }).width ?? 0, h = (c as unknown as { height?: number }).height ?? 0;
+      out[name] = [x / W, 1 - (y + h) / H, (x + w) / W, 1 - y / H];
+    }
+    return out;
+  }
+
   // Procedural background shape from a button master's state layers: solid OR
   // linear gradient (SDF shader). Other fills → null → exported-PNG path.
   function captureButtonShape(master: SceneNode, silent = false) {
@@ -595,38 +663,78 @@ export async function exportDesign(
     const kids = (master as ChildrenMixin).children as SceneNode[];
     const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
     if (!reg) { if (!silent) shapeDiag.push(`'${master.name}': no layer named 'regular'`); return null; }
-    const sf = shapeFill(reg);
-    if (!sf) { if (!silent) shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
-    const radius = typeof (reg as unknown as { cornerRadius?: number }).cornerRadius === 'number'
-      ? (reg as unknown as { cornerRadius: number }).cornerRadius : 0;
-    const shape: {
-      cornerRadius: number; fill: RGBA; fill2?: RGBA; gradientTransform?: number[];
-      borderColor?: RGBA; borderWidth?: number; borderAlign?: 'inside' | 'outside' | 'center';
-      shadow?: Shadow;
-    } = { cornerRadius: radius, fill: sf.fill };
-    if (sf.fill2) { shape.fill2 = sf.fill2; shape.gradientTransform = sf.gradientTransform; }
-    const sh0 = extractShadows(reg)[0];
-    if (sh0) shape.shadow = sh0;
-    const strokes = (reg as unknown as { strokes?: Paint[] }).strokes;
-    const sw = (reg as unknown as { strokeWeight?: number }).strokeWeight;
-    if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
-      const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
-      if (sc) {
-        shape.borderColor = toRGBA(sc.color, sc.opacity);
-        shape.borderWidth = sw;
-        const al = (reg as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
-        shape.borderAlign = al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center';
-      }
-    }
-    const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: sf.fill };
-    const ro = kids.find((c) => c.name.toLowerCase() === 'rollover'); const rc = ro ? solidRGBA(ro) : null; if (rc) stateColors.highlighted = rc;
-    const pr = kids.find((c) => c.name.toLowerCase() === 'pressed'); const pc = pr ? solidRGBA(pr) : null; if (pc) stateColors.pressed = pc;
+    const shape = shapeOf(reg, [master, ...kids.filter((c) => c !== reg)]);
+    if (!shape) { if (!silent) shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
+    const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: shape.fill };
+    const ro = kids.find((c) => c.name.toLowerCase() === 'rollover'); const rc = ro ? stateSolid(ro) : null; if (rc) stateColors.highlighted = rc;
+    const pr = kids.find((c) => c.name.toLowerCase() === 'pressed'); const pc = pr ? stateSolid(pr) : null; if (pc) stateColors.pressed = pc;
     return { shape, stateColors };
+  }
+
+  // Text content of a node (its own characters, or the first descendant text).
+  function textOf(node: SceneNode | undefined): string | undefined {
+    if (!node) return undefined;
+    if (node.type === 'TEXT') return (node as TextNode).characters;
+    if ('children' in node) {
+      for (const c of (node as ChildrenMixin).children as SceneNode[]) { const t = textOf(c); if (t != null) return t; }
+    }
+    return undefined;
+  }
+
+  // Capture a toggle/radio: Background box (UGUI Toggle.targetGraphic), the Checkmark
+  // shown when on (Toggle.graphic), the initial value, and the label.
+  function captureToggle(master: SceneNode, tagValue?: string) {
+    const bg = childByName(master, 'Background');
+    const shape = bg ? shapeOf(bg, [master]) : null;
+    if (!shape) return null;
+    const ckNode = childByName(master, 'Checkmark');
+    const checkShape = ckNode ? shapeOf(ckNode) : undefined;
+    const ckVisible = ckNode ? (ckNode as unknown as { visible?: boolean }).visible !== false : false;
+    const value = tagValue === 'on' || tagValue === 'off' ? tagValue : (ckVisible ? 'on' : 'off');
+    return { shape, checkShape: checkShape ?? undefined, value, label: textOf(childByName(master, 'Label')),
+      parts: partsOf(master, ['Background', 'Checkmark', 'Label']) };
+  }
+
+  // Capture a dropdown: Background, the option list (each text in the 'Options' frame),
+  // and the selected value.
+  function captureDropdown(master: SceneNode, tagValue?: string) {
+    const bg = childByName(master, 'Background');
+    const shape = bg ? shapeOf(bg, [master]) : null;
+    const optsFrame = childByName(master, 'Options');
+    const options = optsFrame && 'children' in optsFrame
+      ? ((optsFrame as ChildrenMixin).children as SceneNode[]).map((c) => textOf(c)).filter((t): t is string => !!t)
+      : [];
+    const value = tagValue || textOf(childByName(master, 'Label')) || options[0];
+    return { shape: shape ?? undefined, options, value, label: textOf(childByName(master, 'Label')),
+      parts: partsOf(master, ['Background', 'Label', 'Arrow']) };
+  }
+
+  // Capture a list: rounded Background + ONE 'Item' template row (Regular fill,
+  // Rollover hover colour, Label). Row height comes from the template; the caller
+  // derives the row COUNT from the placed list's height ÷ row height.
+  function captureList(master: SceneNode) {
+    const bg = childByName(master, 'Background');
+    const shape = bg ? shapeOf(bg, [master]) : undefined;
+    const item = childByName(master, 'Item');
+    if (!item) return null;
+    const reg = childByName(item, 'Regular') ?? item;
+    const itemShape = shapeOf(reg) ?? undefined;
+    const rollNode = childByName(item, 'Rollover');
+    const itemRollover = rollNode ? (stateSolid(rollNode) ?? undefined) : undefined;
+    const itemHeight = (item as unknown as { height?: number }).height ?? 44;
+    return { shape: shape ?? undefined, itemShape, itemRollover, itemHeight, label: textOf(childByName(item, 'Label')),
+      parts: partsOf(master, ['Background']) };
   }
 
   const stateByNode = new Map<string, CanonicalStates>();
   const shapeByNode = new Map<string, ReturnType<typeof captureButtonShape>>();
   const instShapeByNode = new Map<string, ButtonShape>(); // per-instance shape override (differs from component)
+  const instStateColorsByNode = new Map<string, { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }>(); // per-instance rollover/pressed override
+  const stateDiag: string[] = []; // what hover/press colour was captured, and from where (surfaced as a toast)
+  const shadowCapDiag: string[] = []; // whether each button's drop shadow was captured (surfaced as a toast)
+  const fmtC = (c?: RGBA) => (c ? `(${c.slice(0, 3).map((n) => Math.round(n * 255)).join(',')})` : 'none');
+  // Captured control-specific data (toggle/radio/dropdown/list) merged into the canonical at assembly.
+  const controlByNode = new Map<string, Partial<CanonicalRef>>();
   for (const p of plans) {
     if (!p.canonicalRef || p.canonicalRef.kind !== 'button') continue;
     const master =
@@ -638,18 +746,68 @@ export async function exportDesign(
     if (states) stateByNode.set(p.node.id, states);
     const sh = captureButtonShape(master);
     if (sh) shapeByNode.set(p.node.id, sh);
-    // Per-instance override: read THIS instance's own 'regular' layer (with its
-    // overrides) and keep it when it differs from the component definition, so an
-    // instance-level stroke/fill/corner tweak applies to just that button.
+    if (sh) {
+      const shc = sh.shape.shadow;
+      shadowCapDiag.push(shc
+        ? `'${p.canonicalRef.ref}' shadow ${fmtC(shc.color)} off(${shc.offsetX},${shc.offsetY}) blur ${shc.blur} spread ${shc.spread}`
+        : `'${p.canonicalRef.ref}' NO shadow found (root/regular/children)`);
+    }
+    // Per-instance override: read THIS instance's own 'regular'/'rollover'/'pressed'
+    // layers (with overrides) and keep them when they differ from the component, so
+    // an instance-level stroke/fill/corner OR hover/press colour tweak applies to
+    // just that button (the canonical prefab keeps the component definition).
     if (sh && p.node.type === 'INSTANCE') {
       const inst = captureButtonShape(p.node, true);
       if (inst && JSON.stringify(inst.shape) !== JSON.stringify(sh.shape)) instShapeByNode.set(p.node.id, inst.shape);
+      if (inst && JSON.stringify(inst.stateColors) !== JSON.stringify(sh.stateColors)) {
+        instStateColorsByNode.set(p.node.id, inst.stateColors);
+        stateDiag.push(`'${p.canonicalRef.ref}' hover ${fmtC(inst.stateColors.highlighted)}/press ${fmtC(inst.stateColors.pressed)} (instance override; component ${fmtC(sh.stateColors.highlighted)}/${fmtC(sh.stateColors.pressed)})`);
+      } else if (sh) {
+        stateDiag.push(`'${p.canonicalRef.ref}' hover ${fmtC(sh.stateColors.highlighted)}/press ${fmtC(sh.stateColors.pressed)} (component)`);
+      }
     }
+  }
+  // Capture the non-button canonical controls (toggle/radio/dropdown/list).
+  for (const p of plans) {
+    const ref = p.canonicalRef;
+    if (!ref || ref.kind === 'button') continue;
+    const master = p.node.type === 'INSTANCE' ? ((p.node as InstanceNode).mainComponent as SceneNode | null) : p.node;
+    if (!master) continue;
+    if (ref.kind === 'toggle' || ref.kind === 'radio') {
+      const t = captureToggle(master, ref.value);
+      if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts });
+    } else if (ref.kind === 'dropdown') {
+      const d = captureDropdown(master, ref.value);
+      controlByNode.set(p.node.id, { shape: d.shape, options: d.options, value: d.value, label: d.label, parts: d.parts });
+    } else if (ref.kind === 'list') {
+      const l = captureList(master);
+      if (l) {
+        const ih = l.itemHeight || 44;
+        const instH = (p.node as unknown as { height?: number }).height || ih;
+        const count = Math.max(1, Math.round(instH / ih)); // resize the list = set its length
+        controlByNode.set(p.node.id, { shape: l.shape, itemShape: l.itemShape, itemRollover: l.itemRollover, itemHeight: ih, count, label: l.label, parts: l.parts });
+      }
+    }
+  }
+  if (stateDiag.length) {
+    // Surface exactly which hover/press colour was captured (and whether it came
+    // from the instance or the component) so a mismatch with Figma is debuggable.
+    // Prefer an instance-override line — that's the interesting/likely-wrong case.
+    const head = stateDiag.find((d) => d.includes('override')) ?? stateDiag[0];
+    try { figma.notify(`FigForge: ${head}`, { timeout: 8000 }); } catch { /* headless */ }
+    for (const d of stateDiag) console.warn('[FigForge] button state:', d);
   }
   if (shapeDiag.length) {
     // Tell the designer exactly why a button used a baked PNG instead of the crisp shader.
     try { figma.notify(`FigForge: ${shapeDiag.length} button(s) → PNG. ${shapeDiag[0]}`, { timeout: 7000 }); } catch { /* headless */ }
     for (const d of shapeDiag) console.warn('[FigForge] button→PNG:', d);
+  }
+  if (shadowCapDiag.length) {
+    // Surface whether each button's drop shadow was captured (and its params) so a
+    // missing shadow is debuggable at a glance. Prefer a "found" line in the toast.
+    const head = shadowCapDiag.find((d) => !d.includes('NO shadow')) ?? shadowCapDiag[0];
+    try { figma.notify(`FigForge shadow: ${head}`, { timeout: 8000 }); } catch { /* headless */ }
+    for (const d of shadowCapDiag) console.warn('[FigForge] shadow:', d);
   }
 
   // ---- 3. Assemble manifest elements ----------------------------------------
@@ -705,6 +863,8 @@ export async function exportDesign(
       if (sh) { canonical.shape = sh.shape; canonical.stateColors = sh.stateColors; }
     }
     if (canonical && instShapeByNode.has(node.id)) canonical.instanceShape = instShapeByNode.get(node.id);
+    if (canonical && instStateColorsByNode.has(node.id)) canonical.instanceStateColors = instStateColorsByNode.get(node.id);
+    if (canonical && controlByNode.has(node.id)) Object.assign(canonical, controlByNode.get(node.id));
     const nav = navFor(node);
 
     const element: ManifestElement = {

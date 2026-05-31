@@ -11,6 +11,20 @@ using UnityEngine.UI;
 
 namespace FigForge
 {
+    // One button-state fill: a solid colour OR a 2-stop linear gradient, in a single
+    // serialized field. Replaces the old colour/colour2/dir triple so the inspector
+    // shows one "Normal / Highlighted / Pressed" entry instead of nine loose fields.
+    [System.Serializable]
+    public struct FigForgeFill
+    {
+        public Color color;    // solid, or gradient stop 0
+        public Color color2;   // gradient stop 1
+        public Vector2 dir;    // gradient direction; (0,0) = solid
+        public FigForgeFill(Color c, Color c2, Vector2 d) { color = c; color2 = c2; dir = d; }
+        public static FigForgeFill Solid(Color c) => new FigForgeFill(c, c, Vector2.zero);
+        public static FigForgeFill Gradient(Color a, Color b, Vector2 d) => new FigForgeFill(a, b, d);
+    }
+
     [AddComponentMenu("FigForge/Rounded Rect")]
     public class FigForgeRoundedRect : MaskableGraphic
     {
@@ -42,10 +56,12 @@ namespace FigForge
 
         // How far the stroke extends OUTSIDE the fill edge (scaled px).
         float StrokeOutset() => Mathf.Max(0f, borderWidth) * Mathf.Clamp01(borderAlign);
-        // How far the drop shadow reaches beyond the fill edge (offset + blur + spread, + margin).
+        // How far the drop shadow reaches beyond the fill edge (offset + spread + the
+        // Gaussian tail + margin). The shader uses sigma = blur/2 and the tail is
+        // negligible past ~3·sigma = 1.5·blur, so pad by 1.75·blur to avoid clipping it.
         float ShadowReach() => shadowColor.a <= 0.001f ? 0f
             : Mathf.Max(Mathf.Abs(shadowOffset.x), Mathf.Abs(shadowOffset.y))
-              + Mathf.Max(0f, shadowBlur) + Mathf.Max(0f, shadowSpread) + 1f;
+              + 1.75f * Mathf.Max(0f, shadowBlur) + Mathf.Max(0f, shadowSpread) + 1f;
         // Total mesh padding so stroke AND shadow have geometry to draw on.
         float MeshPad() => Mathf.Max(StrokeOutset(), ShadowReach());
 
@@ -59,6 +75,9 @@ namespace FigForge
         {
             fillColor = fill; fillColor2 = fill2; gradientDir = grad; Push();
         }
+
+        // Swap the whole fill from a single FigForgeFill (solid or gradient).
+        public void SetFill(FigForgeFill f) => SetFill(f.color, f.color2, f.dir);
 
         public void Configure(Color fill, Color fill2, Vector2 grad, Color border, float borderW, Vector4 cornerRadii, float borderAlignment = 0f)
         {
@@ -114,6 +133,15 @@ namespace FigForge
             var m = EnsureMat();
             if (m == null) return;
             ApplyParams(m);
+            // Belt-and-suspenders for MASKED graphics: the UGUI Mask renders us through
+            // a cached StencilMaterial COPY of _mat, not _mat itself. GetModifiedMaterial
+            // re-applies our params to that copy, but only on the next canvas rebuild —
+            // a per-frame pointer enter/exit can revert the swap before that runs. So also
+            // push directly onto the live copy now (same shader → it's our stencil copy),
+            // making a hover/press fill swap take effect immediately under a mask.
+            var cr = canvasRenderer;
+            var live = cr != null ? cr.GetMaterial() : null;
+            if (live != null && live != m && live.shader == m.shader) ApplyParams(live);
             SetMaterialDirty();
         }
 

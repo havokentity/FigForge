@@ -41,7 +41,12 @@ namespace FigForge
             if (input != null && value != null) input.text = value;
 
             var toggle = control as Toggle;
-            if (toggle != null && bool.TryParse(value, out var on)) toggle.isOn = on;
+            if (toggle != null && value != null)
+            {
+                if (bool.TryParse(value, out var on)) toggle.isOn = on;
+                else if (value == "on" || value == "1") toggle.isOn = true;
+                else if (value == "off" || value == "0") toggle.isOn = false;
+            }
 
             var slider = control as Slider;
             if (slider != null && float.TryParse(value, out var v)) slider.value = v;
@@ -52,6 +57,12 @@ namespace FigForge
             {
                 optionsTarget.ClearOptions();
                 optionsTarget.AddOptions(options);
+                // 'value' is the selected option text — select it once options are loaded.
+                if (!string.IsNullOrEmpty(value))
+                {
+                    int idx = options.IndexOf(value);
+                    if (idx >= 0) optionsTarget.SetValueWithoutNotify(idx);
+                }
             }
         }
     }

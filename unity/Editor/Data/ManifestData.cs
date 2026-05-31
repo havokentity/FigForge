@@ -134,7 +134,16 @@ namespace FigForge
         public CanonicalLabelFont defLabelFont; // the canonical COMPONENT's label font (the prefab/definition uses this)
         public CanonicalShape shape;            // procedural background (SDF shader) — overrides the state PNGs when present
         public CanonicalShape instanceShape;    // THIS instance's background when it differs from the component (per-instance override)
-        public CanonicalStateColors stateColors; // per-state fill colours for the procedural background
+        public CanonicalStateColors stateColors; // the COMPONENT's per-state hover/press fills (drives the prefab)
+        public CanonicalStateColors instanceStateColors; // THIS instance's hover/press fills when they differ from the component
+        // --- control-specific (toggle/radio/dropdown/list) ---
+        public CanonicalShape checkShape; // toggle/radio: the "on" indicator (Toggle.graphic), shown when value=on
+        public List<string> items;        // list: the text of each row (first row is the template)
+        public CanonicalShape itemShape;  // list: the row background shape (from the 'Item' template's Regular)
+        public float[] itemRollover;      // list: the row hover colour (from the 'Item' template's Rollover)
+        public float itemHeight;          // list: row height in Figma px (drives Unity row sizing)
+        public int count;                 // list: number of rows to generate
+        public Dictionary<string, float[]> parts; // normalized anchors [minX,minY,maxX,maxY] of named sub-layers
     }
 
     public class NavLink

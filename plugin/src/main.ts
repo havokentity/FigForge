@@ -8,6 +8,7 @@
 import {
   DEFAULT_EXPORT_OPTIONS,
   DEFAULT_EXPORT_SCALE,
+  type CanonicalKind,
   type ElementConfig,
   type ExportOptions,
   type ExportScale,
@@ -179,13 +180,23 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
 
     case 'create-button': {
       try {
-        const comp = await createCanonicalButton();
+        await createCanonicalButton();
         figma.ui.postMessage({
           type: 'status',
-          message: `Button "${comp.name}" ready (Regular/Rollover/Pressed/HitArea/Label) — skin it, then drop instances into your screens.`,
+          message: `Button instance placed. Skin the master on the FigForge Components page; click ＋Button again to add more.`,
         });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create button failed: ' + String((e as Error)?.message || e) });
+      }
+      break;
+    }
+
+    case 'create-canonical': {
+      try {
+        const comp = await createCanonical(String((msg as { kind?: string }).kind || ''));
+        figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Skin the master on the FigForge Components page; click again to add more (group radios under one frame).` });
+      } catch (e) {
+        figma.ui.postMessage({ type: 'export-error', message: 'Create failed: ' + String((e as Error)?.message || e) });
       }
       break;
     }
@@ -408,12 +419,13 @@ async function createCanonicalButton(): Promise<ComponentNode> {
     page.name = COMPONENTS_PAGE;
   }
 
-  // Reuse the default "Button" master if it already exists — don't spam Button2/3.
+  // Reuse the default "Button" master if it already exists — don't spam Button2/3;
+  // instead drop another INSTANCE on the current page so you can place many.
   const existing = page.children.find(
     (n) => n.type === 'COMPONENT' && n.name === 'Button'
   ) as ComponentNode | undefined;
   if (existing) {
-    jumpTo(page, existing);
+    placeInstance(existing);
     return existing;
   }
 
@@ -459,6 +471,196 @@ async function createCanonicalButton(): Promise<ComponentNode> {
   page.appendChild(comp);
   comp.x = 0;
   comp.y = 0;
-  jumpTo(page, comp);
+  placeInstance(comp);
+  return comp;
+}
+
+// The shared FigForge Components page (created on first use).
+function componentsPage(): PageNode {
+  let page = figma.root.children.find((p) => p.name === COMPONENTS_PAGE) as PageNode | undefined;
+  if (!page) { page = figma.createPage(); page.name = COMPONENTS_PAGE; }
+  return page;
+}
+
+// Drop a usable INSTANCE of a canonical component onto the user's current page,
+// laid out in a grid near the viewport centre (offset per existing instance so
+// repeated clicks stack neatly). Selecting + framing it. This is what lets you
+// create more than one — each click places another instance to position/group.
+function placeInstance(comp: ComponentNode): InstanceNode {
+  const inst = comp.createInstance();
+  figma.currentPage.appendChild(inst);
+  const prior = figma.currentPage.findAll(
+    (n) => n.type === 'INSTANCE' && (n as InstanceNode).mainComponent === comp
+  ).length - 1; // minus the one we just added
+  const c = figma.viewport.center;
+  inst.x = Math.round(c.x + (prior % 4) * (inst.width + 20));
+  inst.y = Math.round(c.y + Math.floor(prior / 4) * (inst.height + 20));
+  figma.currentPage.selection = [inst];
+  figma.viewport.scrollAndZoomIntoView([inst]);
+  return inst;
+}
+
+function solidRect(name: string, w: number, h: number, r: number, color: RGB, alpha = 1): RectangleNode {
+  const rect = figma.createRectangle();
+  rect.name = name; rect.resize(w, h); rect.cornerRadius = r;
+  rect.fills = [{ type: 'SOLID', color, opacity: alpha }];
+  return rect;
+}
+
+// Dispatch a "+Toggle / +Radio / +Dropdown / +List" create request to its builder.
+async function createCanonical(kind: string): Promise<ComponentNode> {
+  switch (kind) {
+    case 'toggle': return createToggleLike('toggle', 'Toggle', false);
+    case 'radio': return createToggleLike('radio', 'Radio', true);
+    case 'dropdown': return createDropdown();
+    case 'list': return createList();
+    default: throw new Error(`unknown canonical kind '${kind}'`);
+  }
+}
+
+// Toggle / Radio: a Background box (UGUI Toggle.targetGraphic) + a Checkmark shown
+// when on (Toggle.graphic) + HitArea + Label. Radio is circular and grouped in Unity
+// by its parent frame. Off by default.
+async function createToggleLike(kind: CanonicalKind, ref: string, circular: boolean): Promise<ComponentNode> {
+  const page = componentsPage();
+  let comp = page.children.find((n) => n.type === 'COMPONENT' && n.name === ref) as ComponentNode | undefined;
+  if (!comp) {
+    const font = await loadUiFont();
+    const BOX = 24, W = 150, H = 24;
+    const boxR = circular ? BOX / 2 : 6, ckR = circular ? 7 : 3, CK = 14;
+
+    comp = figma.createComponent();
+    comp.name = ref; comp.resize(W, H); comp.fills = [];
+
+    const bg = solidRect('Background', BOX, BOX, boxR, { r: 0.85, g: 0.86, b: 0.9 });
+    bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+    comp.appendChild(bg);
+
+    const ck = solidRect('Checkmark', CK, CK, ckR, { r: 0.49, g: 0.36, b: 1 });
+    ck.x = (BOX - CK) / 2; ck.y = (BOX - CK) / 2; ck.visible = false;
+    ck.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+    comp.appendChild(ck);
+
+    const hit = solidRect('HitArea', W, H, 0, { r: 0, g: 0, b: 0 }, 0);
+    hit.x = 0; hit.y = 0; hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+    comp.appendChild(hit);
+
+    const label = figma.createText();
+    label.fontName = font; label.name = 'Label'; label.characters = ref;
+    label.fontSize = 14; label.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+    label.textAlignVertical = 'CENTER';
+    comp.appendChild(label);
+    label.x = BOX + 8; label.y = (H - label.height) / 2;
+    label.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+
+    comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind, ref, value: 'off' }));
+    page.appendChild(comp); comp.x = 0; comp.y = 0;
+  }
+  placeInstance(comp); // each click drops another instance on your page (so you can make many / group radios)
+  return comp;
+}
+
+// Dropdown: a Background + caption Label + Arrow, plus a hidden Options frame whose
+// child text layers are the selectable options (captured into a TMP_Dropdown).
+async function createDropdown(): Promise<ComponentNode> {
+  const page = componentsPage();
+  const reuse = page.children.find((n) => n.type === 'COMPONENT' && n.name === 'Dropdown') as ComponentNode | undefined;
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const W = 220, H = 40, R = 8;
+  const comp = figma.createComponent();
+  comp.name = 'Dropdown'; comp.resize(W, H); comp.fills = [];
+
+  const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
+  bg.strokes = [{ type: 'SOLID', color: { r: 0.8, g: 0.8, b: 0.85 } }]; bg.strokeWeight = 1;
+  bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(bg);
+
+  const label = figma.createText();
+  label.fontName = font; label.name = 'Label'; label.characters = 'Option 1';
+  label.fontSize = 14; label.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+  label.textAlignVertical = 'CENTER';
+  comp.appendChild(label); label.x = 12; label.y = (H - label.height) / 2;
+  label.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+
+  const arrow = figma.createText();
+  arrow.fontName = font; arrow.name = 'Arrow'; arrow.characters = '▾';
+  arrow.fontSize = 14; arrow.fills = [{ type: 'SOLID', color: { r: 0.4, g: 0.4, b: 0.45 } }];
+  comp.appendChild(arrow); arrow.x = W - 24; arrow.y = (H - arrow.height) / 2;
+  arrow.constraints = { horizontal: 'MAX', vertical: 'CENTER' };
+
+  // Hidden options source — each child text is one option.
+  const opts = figma.createFrame();
+  opts.name = 'Options'; opts.resize(W, 120); opts.fills = []; opts.visible = false;
+  opts.x = 0; opts.y = H + 4;
+  comp.appendChild(opts);
+  for (let i = 0; i < 3; i++) {
+    const t = figma.createText();
+    t.fontName = font; t.characters = `Option ${i + 1}`; t.fontSize = 14;
+    t.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+    opts.appendChild(t); t.x = 12; t.y = 8 + i * 36;
+  }
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'dropdown', ref: 'Dropdown', value: 'Option 1' }));
+  page.appendChild(comp); comp.x = 0; comp.y = 0;
+  placeInstance(comp);
+  return comp;
+}
+
+// The reusable row used by List — its own component (Regular/Rollover/HitArea/Label)
+// so every row in the composited list preview stays in sync when you skin it once.
+async function ensureListItem(page: PageNode, font: FontName, W: number, ROW: number): Promise<ComponentNode> {
+  const found = page.children.find((n) => n.type === 'COMPONENT' && n.name === 'ListItem') as ComponentNode | undefined;
+  if (found) return found;
+  const item = figma.createComponent();
+  item.name = 'ListItem'; item.resize(W, ROW); item.fills = []; item.clipsContent = true;
+  const reg = solidRect('Regular', W, ROW, 0, { r: 1, g: 1, b: 1 });
+  reg.visible = true; reg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(reg);
+  const roll = solidRect('Rollover', W, ROW, 0, { r: 0.93, g: 0.92, b: 1 });
+  roll.visible = false; roll.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(roll);
+  const hit = solidRect('HitArea', W, ROW, 0, { r: 0, g: 0, b: 0 }, 0);
+  hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(hit);
+  const t = figma.createText();
+  t.fontName = font; t.name = 'Label'; t.characters = 'Item'; t.fontSize = 14;
+  t.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]; t.textAlignVertical = 'CENTER';
+  item.appendChild(t); t.x = 16; t.y = (ROW - t.height) / 2; t.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+  page.appendChild(item); item.x = 0; item.y = -ROW - 40; // park the master above the List
+  return item;
+}
+
+// List: a rounded, clipped Background + a COMPOSITED stack of ListItem instances (so
+// you see a real multi-row list in Figma and copy it onto your page). Skin the one
+// ListItem master (Regular/Rollover states) and every row updates. In Unity the row
+// is repeated `count` times (count = list height ÷ row height) with the rollover swap.
+async function createList(): Promise<ComponentNode> {
+  const page = componentsPage();
+  const reuse = page.children.find((n) => n.type === 'COMPONENT' && n.name === 'List') as ComponentNode | undefined;
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const W = 260, ROW = 48, ROWS = 5, H = ROW * ROWS, R = 14;
+  const itemComp = await ensureListItem(page, font, W, ROW);
+
+  const comp = figma.createComponent();
+  comp.name = 'List'; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
+
+  const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
+  bg.strokes = [{ type: 'SOLID', color: { r: 0.82, g: 0.83, b: 0.88 } }]; bg.strokeWeight = 1;
+  bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(bg);
+
+  // Composited preview: ROWS instances of the single ListItem master (the first is the
+  // 'Item' the importer reads; all stay in sync when you skin the master).
+  for (let i = 0; i < ROWS; i++) {
+    const ins = itemComp.createInstance();
+    ins.name = 'Item'; ins.resize(W, ROW); ins.x = 0; ins.y = i * ROW;
+    ins.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    comp.appendChild(ins);
+  }
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: 'List' }));
+  page.appendChild(comp); comp.x = 0; comp.y = 0;
+  placeInstance(comp);
   return comp;
 }

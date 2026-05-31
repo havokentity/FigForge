@@ -17,10 +17,11 @@ namespace FigForge
     public class FigForgeButtonStateColors : MonoBehaviour,
         IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler, IPointerUpHandler
     {
-        public Color normal = Color.white,      normal2 = Color.white;
-        public Color highlighted = Color.white, highlighted2 = Color.white;
-        public Color pressed = Color.white,     pressed2 = Color.white;
-        public Vector2 normalDir, highlightedDir, pressedDir;
+        // One fill per state (solid or gradient). Grouped into FigForgeFill so the
+        // inspector shows three tidy entries instead of nine loose colour/dir fields.
+        public FigForgeFill normal = FigForgeFill.Solid(Color.white);
+        public FigForgeFill highlighted = FigForgeFill.Solid(Color.white);
+        public FigForgeFill pressed = FigForgeFill.Solid(Color.white);
 
         FigForgeRoundedRect _g;
         bool _over, _down;
@@ -36,9 +37,7 @@ namespace FigForge
         void Apply()
         {
             if (_g == null) return;
-            if (_down) _g.SetFill(pressed, pressed2, pressedDir);
-            else if (_over) _g.SetFill(highlighted, highlighted2, highlightedDir);
-            else _g.SetFill(normal, normal2, normalDir);
+            _g.SetFill(_down ? pressed : (_over ? highlighted : normal));
         }
     }
 }
