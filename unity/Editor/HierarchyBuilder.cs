@@ -57,7 +57,51 @@ namespace FigForge
                 var reg = pageRoot.GetComponent<FigForgeScreen>() ?? pageRoot.AddComponent<FigForgeScreen>();
                 foreach (var kv in ctx.registered) reg.Register(kv.Key, kv.Value);
             }
+            ConfigurePageCompositor(pageRoot, ctx);
             return pageRoot;
+        }
+
+        static void ConfigurePageCompositor(GameObject pageRoot, BuildContext ctx)
+        {
+            if (pageRoot == null) return;
+            var layered = pageRoot.GetComponentsInChildren<FigForgeLayeredRect>(true);
+            bool needsPageCompositor = false;
+            for (int i = 0; i < layered.Length; i++)
+            {
+                var layer = layered[i];
+                if (layer == null || FigForgeLayeredRect.BlendTier(layer.CompositorBlendMode) != 2) continue;
+                needsPageCompositor = true;
+                WarnIfAdvancedBlendUnderStencilMask(layer, ctx);
+            }
+
+            if (!needsPageCompositor) return;
+            if (pageRoot.GetComponent<FigForgePageCompositor>() == null)
+                pageRoot.AddComponent<FigForgePageCompositor>();
+        }
+
+        static void WarnIfAdvancedBlendUnderStencilMask(FigForgeLayeredRect layer, BuildContext ctx)
+        {
+            var masks = layer.GetComponentsInParent<Mask>(true);
+            for (int i = 0; i < masks.Length; i++)
+            {
+                var mask = masks[i];
+                if (mask == null || mask.transform == layer.transform) continue;
+                ctx.log($"advanced blend '{HierarchyPath(layer.transform)}' is under a stencil Mask; FigForgePageCompositor MVP does not reproduce stencil masking.");
+                return;
+            }
+        }
+
+        static string HierarchyPath(Transform t)
+        {
+            if (t == null) return "";
+            var parts = new List<string>();
+            while (t != null)
+            {
+                parts.Add(t.name);
+                t = t.parent;
+            }
+            parts.Reverse();
+            return string.Join("/", parts.ToArray());
         }
 
         static GameObject BuildElement(ElementData e, Dictionary<string, ElementData> index, Transform parent, BuildContext ctx)
