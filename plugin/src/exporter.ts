@@ -81,6 +81,25 @@ function gradientKind(type: string): GradientKind {
   }
 }
 
+function gradientStopRGBA(stop: GradientPaint['gradientStops'][number], opacity: number | undefined): RGBA {
+  const a = stop.color.a * (typeof opacity === 'number' ? opacity : 1);
+  return [stop.color.r, stop.color.g, stop.color.b, a];
+}
+
+function sameRGBA(a: RGBA, b: RGBA): boolean {
+  const eps = 0.0005;
+  return Math.abs(a[0] - b[0]) <= eps
+    && Math.abs(a[1] - b[1]) <= eps
+    && Math.abs(a[2] - b[2]) <= eps
+    && Math.abs(a[3] - b[3]) <= eps;
+}
+
+function singleColorGradient(stops: GradientPaint['gradientStops'] | undefined, opacity: number | undefined): RGBA | undefined {
+  if (!stops || stops.length === 0) return undefined;
+  const first = gradientStopRGBA(stops[0], opacity);
+  return stops.every((s) => sameRGBA(first, gradientStopRGBA(s, opacity))) ? first : undefined;
+}
+
 function firstFill(node: SceneNode, options: ExportOptions): Fill | undefined {
   const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
   if (!Array.isArray(fills)) return undefined;
@@ -92,12 +111,14 @@ function firstFill(node: SceneNode, options: ExportOptions): Fill | undefined {
   }
   if (paint.type.startsWith('GRADIENT') && options.emitGradients) {
     const g = paint as GradientPaint;
+    const solid = singleColorGradient(g.gradientStops, paint.opacity);
+    if (solid) return { kind: 'solid', color: solid };
     return {
       kind: 'gradient',
       gradient: gradientKind(paint.type),
       stops: g.gradientStops.map((s) => ({
         position: s.position,
-        color: [s.color.r, s.color.g, s.color.b, s.color.a] as RGBA,
+        color: gradientStopRGBA(s, paint.opacity),
       })),
       transform: g.gradientTransform ? ([] as number[]).concat(...g.gradientTransform) : undefined,
     };
@@ -632,10 +653,10 @@ export async function exportDesign(
     return null;
   }
 
-  // The renderable fill of a button state layer: a solid colour, or a 2-stop
-  // linear gradient (the SDF shader renders both crisply). Other gradients /
-  // image fills → null, so the button keeps the exported-PNG path.
-  function shapeFill(node: SceneNode): { fill: RGBA; fill2?: RGBA; gradientTransform?: number[] } | null {
+  // The renderable fill of a button state layer: a solid colour, or a Figma
+  // gradient with any number of stops (the SDF shader samples a generated ramp).
+  // Other gradients / image fills → null, so the button keeps the exported-PNG path.
+  function shapeFill(node: SceneNode): { fill: RGBA; gradient?: Extract<Fill, { kind: 'gradient' }> } | null {
     const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
     if (!Array.isArray(fills)) return null;
     const paint = fills.find((f) => !isEmptyPaint(f));
@@ -644,17 +665,23 @@ export async function exportDesign(
       const s = paint as SolidPaint;
       return { fill: toRGBA(s.color, s.opacity) };
     }
-    if (paint.type === 'GRADIENT_LINEAR') {
+    if (paint.type.startsWith('GRADIENT') && options.emitGradients) {
       const g = paint as GradientPaint;
       const stops = g.gradientStops;
       if (stops.length >= 2) {
-        // 2 stops = exact; 3+ stops are approximated by first→last (the SDF
-        // shader is a 2-colour lerp). Better than baking a PNG for the crisp look.
-        const c0 = stops[0].color, c1 = stops[stops.length - 1].color;
+        const solid = singleColorGradient(stops, paint.opacity);
+        if (solid) return { fill: solid };
         return {
-          fill: [c0.r, c0.g, c0.b, c0.a] as RGBA,
-          fill2: [c1.r, c1.g, c1.b, c1.a] as RGBA,
-          gradientTransform: g.gradientTransform ? ([] as number[]).concat(...g.gradientTransform) : undefined,
+          fill: gradientStopRGBA(stops[0], paint.opacity),
+          gradient: {
+            kind: 'gradient',
+            gradient: gradientKind(paint.type),
+            stops: stops.map((s) => ({
+              position: s.position,
+              color: gradientStopRGBA(s, paint.opacity),
+            })),
+            transform: g.gradientTransform ? ([] as number[]).concat(...g.gradientTransform) : undefined,
+          },
         };
       }
     }
@@ -678,7 +705,7 @@ export async function exportDesign(
   const shapeDiag: string[] = []; // why a button fell back to PNG (surfaced as a toast)
 
   // Capture a procedural ButtonShape from ONE node: corner radius, fill (solid or
-  // 2-stop linear gradient), border (stroke), and drop shadow (scanned on the node
+  // linear n-stop gradient), stroke, and drop shadow (scanned on the node
   // and its children). null when the fill can't drive the SDF shader (→ PNG path).
   // Shared by every canonical control (button background, toggle box, list row, …).
   function shapeOf(node: SceneNode, extraShadowSources: SceneNode[] = []): ButtonShape | null {
@@ -687,7 +714,7 @@ export async function exportDesign(
     const radius = typeof (node as unknown as { cornerRadius?: number }).cornerRadius === 'number'
       ? (node as unknown as { cornerRadius: number }).cornerRadius : 0;
     const shape: ButtonShape = { cornerRadius: radius, fill: sf.fill };
-    if (sf.fill2) { shape.fill2 = sf.fill2; shape.gradientTransform = sf.gradientTransform; }
+    if (sf.gradient) shape.gradient = sf.gradient;
     const kids = 'children' in node ? ((node as ChildrenMixin).children as SceneNode[]) : [];
     for (const src of [node, ...extraShadowSources, ...kids]) {
       const s = extractShadows(src)[0]; if (s) { shape.shadow = s; break; }
@@ -697,10 +724,13 @@ export async function exportDesign(
     if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
       const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
       if (sc) {
-        shape.borderColor = toRGBA(sc.color, sc.opacity);
-        shape.borderWidth = sw;
         const al = (node as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
-        shape.borderAlign = al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center';
+        shape.stroke = {
+          color: toRGBA(sc.color, sc.opacity),
+          weight: sw,
+          align: al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center',
+          dashed: false,
+        };
       }
     }
     return shape;
@@ -714,16 +744,19 @@ export async function exportDesign(
         : 0;
       if (shape.cornerRadius === 0 && radius > 0) shape.cornerRadius = radius;
 
-      if (!shape.borderColor || !shape.borderWidth) {
+      if (!shape.stroke) {
         const strokes = (src as unknown as { strokes?: Paint[] }).strokes;
         const sw = (src as unknown as { strokeWeight?: number }).strokeWeight;
         if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
           const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
           if (sc) {
-            shape.borderColor = toRGBA(sc.color, sc.opacity);
-            shape.borderWidth = sw;
             const al = (src as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
-            shape.borderAlign = al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center';
+            shape.stroke = {
+              color: toRGBA(sc.color, sc.opacity),
+              weight: sw,
+              align: al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center',
+              dashed: false,
+            };
           }
         }
       }

@@ -260,7 +260,7 @@ mirrors it field-for-field. Full schema → [`docs/plugin-guide.md`](docs/plugin
 | Plugin says *"Select a frame…"* | Select a Frame, Component, or Group — not a lone shape. |
 | Export button greyed out | Nothing valid is selected. |
 | Bridge dot stays red | Server isn't up, or port `1994` is taken — start it and hit **Connect**. |
-| Wrong fonts in Unity | Map each `family\|style` to a `TMP_FontAsset` in the importer's Fonts section. |
+| Wrong fonts in Unity | Map each `family\|style` to a `TMP_FontAsset` in the importer's Fonts section. Inter is bundled and auto-generates TMP assets when a project is missing them. |
 | Canonical layer came in as a purple placeholder | Assign a Canonical Library and map that ref to a prefab, then rebuild. |
 | Sharp/white box where a panel should be rounded | Give the layer a real fill or stroke; fill-only rounded panels are drawn procedurally. |
 | `using FigForge` won't resolve after a git install | Use a tag that ships `.meta` files (`v1.0.1`+). |

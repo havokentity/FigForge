@@ -128,9 +128,12 @@ export interface CanonicalStates {
 /** Procedural background of a button (rendered by the SDF shader). */
 export interface ButtonShape {
   cornerRadius: number;
-  fill?: RGBA; // solid colour, or gradient stop 0
-  fill2?: RGBA; // gradient stop 1 (present → 2-stop linear gradient background)
-  gradientTransform?: number[]; // gradient affine (Figma row-major), present with fill2
+  fill?: RGBA; // solid colour, or legacy gradient fallback colour
+  gradient?: Extract<Fill, { kind: 'gradient' }>; // linear n-stop gradient background
+  fill2?: RGBA; // legacy gradient stop 1
+  gradientTransform?: number[]; // legacy gradient affine (Figma row-major)
+  stroke?: Stroke;
+  // Legacy fields kept so older exports still deserialize in Unity.
   borderColor?: RGBA;
   borderWidth?: number;
   borderAlign?: StrokeAlign; // inside|outside|center (default inside)

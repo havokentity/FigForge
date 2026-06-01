@@ -3,8 +3,8 @@
 // button's Regular / Rollover / Pressed). Lives alongside the Button (transition
 // set to None). The base (normal) fill applies immediately, so the button looks
 // right even before any pointer input. Each state carries a FULL fill — a solid
-// (fill2 == fill, dir = 0) or a 2-stop gradient — so a gradient button shows its
-// gradient at rest and the (solid or gradient) hover/press states on input.
+// or an n-stop gradient — so a gradient button shows its gradient at rest and
+// the hover/press states on input.
 // =============================================================================
 
 using UnityEngine;

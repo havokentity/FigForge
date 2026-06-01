@@ -16,12 +16,8 @@ namespace FigForge
     public class FigForgeListRowStyle
     {
         public bool enabled;
-        public Color fill = Color.white;
-        public Color fill2 = Color.white;
-        public Vector2 gradientDir = Vector2.zero;
-        public Color borderColor = new Color(0, 0, 0, 0);
-        public float borderWidth;
-        public float borderAlign;
+        public FigForgeFill fill = FigForgeFill.Solid(Color.white);
+        public FigForgeStroke stroke = FigForgeStroke.None;
         public Vector4 corners = Vector4.zero;
         public Color shadowColor = new Color(0, 0, 0, 0);
         public Vector2 shadowOffset = Vector2.zero;
@@ -125,11 +121,10 @@ namespace FigForge
                 if (row.GetComponent<CanvasRenderer>() == null) row.AddComponent<CanvasRenderer>();
                 var rr = row.AddComponent<FigForgeRoundedRect>();
                 ApplyStyleToRR(rr, itemStyle);
-                var baseFill = new FigForgeFill(itemStyle.fill, itemStyle.fill2, itemStyle.gradientDir);
                 var states = row.AddComponent<FigForgeButtonStateColors>();
-                states.normal = baseFill;
-                states.highlighted = hasItemRollover ? FigForgeFill.Solid(itemRollover) : baseFill;
-                states.pressed = hasItemRollover ? FigForgeFill.Solid(itemRollover) : baseFill;
+                states.normal = itemStyle.fill;
+                states.highlighted = hasItemRollover ? FigForgeFill.Solid(itemRollover) : itemStyle.fill;
+                states.pressed = hasItemRollover ? FigForgeFill.Solid(itemRollover) : itemStyle.fill;
                 rowBg = rr;
             }
             else
@@ -163,8 +158,7 @@ namespace FigForge
 
         static void ApplyStyleToRR(FigForgeRoundedRect rr, FigForgeListRowStyle style)
         {
-            rr.Configure(style.fill, style.fill2, style.gradientDir, style.borderColor,
-                Mathf.Max(0f, style.borderWidth), style.corners, Mathf.Clamp01(style.borderAlign));
+            rr.Configure(style.fill, style.stroke, style.corners);
             if (style.shadowColor.a > 0.001f)
                 rr.SetShadow(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread);
         }

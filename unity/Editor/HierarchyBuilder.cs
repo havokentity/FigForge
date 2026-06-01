@@ -235,12 +235,12 @@ namespace FigForge
                 img.color = new Color(1, 1, 1, 0); // stroke-only container
             }
 
-            if (style?.stroke != null) AddBorder(go, e, ctx);
+            if (style?.stroke != null) AddStroke(go, e, ctx);
         }
 
-        // SDF panel covers solid (or fill-less) rounded/bordered rects AND 2-stop
-        // linear gradients (rendered crisp + rounded by the shader). Image fills,
-        // radial/angular gradients, and 3+ stop gradients stay on the baked path.
+        // SDF panel covers solid (or fill-less) rounded/bordered rects AND linear
+        // gradients with any number of stops (rendered crisp + rounded by the shader).
+        // Image fills and radial/angular gradients stay on the baked path.
         static bool UseSdf(StyleData s)
         {
             if (s == null) return false;
@@ -262,11 +262,22 @@ namespace FigForge
             rr.SetShadow(c, new Vector2(s.offsetX * sf, -s.offsetY * sf), s.blur * sf, s.spread * sf);
         }
 
-        // A gradient the SDF shader can render exactly: linear with two stops.
-        // (3+ stops or radial/angular/diamond need the baked texture path.)
+        // A gradient the SDF shader can render: linear/radial/angular/diamond with 2+ stops.
         static bool IsSdfGradient(Fill f)
-            => f != null && f.kind == "gradient" && f.gradient == "linear"
-               && f.stops != null && f.stops.Count == 2;
+            => f != null && f.kind == "gradient"
+               && (f.gradient == "linear" || f.gradient == "radial" || f.gradient == "angular" || f.gradient == "diamond")
+               && f.stops != null && f.stops.Count >= 2;
+
+        static FigForgeGradientKind GradientKind(Fill f)
+        {
+            switch (f != null ? f.gradient : null)
+            {
+                case "radial": return FigForgeGradientKind.Radial;
+                case "angular": return FigForgeGradientKind.Angular;
+                case "diamond": return FigForgeGradientKind.Diamond;
+                default: return FigForgeGradientKind.Linear;
+            }
+        }
 
         // Linear-gradient direction in the SDF shader's UV space (origin centre,
         // +y UP), from Figma's gradientTransform first row [a,b,...]. Figma UV is
@@ -282,6 +293,55 @@ namespace FigForge
             return new Vector2(0f, -1f);
         }
 
+        static Gradient ToUnityGradient(List<GradientStop> stops)
+        {
+            var g = new Gradient();
+            if (stops == null || stops.Count == 0)
+            {
+                g.SetKeys(
+                    new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.white, 1f) },
+                    new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(1f, 1f) });
+                return g;
+            }
+
+            var sorted = new List<GradientStop>(stops);
+            sorted.Sort((a, b) => a.position.CompareTo(b.position));
+            var colors = new GradientColorKey[sorted.Count];
+            var alphas = new GradientAlphaKey[sorted.Count];
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                var c = ToColor(sorted[i].color);
+                float t = Mathf.Clamp01(sorted[i].position);
+                colors[i] = new GradientColorKey(new Color(c.r, c.g, c.b, 1f), t);
+                alphas[i] = new GradientAlphaKey(c.a, t);
+            }
+            g.SetKeys(colors, alphas);
+            return g;
+        }
+
+        static FigForgeFill FillFromManifest(Fill fill)
+        {
+            if (fill != null && IsSdfGradient(fill))
+            {
+                var c = ToColor(fill.stops[0].color);
+                return FigForgeFill.GradientFill(ToUnityGradient(fill.stops), GradientKind(fill), GradientDir(fill.transform), c);
+            }
+            if (fill != null && fill.kind == "solid") return FigForgeFill.Solid(ToColor(fill.color));
+            return FigForgeFill.Solid(new Color(0, 0, 0, 0));
+        }
+
+        static FigForgeFill LegacyGradientFill(float[] fill, float[] fill2, float[] transform)
+        {
+            var c0 = ToColor(fill);
+            if (fill2 == null) return FigForgeFill.Solid(c0);
+            var c1 = ToColor(fill2);
+            var g = new Gradient();
+            g.SetKeys(
+                new[] { new GradientColorKey(new Color(c0.r, c0.g, c0.b, 1f), 0f), new GradientColorKey(new Color(c1.r, c1.g, c1.b, 1f), 1f) },
+                new[] { new GradientAlphaKey(c0.a, 0f), new GradientAlphaKey(c1.a, 1f) });
+            return FigForgeFill.LinearGradient(g, GradientDir(transform), c0);
+        }
+
         static bool AnyCorner(float[] c)
         {
             if (c == null) return false;
@@ -289,10 +349,15 @@ namespace FigForge
             return false;
         }
 
-        // Figma stroke alignment → outward-extension factor for the SDF shader:
-        // 0 = inside (stroke inward), 0.5 = center (straddles edge), 1 = outside.
-        static float BorderAlignFactor(string align)
-            => align == "outside" ? 1f : align == "center" ? 0.5f : 0f;
+        static FigForgeStrokeAlign StrokeAlign(string align)
+        {
+            switch (align)
+            {
+                case "outside": return FigForgeStrokeAlign.Outside;
+                case "center": return FigForgeStrokeAlign.Center;
+                default: return FigForgeStrokeAlign.Inside;
+            }
+        }
 
         // Strokes render ~1px thinner than their Figma weight because the SDF edge
         // is anti-aliased on BOTH sides (a thin border has little solid core). Add a
@@ -343,25 +408,14 @@ namespace FigForge
             var rr = go.AddComponent<FigForgeRoundedRect>();
             rr.raycastTarget = !ctx.disableRaycasts;
             var s = e.style;
-            Color border = s.stroke != null ? ToColor(s.stroke.color) : new Color(0, 0, 0, 0);
-            float bw = s.stroke != null ? StrokePx(s.stroke.weight, ctx.scaleFactor) : 0f;
-            float align = s.stroke != null ? BorderAlignFactor(s.stroke.align) : 0f;
+            var stroke = s.stroke != null
+                ? FigForgeStroke.Create(ToColor(s.stroke.color), StrokePx(s.stroke.weight, ctx.scaleFactor), StrokeAlign(s.stroke.align))
+                : FigForgeStroke.None;
 
-            Color fill, fill2; Vector2 dir;
-            if (s.fill != null && IsSdfGradient(s.fill))
-            {
-                fill = ToColor(s.fill.stops[0].color);
-                fill2 = ToColor(s.fill.stops[1].color);
-                dir = GradientDir(s.fill.transform);
-            }
-            else
-            {
-                fill = s.fill != null && s.fill.kind == "solid" ? ToColor(s.fill.color) : new Color(0, 0, 0, 0);
-                fill2 = fill; dir = Vector2.zero;
-            }
-            rr.Configure(fill, fill2, dir, border, bw, CornerRadii(s, ctx.scaleFactor), align);
+            var fill = FillFromManifest(s.fill);
+            rr.Configure(fill, stroke, CornerRadii(s, ctx.scaleFactor));
             if (s.shadows != null && s.shadows.Count > 0) ApplyShadow(rr, s.shadows[0], ctx.scaleFactor);
-            ApplyOpacity(go, e, fill);
+            ApplyOpacity(go, e, !fill.disabled ? fill.color : new Color(0, 0, 0, 0));
         }
 
         // Clip child content. A rounded element (already backed by an SDF
@@ -406,15 +460,15 @@ namespace FigForge
             }
         }
 
-        static void AddBorder(GameObject parent, ElementData e, BuildContext ctx)
+        static void AddStroke(GameObject parent, ElementData e, BuildContext ctx)
         {
             var stroke = e.style.stroke;
             int thickness = Mathf.Max(1, Mathf.RoundToInt(stroke.weight * ctx.scaleFactor));
             int radius = e.style.cornerRadius > 0 ? Mathf.RoundToInt(e.style.cornerRadius * ctx.scaleFactor) : 0;
 
-            var border = NewRect("Border", parent.transform);
-            Stretch(border.GetComponent<RectTransform>());
-            var img = border.AddComponent<Image>();
+            var strokeGo = NewRect("Stroke", parent.transform);
+            Stretch(strokeGo.GetComponent<RectTransform>());
+            var img = strokeGo.AddComponent<Image>();
             img.raycastTarget = false;
             img.sprite = RoundedOutlineSpriteCache.Get(radius, thickness);
             img.type = Image.Type.Sliced;
@@ -568,8 +622,7 @@ namespace FigForge
             if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>(); // Graphic needs it
             var rr = go.AddComponent<FigForgeRoundedRect>();
             rr.raycastTarget = true;
-            bool gradient = sh.fill2 != null;
-            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill, out var fill2, out var dir);
+            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill);
 
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = rr;
@@ -577,12 +630,12 @@ namespace FigForge
 
             // Per-state full-fill swap (works for solid AND gradient buttons): the
             // normal state is the shape's fill (gradient or solid); a captured
-            // hover/press colour is applied as a SOLID (fill2==fill, dir=0) so a
-            // gradient button flattens to the Figma rollover/pressed colour, while
+            // hover/press colour is applied as a SOLID so a gradient button
+            // flattens to the Figma rollover/pressed colour, while
             // an uncaptured state keeps the normal fill.
             var sc = e.canonical.stateColors;
             var states = go.AddComponent<FigForgeButtonStateColors>();
-            SetStates(states, new FigForgeFill(fill, fill2, dir), sc);
+            SetStates(states, fill, sc);
 
             var labelGo = NewRect("Label", go.transform);
             Stretch(labelGo.GetComponent<RectTransform>());
@@ -597,41 +650,39 @@ namespace FigForge
             return go;
         }
 
-        // Push a CanonicalShape onto a FigForgeRoundedRect (fill/gradient/border/
+        // Push a CanonicalShape onto a FigForgeRoundedRect (fill/gradient/stroke/
         // corners/align). Outputs the resolved base fill so callers can keep
         // FigForgeButtonStateColors' normal state in sync.
-        static void ApplyShapeToRR(FigForgeRoundedRect rr, CanonicalShape sh, float sf,
-                                   out Color fill, out Color fill2, out Vector2 dir)
+        static void ApplyShapeToRR(FigForgeRoundedRect rr, CanonicalShape sh, float sf, out FigForgeFill fill)
         {
-            ApplyShapeValues(sh, sf, out fill, out fill2, out dir, out var border, out var borderWidth, out var corners, out var borderAlign);
-            rr.Configure(fill, fill2, dir, border, borderWidth, corners, borderAlign);
+            ApplyShapeValues(sh, sf, out fill, out var stroke, out var corners);
+            rr.Configure(fill, stroke, corners);
             ApplyShadow(rr, sh.shadow, sf); // null/transparent → no-op
         }
 
-        static void ApplyShapeValues(CanonicalShape sh, float sf, out Color fill, out Color fill2, out Vector2 dir,
-                                     out Color border, out float borderWidth, out Vector4 corners, out float borderAlign)
+        static void ApplyShapeValues(CanonicalShape sh, float sf, out FigForgeFill fill,
+                                     out FigForgeStroke stroke, out Vector4 corners)
         {
-            fill = ToColor(sh.fill);
-            bool gradient = sh.fill2 != null;
-            fill2 = gradient ? ToColor(sh.fill2) : fill;
-            dir = gradient ? GradientDir(sh.gradientTransform) : Vector2.zero;
-            border = sh.borderColor != null ? ToColor(sh.borderColor) : new Color(0, 0, 0, 0);
+            fill = sh.gradient != null && IsSdfGradient(sh.gradient)
+                ? FillFromManifest(sh.gradient)
+                : LegacyGradientFill(sh.fill, sh.fill2, sh.gradientTransform);
+            stroke = sh.stroke != null
+                ? FigForgeStroke.Create(ToColor(sh.stroke.color), StrokePx(sh.stroke.weight, sf), StrokeAlign(sh.stroke.align))
+                : (sh.borderColor != null
+                    ? FigForgeStroke.Create(ToColor(sh.borderColor), StrokePx(sh.borderWidth, sf), StrokeAlign(sh.borderAlign))
+                    : FigForgeStroke.None);
             float br = sh.cornerRadius * sf;
-            borderWidth = StrokePx(sh.borderWidth, sf);
             corners = new Vector4(br, br, br, br);
-            borderAlign = BorderAlignFactor(sh.borderAlign);
         }
 
         static FigForgeShapeStyle ShapeStyle(CanonicalShape sh, BuildContext ctx)
         {
-            ApplyShapeValues(sh, ctx.scaleFactor, out var fill, out var fill2, out var dir, out var border, out var borderWidth, out var corners, out var borderAlign);
+            ApplyShapeValues(sh, ctx.scaleFactor, out var fill, out var stroke, out var corners);
             var style = new FigForgeShapeStyle
             {
-                fill = new FigForgeFill(fill, fill2, dir),
-                borderColor = border,
-                borderWidth = borderWidth,
+                fill = fill,
+                stroke = stroke,
                 corners = corners,
-                borderAlign = borderAlign,
                 shadowColor = new Color(0, 0, 0, 0),
                 shadowOffset = Vector2.zero,
                 shadowBlur = 0f,
@@ -656,7 +707,7 @@ namespace FigForge
         {
             var rr = inst.GetComponentInChildren<FigForgeRoundedRect>(true);
             if (rr == null) return;
-            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill, out var fill2, out var dir);
+            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill);
             var states = rr.GetComponent<FigForgeButtonStateColors>();
             if (states != null)
             {
@@ -665,7 +716,7 @@ namespace FigForge
                 // wins for hover/press. Only fall back to the base fill when the component
                 // has no rollover/pressed — so a gradient instance no longer clobbers a
                 // real hover/press colour with its regular gradient.
-                SetStates(states, new FigForgeFill(fill, fill2, dir), sc);
+                SetStates(states, fill, sc);
             }
         }
 
@@ -683,8 +734,8 @@ namespace FigForge
         // Apply a per-instance hover/press colour override onto an instantiated
         // canonical button: swap just the highlighted/pressed fills of its
         // FigForgeButtonStateColors to THIS instance's Figma rollover/pressed colour
-        // (as a SOLID — fill2==fill, dir=0 — matching BuildShapeButton, so a gradient
-        // button flattens to the rollover colour on hover). The normal/base fill is
+        // (as a SOLID, matching BuildShapeButton, so a gradient button flattens to
+        // the rollover colour on hover). The normal/base fill is
         // left as-is. Runs after ApplyInstanceShape so it wins. No-op for non-SDF
         // buttons. Creates prefab overrides on just this instance.
         static void ApplyInstanceStateColors(GameObject inst, CanonicalStateColors sc)
@@ -715,7 +766,7 @@ namespace FigForge
             if (sh == null) { var img = go.AddComponent<Image>(); img.color = new Color(1, 1, 1, 0); return img; }
             EnsureSdfShaderIncluded();
             var rr = go.AddComponent<FigForgeRoundedRect>();
-            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out _, out _, out _);
+            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out _);
             return rr;
         }
 
@@ -944,9 +995,9 @@ namespace FigForge
             if (bg == null || (c.bgRollover == null && c.bgPressed == null)) return;
             if (bg is FigForgeRoundedRect rr && c.shape != null)
             {
-                ApplyShapeToRR(rr, c.shape, ctx.scaleFactor, out var fill, out var fill2, out var dir);
+                ApplyShapeToRR(rr, c.shape, ctx.scaleFactor, out var fill);
                 var states = bg.gameObject.AddComponent<FigForgeButtonStateColors>();
-                SetStates(states, new FigForgeFill(fill, fill2, dir), new CanonicalStateColors
+                SetStates(states, fill, new CanonicalStateColors
                 {
                     highlighted = c.bgRollover,
                     pressed = c.bgPressed,
@@ -1113,8 +1164,8 @@ namespace FigForge
         {
             var style = new FigForgeListRowStyle { enabled = sh != null };
             if (sh == null) return style;
-            ApplyShapeValues(sh, sf, out style.fill, out style.fill2, out style.gradientDir,
-                out style.borderColor, out style.borderWidth, out style.corners, out style.borderAlign);
+            ApplyShapeValues(sh, sf, out style.fill,
+                out style.stroke, out style.corners);
             if (sh.shadow != null && sh.shadow.color != null)
             {
                 style.shadowColor = ToColor(sh.shadow.color);
@@ -1290,7 +1341,8 @@ namespace FigForge
         // v14: popup shell also masks dropdown option rows to its rounded silhouette.
         // v15: popup shell falls back to the closed select-box shape before option rows.
         // v16: generated input canonical prefabs build TMP_InputField instead of placeholders.
-        const int CanonicalSchema = 16;
+        // v17: canonical procedural gradients carry full n-stop Gradient data.
+        const int CanonicalSchema = 17;
 
         static string CanonicalSignature(ElementData e, string kind, float sf)
         {
@@ -1303,9 +1355,9 @@ namespace FigForge
             if (sh != null)
                 sb.Append(";cr=").Append(sh.cornerRadius.ToString("0.###"))
                   .Append(";f=").Append(SigF(sh.fill)).Append(";f2=").Append(SigF(sh.fill2))
+                  .Append(";fg=").Append(SigGradient(sh.gradient))
                   .Append(";gt=").Append(SigF(sh.gradientTransform))
-                  .Append(";bc=").Append(SigF(sh.borderColor)).Append(";bw=").Append(sh.borderWidth.ToString("0.###"))
-                  .Append(";ba=").Append(sh.borderAlign ?? "");
+                  .Append(";st=").Append(SigStroke(sh.stroke, sh.borderColor, sh.borderWidth, sh.borderAlign));
             if (sh != null && sh.shadow != null)
             {
                 var sd = sh.shadow;
@@ -1322,9 +1374,9 @@ namespace FigForge
                 var cs = c.checkShape;
                 sb.Append(";ckcr=").Append(cs.cornerRadius.ToString("0.###"))
                   .Append(";ckf=").Append(SigF(cs.fill)).Append(";ckf2=").Append(SigF(cs.fill2))
+                  .Append(";ckfg=").Append(SigGradient(cs.gradient))
                   .Append(";ckgt=").Append(SigF(cs.gradientTransform))
-                  .Append(";ckbc=").Append(SigF(cs.borderColor)).Append(";ckbw=").Append(cs.borderWidth.ToString("0.###"))
-                  .Append(";ckba=").Append(cs.borderAlign ?? "");
+                  .Append(";ckst=").Append(SigStroke(cs.stroke, cs.borderColor, cs.borderWidth, cs.borderAlign));
             }
             if (c.optionShape != null)
             {
@@ -1332,9 +1384,9 @@ namespace FigForge
                 sb.Append(";oh=").Append(c.optionHeight.ToString("0.###"))
                   .Append(";ocr=").Append(os.cornerRadius.ToString("0.###"))
                   .Append(";of=").Append(SigF(os.fill)).Append(";of2=").Append(SigF(os.fill2))
+                  .Append(";ofg=").Append(SigGradient(os.gradient))
                   .Append(";ogt=").Append(SigF(os.gradientTransform))
-                  .Append(";obc=").Append(SigF(os.borderColor)).Append(";obw=").Append(os.borderWidth.ToString("0.###"))
-                  .Append(";oba=").Append(os.borderAlign ?? "");
+                  .Append(";ost=").Append(SigStroke(os.stroke, os.borderColor, os.borderWidth, os.borderAlign));
                 if (os.shadow != null)
                 {
                     var sd = os.shadow;
@@ -1356,9 +1408,9 @@ namespace FigForge
                 sb.Append(";ih=").Append(c.itemHeight.ToString("0.###")).Append(";icount=").Append(c.count)
                   .Append(";icr=").Append(ish.cornerRadius.ToString("0.###"))
                   .Append(";if=").Append(SigF(ish.fill)).Append(";if2=").Append(SigF(ish.fill2))
+                  .Append(";ifg=").Append(SigGradient(ish.gradient))
                   .Append(";igt=").Append(SigF(ish.gradientTransform))
-                  .Append(";ibc=").Append(SigF(ish.borderColor)).Append(";ibw=").Append(ish.borderWidth.ToString("0.###"))
-                  .Append(";iba=").Append(ish.borderAlign ?? "");
+                  .Append(";ist=").Append(SigStroke(ish.stroke, ish.borderColor, ish.borderWidth, ish.borderAlign));
             }
             sb.Append(";iro=").Append(SigF(c.itemRollover));
             if (c.parts != null && c.parts.Count > 0)
@@ -1384,10 +1436,9 @@ namespace FigForge
             sb.Append(';').Append(prefix).Append("cr=").Append(sh.cornerRadius.ToString("0.###"))
               .Append(';').Append(prefix).Append("f=").Append(SigF(sh.fill))
               .Append(';').Append(prefix).Append("f2=").Append(SigF(sh.fill2))
+              .Append(';').Append(prefix).Append("fg=").Append(SigGradient(sh.gradient))
               .Append(';').Append(prefix).Append("gt=").Append(SigF(sh.gradientTransform))
-              .Append(';').Append(prefix).Append("bc=").Append(SigF(sh.borderColor))
-              .Append(';').Append(prefix).Append("bw=").Append(sh.borderWidth.ToString("0.###"))
-              .Append(';').Append(prefix).Append("ba=").Append(sh.borderAlign ?? "");
+              .Append(';').Append(prefix).Append("st=").Append(SigStroke(sh.stroke, sh.borderColor, sh.borderWidth, sh.borderAlign));
             if (sh.shadow != null)
             {
                 sb.Append(';').Append(prefix).Append("sh=").Append(SigF(sh.shadow.color)).Append(',')
@@ -1405,6 +1456,24 @@ namespace FigForge
 
         static string SigF(float[] a)
             => a == null ? "_" : string.Join(",", System.Array.ConvertAll(a, x => x.ToString("0.###")));
+
+        static string SigGradient(Fill f)
+        {
+            if (f == null) return "_";
+            var sb = new System.Text.StringBuilder();
+            sb.Append(f.gradient ?? "").Append(':').Append(SigF(f.transform));
+            if (f.stops != null)
+                for (int i = 0; i < f.stops.Count; i++)
+                    sb.Append('|').Append(f.stops[i].position.ToString("0.###")).Append('=').Append(SigF(f.stops[i].color));
+            return sb.ToString();
+        }
+
+        static string SigStroke(Stroke stroke, float[] legacyColor, float legacyWidth, string legacyAlign)
+        {
+            if (stroke != null)
+                return SigF(stroke.color) + "," + stroke.weight.ToString("0.###") + "," + (stroke.align ?? "") + "," + (stroke.dashed ? "d" : "s");
+            return SigF(legacyColor) + "," + legacyWidth.ToString("0.###") + "," + (legacyAlign ?? "");
+        }
 
         static void RegisterInLibrary(BuildContext ctx, string kind, string refName, GameObject prefab, string signature = null)
         {

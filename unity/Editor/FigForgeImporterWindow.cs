@@ -131,8 +131,12 @@ namespace FigForge
         // matching font (project → OS) and build a TMP asset for it.
         TMP_FontAsset ResolveFontAsset(string family, string style)
         {
-            if (_fontMap.TryGetValue($"{family}|{style}", out var a) && a != null) return a;
-            return FontAutoImporter.Resolve(family, style, m => Log(m, MessageType.Info));
+            var key = $"{family}|{style}";
+            if (_fontMap.TryGetValue(key, out var a) && a != null) return a;
+
+            var resolved = FontAutoImporter.Resolve(family, style, m => Log(m, MessageType.Info));
+            if (resolved != null) _fontMap[key] = resolved;
+            return resolved;
         }
 
         TMP_FontAsset GuessFont(string family, string style)
@@ -142,17 +146,20 @@ namespace FigForge
             // matching + can generate the exact weight). The old family-only /
             // first-available fallbacks were harmful — they cached e.g. a Regular
             // face for an "Extra Bold" request and shadowed the smart resolver.
-            var fam = (family ?? "").Replace(" ", "").ToLower();
-            var sty = (style ?? "").Replace(" ", "").ToLower();
+            var fam = FontKey(family);
+            var sty = FontKey(style);
             if (fam == "") return null;
             return _projectFonts.FirstOrDefault(f =>
             {
                 if (f == null) return false; // guard stale/destroyed refs (fonts deleted since the last refresh)
-                var n = f.name.Replace(" ", "").ToLower();
+                var n = FontKey(f.name);
                 if (!n.Contains(fam)) return false;
                 return sty == "" || sty == "regular" ? n.Contains("regular") : n.Contains(sty);
             });
         }
+
+        static string FontKey(string s) =>
+            new string((s ?? "").ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
 
         // -----------------------------------------------------------------------
         void OnGUI()
@@ -733,7 +740,7 @@ namespace FigForge
                     outFolder = _uitkOutFolder, sprites = sprites, log = mm => Log(mm, MessageType.Warning),
                     resolveFontPath = (fam, sty) =>
                     {
-                        var fa = _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null;
+                        var fa = ResolveFontAsset(fam, sty);
                         return new TMP_FontAssetRef { assetPath = fa != null ? AssetDatabase.GetAssetPath(fa) : null };
                     },
                 };
@@ -766,7 +773,7 @@ namespace FigForge
                     sprites = sprites,
                     resolveFontPath = (fam, sty) =>
                     {
-                        var fa = _fontMap.TryGetValue($"{fam}|{sty}", out var a) ? a : null;
+                        var fa = ResolveFontAsset(fam, sty);
                         return new TMP_FontAssetRef { assetPath = fa != null ? AssetDatabase.GetAssetPath(fa) : null };
                     },
                     log = m => Log(m, MessageType.Warning),

@@ -29,5 +29,6 @@ Pick one with the **UI backend** dropdown:
 - Constraint-driven `RectTransform` anchors (stretch / pin / proportional), not everything centered.
 - Sprite images, **solid + gradient fills**, **real stroke borders**, **rotation**, and procedural **rounded panels** for fill-only rounded containers.
 - `TextMeshProUGUI` text with per-family/style font mapping.
+- Bundled Inter static faces auto-generate project-local TMP font assets when an import requests Inter and the project does not already provide that weight.
 - **Canonical UI elements**: layers like `Btn_<instance>_<ref>` and `Inp_<instance>_<ref>` become generated or library-backed uGUI controls through your **Canonical Library** (Create ▸ FigForge ▸ Canonical Library).
 - **Connected scenes**: each imported frame becomes a `BaseScreen` under a shared `Canvas` + `ScreenManager`, so several pages live in one navigable scene.

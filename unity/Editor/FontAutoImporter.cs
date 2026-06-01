@@ -1,17 +1,19 @@
 // =============================================================================
 // FigForge — auto font import. Resolves a Figma (family, style) to a
 // TMP_FontAsset, generating one on first sight from the best-matching font file:
-// an existing TMP asset, then a .ttf/.otf in the project, then a file in the OS
-// font folders (copied in). Generated assets are dynamic SDF (glyphs bake on
-// demand) and named after their source file so the real weight is visible (faux
-// bold/italic only applies when the chosen file isn't that weight).
+// an existing TMP asset, then a .ttf/.otf in the project, then bundled Inter
+// fonts, then a file in the OS font folders (copied in). Generated assets are
+// dynamic SDF (glyphs bake on demand) and named after their source file so the
+// real weight is visible (faux bold/italic only applies when the chosen file
+// isn't that weight).
 //
 // Matching is token-based and tiered so "Arial" doesn't grab "Arial Unicode" and
 // a Bold request prefers "Arial Bold" over "Arial Bold Italic".
 //
-// The Figma plugin can't ship the font binary (Figma exposes font *names*, not
-// the file), so the file must already exist on this machine; if it doesn't we
-// fall back to TMP's default and log exactly what to add.
+// The Figma plugin can't ship arbitrary font binaries (Figma exposes font
+// *names*, not the file), so non-bundled families must already exist on this
+// machine; if they don't we fall back to TMP's default and log exactly what to
+// add.
 // =============================================================================
 
 using System;
@@ -109,27 +111,56 @@ namespace FigForge
             }
         }
 
-        // Best .ttf/.otf for (family, style) across project + OS by tier; copies an
-        // OS file into the project when it's the winner.
+        // Best .ttf/.otf for (family, style) across project + package + OS by
+        // tier; copies an OS file into the project when it's the winner.
         static string FindFontFile(string family, string style)
         {
             var candidates = AssetDatabase.FindAssets("t:Font").Select(AssetDatabase.GUIDToAssetPath)
-                .Where(IsFontFile).Concat(OsFontFiles());
-            string chosen = null; int bestTier = int.MaxValue;
+                .Where(IsFontFile).Concat(BundledInterFontFiles()).Concat(OsFontFiles())
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            string chosen = null; int bestTier = int.MaxValue; int bestSource = int.MaxValue;
             foreach (var p in candidates)
             {
                 int t = Tier(Path.GetFileNameWithoutExtension(p), family, style);
-                if (t < 0 || t >= bestTier) continue;
-                bestTier = t; chosen = p;
+                if (t < 0) continue;
+                int source = SourceRank(p);
+                if (t > bestTier || (t == bestTier && source >= bestSource)) continue;
+                bestTier = t; bestSource = source; chosen = p;
                 if (t == 0 && p.StartsWith("Assets/")) break; // can't beat an in-project exact match
             }
             if (chosen == null) return null;
-            if (chosen.StartsWith("Assets/")) return chosen;
+            if (IsAssetDatabasePath(chosen)) return chosen;
 
             TextureImportHelper.EnsureFolder(FontFolder);
             string dest = $"{FontFolder}/{Path.GetFileName(chosen)}";
             try { File.Copy(chosen, ProjectAbs(dest), true); AssetDatabase.ImportAsset(dest); return dest; }
             catch { return null; }
+        }
+
+        static IEnumerable<string> BundledInterFontFiles()
+        {
+            const string dir = "Packages/com.figforge.unity-importer/Fonts/Inter";
+            foreach (var style in new[]
+            {
+                "Thin", "ThinItalic", "ExtraLight", "ExtraLightItalic", "Light", "LightItalic",
+                "Regular", "Italic", "Medium", "MediumItalic", "SemiBold", "SemiBoldItalic",
+                "Bold", "BoldItalic", "ExtraBold", "ExtraBoldItalic", "Black", "BlackItalic"
+            })
+            {
+                var path = $"{dir}/Inter-{style}.ttf";
+                if (AssetDatabase.LoadAssetAtPath<Font>(path) != null) yield return path;
+            }
+        }
+
+        static bool IsAssetDatabasePath(string p) =>
+            p.StartsWith("Assets/", StringComparison.Ordinal) || p.StartsWith("Packages/", StringComparison.Ordinal);
+
+        static int SourceRank(string p)
+        {
+            if (p.StartsWith("Assets/", StringComparison.Ordinal)) return 0;
+            if (p.StartsWith("Packages/com.figforge.unity-importer/", StringComparison.Ordinal)) return 1;
+            if (p.StartsWith("Packages/", StringComparison.Ordinal)) return 2;
+            return 3;
         }
 
         // Lower = better; -1 = family doesn't match at all. Compares the token set

@@ -9,31 +9,177 @@
 
 using UnityEngine;
 using UnityEngine.UI;
+using System.Collections.Generic;
+using System.Text;
 
 namespace FigForge
 {
-    // One button-state fill: a solid colour OR a 2-stop linear gradient, in a single
-    // serialized field. Replaces the old colour/colour2/dir triple so the inspector
-    // shows one "Normal / Highlighted / Pressed" entry instead of nine loose fields.
+    public enum FigForgeFillKind { Solid, Gradient }
+    public enum FigForgeGradientKind { Linear, Radial, Angular, Diamond }
+    public enum FigForgeStrokeAlign { Inside, Center, Outside }
+
+    // One button-state fill: a solid colour OR a gradient, in a single
+    // serialized field. Gradients use Unity's Gradient so any number of stops can
+    // be carried through the importer and edited naturally in the inspector.
     [System.Serializable]
     public struct FigForgeFill
     {
-        public Color color;    // solid, or gradient stop 0
-        public Color color2;   // gradient stop 1
-        public Vector2 dir;    // gradient direction; (0,0) = solid
-        public FigForgeFill(Color c, Color c2, Vector2 d) { color = c; color2 = c2; dir = d; }
-        public static FigForgeFill Solid(Color c) => new FigForgeFill(c, c, Vector2.zero);
-        public static FigForgeFill Gradient(Color a, Color b, Vector2 d) => new FigForgeFill(a, b, d);
+        public bool disabled;
+        public FigForgeFillKind kind;
+        public Color color;       // solid fallback, or the gradient's first stop
+        public FigForgeGradientKind gradientKind;
+        public Gradient gradient; // null or empty = solid
+        public Vector2 dir;       // linear direction / angular-diamond rotation hint
+
+        public FigForgeFill(Color c, Gradient g, Vector2 d, FigForgeGradientKind gradientKind = FigForgeGradientKind.Linear)
+        {
+            disabled = false;
+            kind = FigForgeFillKind.Gradient;
+            color = c;
+            this.gradientKind = gradientKind;
+            gradient = g;
+            dir = d;
+            Normalize();
+        }
+
+        public bool HasGradient =>
+            kind == FigForgeFillKind.Gradient
+            && gradient != null && gradient.colorKeys != null && gradient.colorKeys.Length > 0
+            && !IsSingleColorGradient(gradient);
+
+        public static FigForgeFill Solid(Color c)
+        {
+            return new FigForgeFill
+            {
+                disabled = false,
+                kind = FigForgeFillKind.Solid,
+                color = c,
+                gradientKind = FigForgeGradientKind.Linear,
+                gradient = null,
+                dir = Vector2.zero,
+            };
+        }
+
+        public static FigForgeFill GradientFill(Gradient g, FigForgeGradientKind kind, Vector2 d, Color fallback)
+            => new FigForgeFill(fallback, g, d, kind);
+        public static FigForgeFill LinearGradient(Gradient g, Vector2 d, Color fallback)
+            => GradientFill(g, FigForgeGradientKind.Linear, d, fallback);
+
+        public void Normalize()
+        {
+            if (disabled)
+            {
+                return;
+            }
+
+            if (kind == FigForgeFillKind.Solid)
+            {
+                gradient = null;
+                gradientKind = FigForgeGradientKind.Linear;
+                dir = Vector2.zero;
+                return;
+            }
+
+            if (gradient == null || gradient.colorKeys == null || gradient.colorKeys.Length == 0)
+            {
+                kind = FigForgeFillKind.Solid;
+                gradient = null;
+                dir = Vector2.zero;
+                return;
+            }
+
+            if (IsSingleColorGradient(gradient))
+            {
+                kind = FigForgeFillKind.Solid;
+                color = gradient.Evaluate(0f);
+                gradient = null;
+                gradientKind = FigForgeGradientKind.Linear;
+                dir = Vector2.zero;
+                return;
+            }
+
+            if (dir.sqrMagnitude <= 1e-8f) dir = new Vector2(0f, -1f);
+        }
+
+        static bool IsSingleColorGradient(Gradient gradient)
+        {
+            if (gradient == null) return true;
+            Color first = gradient.Evaluate(0f);
+            if (!SameColor(first, gradient.Evaluate(1f))) return false;
+            var colors = gradient.colorKeys;
+            if (colors != null)
+                for (int i = 0; i < colors.Length; i++)
+                    if (!SameColor(first, gradient.Evaluate(colors[i].time))) return false;
+            var alphas = gradient.alphaKeys;
+            if (alphas != null)
+                for (int i = 0; i < alphas.Length; i++)
+                    if (!SameColor(first, gradient.Evaluate(alphas[i].time))) return false;
+            return true;
+        }
+
+        static bool SameColor(Color a, Color b)
+        {
+            const float Eps = 0.0005f;
+            return Mathf.Abs(a.r - b.r) <= Eps
+                && Mathf.Abs(a.g - b.g) <= Eps
+                && Mathf.Abs(a.b - b.b) <= Eps
+                && Mathf.Abs(a.a - b.a) <= Eps;
+        }
+    }
+
+    [System.Serializable]
+    public struct FigForgeStroke
+    {
+        public bool enabled;
+        public Color color;
+        public float weight;
+        public FigForgeStrokeAlign align;
+
+        public float Outset => !enabled ? 0f : Mathf.Max(0f, weight) * AlignFactor(align);
+
+        public static FigForgeStroke None => new FigForgeStroke
+        {
+            enabled = false,
+            color = new Color(0, 0, 0, 0),
+            weight = 0f,
+            align = FigForgeStrokeAlign.Inside,
+        };
+
+        public static FigForgeStroke Create(Color color, float weight, FigForgeStrokeAlign align)
+        {
+            var stroke = new FigForgeStroke
+            {
+                enabled = weight > 0.001f && color.a > 0.001f,
+                color = color,
+                weight = Mathf.Max(0f, weight),
+                align = align,
+            };
+            return stroke;
+        }
+
+        public void Normalize()
+        {
+            weight = Mathf.Max(0f, weight);
+            if (weight <= 0.001f || color.a <= 0.001f) enabled = false;
+        }
+
+        static float AlignFactor(FigForgeStrokeAlign align)
+        {
+            switch (align)
+            {
+                case FigForgeStrokeAlign.Outside: return 1f;
+                case FigForgeStrokeAlign.Center: return 0.5f;
+                default: return 0f;
+            }
+        }
     }
 
     [System.Serializable]
     public struct FigForgeShapeStyle
     {
         public FigForgeFill fill;
-        public Color borderColor;
-        public float borderWidth;
+        public FigForgeStroke stroke;
         public Vector4 corners;
-        public float borderAlign;
         public Color shadowColor;
         public Vector2 shadowOffset;
         public float shadowBlur;
@@ -49,12 +195,8 @@ namespace FigForge
     [AddComponentMenu("FigForge/Rounded Rect")]
     public class FigForgeRoundedRect : MaskableGraphic
     {
-        [SerializeField] Color fillColor = Color.white;
-        [SerializeField] Color fillColor2 = Color.white;     // gradient end
-        [SerializeField] Vector2 gradientDir = Vector2.zero; // (0,0) = solid
-        [SerializeField] Color borderColor = new Color(0, 0, 0, 0);
-        [SerializeField] float borderWidth = 0f;             // px
-        [SerializeField] float borderAlign = 0f;             // 0=inside, 0.5=center, 1=outside
+        [SerializeField] FigForgeFill fill = FigForgeFill.Solid(Color.white);
+        [SerializeField] FigForgeStroke stroke = FigForgeStroke.None;
         [SerializeField] Vector4 corners = Vector4.zero;     // per-corner radii px: (tl, tr, br, bl)
         [SerializeField] Color shadowColor = new Color(0, 0, 0, 0); // drop shadow (a==0 → off)
         [SerializeField] Vector2 shadowOffset = Vector2.zero;        // px, Unity space (+y up)
@@ -70,7 +212,7 @@ namespace FigForge
             AdditionalCanvasShaderChannels.Tangent;
 
         // How far the stroke extends OUTSIDE the fill edge (scaled px).
-        float StrokeOutset() => Mathf.Max(0f, borderWidth) * Mathf.Clamp01(borderAlign);
+        float StrokeOutset() => stroke.Outset;
         // How far the drop shadow reaches beyond the fill edge (offset + spread + the
         // Gaussian tail + margin). The shader uses sigma = blur/2 and the tail is
         // negligible past ~3·sigma = 1.5·blur, so pad by 1.75·blur to avoid clipping it.
@@ -80,30 +222,50 @@ namespace FigForge
         // Total mesh padding so stroke AND shadow have geometry to draw on.
         float MeshPad() => Mathf.Max(StrokeOutset(), ShadowReach());
 
-        public Color FillColor { get => fillColor; set { fillColor = value; Push(); } }
+        public FigForgeFill Fill { get => fill; set => SetFill(value); }
 
         // Swap the whole fill at runtime (used by FigForgeButtonStateColors for
-        // per-state colours). Setting fill2==fill and grad=(0,0) renders solid;
-        // a real second colour + direction renders the gradient — so a gradient
-        // button can show its gradient at rest and a solid colour on hover/press.
-        public void SetFill(Color fill, Color fill2, Vector2 grad)
+        // per-state colours). A null/empty gradient or zero direction renders solid.
+        public void SetFill(Color fill, Gradient gradient, Vector2 grad)
         {
-            fillColor = fill; fillColor2 = fill2; gradientDir = grad; Push();
+            SetFill(fill, gradient, FigForgeGradientKind.Linear, grad);
         }
 
-        // Swap the whole fill from a single FigForgeFill (solid or gradient).
-        public void SetFill(FigForgeFill f) => SetFill(f.color, f.color2, f.dir);
-
-        public void Configure(Color fill, Color fill2, Vector2 grad, Color border, float borderW, Vector4 cornerRadii, float borderAlignment = 0f)
+        public void SetFill(Color fill, Gradient gradient, FigForgeGradientKind gradientKind, Vector2 grad)
         {
-            SetShapeFields(fill, fill2, grad, border, borderW, cornerRadii, borderAlignment);
+            SetFill(FigForgeFill.GradientFill(gradient, gradientKind, grad, fill));
+        }
+
+        // Backwards-compatible overload for user code compiled against the older
+        // two-colour API. New importer code uses the Gradient overload above.
+        public void SetFill(Color fill, Color fill2, Vector2 grad)
+            => SetFill(grad.sqrMagnitude > 1e-8f ? FigForgeFill.LinearGradient(MakeGradient(fill, fill2), grad, fill) : FigForgeFill.Solid(fill));
+
+        // Swap the whole fill from a single FigForgeFill (solid or gradient).
+        public void SetFill(FigForgeFill f) => SetFillInternal(f);
+        void SetFillInternal(FigForgeFill f)
+        {
+            f.Normalize();
+            fill = f;
             Push();
         }
 
+        public void Configure(FigForgeFill fill, FigForgeStroke stroke, Vector4 cornerRadii)
+        {
+            SetShapeFields(fill, stroke, cornerRadii);
+            Push();
+        }
+
+        public void Configure(FigForgeFill fill, Color strokeColor, float strokeWeight, Vector4 cornerRadii, float strokeAlignment = 0f)
+            => Configure(fill, FigForgeStroke.Create(strokeColor, strokeWeight, StrokeAlignFromFactor(strokeAlignment)), cornerRadii);
+
+        public void Configure(Color fill, Color fill2, Vector2 grad, Color strokeColor, float strokeWeight, Vector4 cornerRadii, float strokeAlignment = 0f)
+            => Configure(grad.sqrMagnitude > 1e-8f ? FigForgeFill.LinearGradient(MakeGradient(fill, fill2), grad, fill) : FigForgeFill.Solid(fill),
+                strokeColor, strokeWeight, cornerRadii, strokeAlignment);
+
         public void SetStyle(FigForgeShapeStyle style)
         {
-            SetShapeFields(style.fill.color, style.fill.color2, style.fill.dir,
-                style.borderColor, style.borderWidth, style.corners, style.borderAlign);
+            SetShapeFields(style.fill, style.stroke, style.corners);
             SetShadowFields(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread);
             SetVerticesDirty(); // mesh padding may have changed
             Push();
@@ -118,11 +280,13 @@ namespace FigForge
             Push();
         }
 
-        void SetShapeFields(Color fill, Color fill2, Vector2 grad, Color border, float borderW, Vector4 cornerRadii, float borderAlignment)
+        void SetShapeFields(FigForgeFill fill, FigForgeStroke stroke, Vector4 cornerRadii)
         {
-            fillColor = fill; fillColor2 = fill2; gradientDir = grad;
-            borderColor = border; borderWidth = borderW; corners = cornerRadii;
-            borderAlign = borderAlignment;
+            fill.Normalize();
+            stroke.Normalize();
+            this.fill = fill;
+            this.stroke = stroke;
+            corners = cornerRadii;
         }
 
         void SetShadowFields(Color color, Vector2 offset, float blur, float spread)
@@ -141,6 +305,8 @@ namespace FigForge
         }
 
         public override Material material { get => EnsureMat() ?? base.material; set { } }
+        public override Texture mainTexture
+            => !fill.disabled && HasGradient() ? FigForgeGradientTextureCache.Get(fill.gradient) : Texture2D.whiteTexture;
 
         void EnsureCanvasChannels()
         {
@@ -154,7 +320,10 @@ namespace FigForge
             EnsureMat();
             EnsureCanvasChannels();
             SetVerticesDirty();
+            SetMaterialDirty();
         }
+
+        bool HasGradient() => !fill.disabled && fill.HasGradient;
 
         // The shader supplies fill/border/gradient; vertex color is reserved for
         // Graphic.color / CanvasRenderer tint.
@@ -167,16 +336,17 @@ namespace FigForge
             float pad = MeshPad();
             float x0 = r.x - pad, y0 = r.y - pad, x1 = r.xMax + pad, y1 = r.yMax + pad;
             var c = color;
-            var fill = PackColor(fillColor);
-            var fill2 = PackColor(fillColor2);
-            var border = PackColor(borderColor);
+            var fillColor = !fill.disabled ? fill.color : new Color(0, 0, 0, 0);
+            var fillPacked = PackColor(fillColor);
+            var strokePacked = PackColor(stroke.enabled ? stroke.color : new Color(0, 0, 0, 0));
             var shadow = PackColor(shadowColor);
-            float grad = PackSignedUnitPair(gradientDir);
-            var uv0 = new Vector4(0, 0, fill.x, fill.y);
-            var uv1 = new Vector4(fill2.x, fill2.y, border.x, border.y);
+            float grad = HasGradient() ? PackSignedUnitPair(fill.dir) : 0f;
+            float gradKind = HasGradient() ? (float)fill.gradientKind + 1f : 0f;
+            var uv0 = new Vector4(0, 0, fillPacked.x, fillPacked.y);
+            var uv1 = new Vector4(gradKind, 0, strokePacked.x, strokePacked.y);
             var uv2 = new Vector4(shadow.x, shadow.y, r.width, r.height);
             var uv3 = new Vector4(grad, corners.x, corners.y, corners.z);
-            var n = new Vector3(corners.w, borderWidth, StrokeOutset());
+            var n = new Vector3(corners.w, stroke.enabled ? stroke.weight : 0f, StrokeOutset());
             var t = new Vector4(shadowOffset.x, shadowOffset.y, shadowBlur, shadowSpread);
             vh.Clear();
             AddVert(vh, new Vector3(x0, y0), c, uv0, uv1, uv2, uv3, n, t);
@@ -220,11 +390,91 @@ namespace FigForge
             return (x * 256 + y + 1) / 65536f;
         }
 
+        static Gradient MakeGradient(Color a, Color b)
+        {
+            var g = new Gradient();
+            g.SetKeys(
+                new[] { new GradientColorKey(a, 0f), new GradientColorKey(b, 1f) },
+                new[] { new GradientAlphaKey(a.a, 0f), new GradientAlphaKey(b.a, 1f) });
+            return g;
+        }
+
+        static FigForgeStrokeAlign StrokeAlignFromFactor(float factor)
+        {
+            if (factor >= 0.75f) return FigForgeStrokeAlign.Outside;
+            if (factor >= 0.25f) return FigForgeStrokeAlign.Center;
+            return FigForgeStrokeAlign.Inside;
+        }
+
         protected override void OnEnable() { base.OnEnable(); Push(); }
         protected override void OnCanvasHierarchyChanged() { base.OnCanvasHierarchyChanged(); EnsureCanvasChannels(); }
         protected override void OnRectTransformDimensionsChange() { base.OnRectTransformDimensionsChange(); Push(); }
 #if UNITY_EDITOR
-        protected override void OnValidate() { base.OnValidate(); Push(); }
+        protected override void OnValidate() { fill.Normalize(); stroke.Normalize(); base.OnValidate(); Push(); }
 #endif
+    }
+
+    static class FigForgeGradientTextureCache
+    {
+        const int Res = 256;
+        static readonly Dictionary<string, Texture2D> _mem = new Dictionary<string, Texture2D>();
+
+        public static Texture2D Get(Gradient gradient)
+        {
+            if (gradient == null) return Texture2D.whiteTexture;
+            string key = Key(gradient);
+            if (_mem.TryGetValue(key, out var cached) && cached != null) return cached;
+
+            var tex = new Texture2D(Res, 1, TextureFormat.RGBA32, false)
+            {
+                name = "FigForgeGradient_" + key,
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear,
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+            var px = new Color[Res];
+            for (int x = 0; x < Res; x++)
+                px[x] = gradient.Evaluate((float)x / (Res - 1));
+            tex.SetPixels(px);
+            tex.Apply(false, true);
+            _mem[key] = tex;
+            return tex;
+        }
+
+        static string Key(Gradient gradient)
+        {
+            var sb = new StringBuilder();
+            var colors = gradient.colorKeys;
+            var alphas = gradient.alphaKeys;
+            for (int i = 0; i < colors.Length; i++)
+            {
+                var k = colors[i];
+                sb.Append('c').Append(Mathf.RoundToInt(k.time * 10000f)).Append('_')
+                  .Append(Mathf.RoundToInt(k.color.r * 255f)).Append('_')
+                  .Append(Mathf.RoundToInt(k.color.g * 255f)).Append('_')
+                  .Append(Mathf.RoundToInt(k.color.b * 255f)).Append(';');
+            }
+            for (int i = 0; i < alphas.Length; i++)
+            {
+                var k = alphas[i];
+                sb.Append('a').Append(Mathf.RoundToInt(k.time * 10000f)).Append('_')
+                  .Append(Mathf.RoundToInt(k.alpha * 255f)).Append(';');
+            }
+            return StableHash(sb.ToString()).ToString("X8");
+        }
+
+        static uint StableHash(string text)
+        {
+            unchecked
+            {
+                uint hash = 2166136261u;
+                for (int i = 0; i < text.Length; i++)
+                {
+                    hash ^= text[i];
+                    hash *= 16777619u;
+                }
+                return hash;
+            }
+        }
     }
 }

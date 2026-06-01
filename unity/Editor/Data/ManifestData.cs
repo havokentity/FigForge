@@ -111,9 +111,12 @@ namespace FigForge
     public class CanonicalShape
     {
         public float cornerRadius;
-        public float[] fill;              // solid colour, or gradient stop 0
-        public float[] fill2;             // gradient stop 1 (null = solid fill)
-        public float[] gradientTransform; // gradient affine (null = solid fill)
+        public float[] fill;              // solid colour, or legacy gradient stop 0
+        public Fill gradient;             // linear n-stop gradient background
+        public float[] fill2;             // legacy gradient stop 1 (null = solid fill)
+        public float[] gradientTransform; // legacy gradient affine (null = solid fill)
+        public Stroke stroke;
+        // Legacy fields kept for older manifests.
         public float[] borderColor;
         public float borderWidth;
         public string borderAlign;        // inside|outside|center (null = inside)
