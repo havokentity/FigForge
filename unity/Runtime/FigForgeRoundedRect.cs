@@ -197,6 +197,7 @@ namespace FigForge
     {
         [SerializeField] FigForgeFill fill = FigForgeFill.Solid(Color.white);
         [SerializeField] FigForgeStroke stroke = FigForgeStroke.None;
+        [SerializeField] bool strokeUsesFillGradient = false;
         [SerializeField] Vector4 corners = Vector4.zero;     // per-corner radii px: (tl, tr, br, bl)
         [SerializeField] Color shadowColor = new Color(0, 0, 0, 0); // drop shadow (a==0 → off)
         [SerializeField] Vector2 shadowOffset = Vector2.zero;        // px, Unity space (+y up)
@@ -250,9 +251,9 @@ namespace FigForge
             Push();
         }
 
-        public void Configure(FigForgeFill fill, FigForgeStroke stroke, Vector4 cornerRadii)
+        public void Configure(FigForgeFill fill, FigForgeStroke stroke, Vector4 cornerRadii, bool strokeUsesFillGradient = false)
         {
-            SetShapeFields(fill, stroke, cornerRadii);
+            SetShapeFields(fill, stroke, cornerRadii, strokeUsesFillGradient);
             Push();
         }
 
@@ -265,7 +266,7 @@ namespace FigForge
 
         public void SetStyle(FigForgeShapeStyle style)
         {
-            SetShapeFields(style.fill, style.stroke, style.corners);
+            SetShapeFields(style.fill, style.stroke, style.corners, false);
             SetShadowFields(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread);
             SetVerticesDirty(); // mesh padding may have changed
             Push();
@@ -280,12 +281,13 @@ namespace FigForge
             Push();
         }
 
-        void SetShapeFields(FigForgeFill fill, FigForgeStroke stroke, Vector4 cornerRadii)
+        void SetShapeFields(FigForgeFill fill, FigForgeStroke stroke, Vector4 cornerRadii, bool strokeUsesFillGradient)
         {
             fill.Normalize();
             stroke.Normalize();
             this.fill = fill;
             this.stroke = stroke;
+            this.strokeUsesFillGradient = strokeUsesFillGradient && stroke.enabled && fill.HasGradient;
             corners = cornerRadii;
         }
 
@@ -343,7 +345,7 @@ namespace FigForge
             float grad = HasGradient() ? PackSignedUnitPair(fill.dir) : 0f;
             float gradKind = HasGradient() ? (float)fill.gradientKind + 1f : 0f;
             var uv0 = new Vector4(0, 0, fillPacked.x, fillPacked.y);
-            var uv1 = new Vector4(gradKind, 0, strokePacked.x, strokePacked.y);
+            var uv1 = new Vector4(gradKind, strokeUsesFillGradient ? 1f : 0f, strokePacked.x, strokePacked.y);
             var uv2 = new Vector4(shadow.x, shadow.y, r.width, r.height);
             var uv3 = new Vector4(grad, corners.x, corners.y, corners.z);
             var n = new Vector3(corners.w, stroke.enabled ? stroke.weight : 0f, StrokeOutset());

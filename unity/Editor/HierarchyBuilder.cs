@@ -128,16 +128,28 @@ namespace FigForge
                     var labelTmp = (bindings != null ? bindings.label : null) ?? inst.GetComponentInChildren<TMP_Text>(true);
                     ApplyFont(labelTmp, e.canonical.labelFont, ctx);
                 }
+                if (e.canonical.labelFontSize.HasValue && e.canonical.defLabelFontSize.HasValue
+                    && Mathf.Abs(e.canonical.labelFontSize.Value - e.canonical.defLabelFontSize.Value) > 0.001f)
+                {
+                    var labelTmp = (bindings != null ? bindings.label : null) ?? inst.GetComponentInChildren<TMP_Text>(true);
+                    ApplyFontSize(labelTmp, e.canonical.labelFontSize.Value, ctx);
+                }
 
                 // Per-instance shape override — an instance whose stroke/fill/corner
                 // was tweaked in Figma re-skins just this button (shared prefab intact).
                 if (e.canonical.instanceShape != null)
                     ApplyInstanceShape(inst, e.canonical.instanceShape, e.canonical.stateColors, ctx);
 
+                if (e.canonical.instanceRootShape != null)
+                    ApplyInstanceRootShape(inst, e.canonical.instanceRootShape, ctx);
+
+                if (e.canonical.instanceStateShapes != null)
+                    ApplyInstanceStateShapes(inst, e.canonical.instanceStateShapes, ctx);
+
                 // Per-instance hover/press colour override — an instance whose rollover
                 // or pressed colour differs from the component re-skins just this button.
                 if (e.canonical.instanceStateColors != null)
-                    ApplyInstanceStateColors(inst, e.canonical.instanceStateColors);
+                    ApplyInstanceStateColors(inst, e.canonical.instanceStateColors, e.canonical.instanceShape ?? e.canonical.shape, ctx);
 
                 AttachNav(inst, e, ctx);
                 if (!string.IsNullOrEmpty(e.canonical.instanceName))
@@ -206,7 +218,10 @@ namespace FigForge
         static void ApplyVisual(GameObject go, ElementData e, BuildContext ctx, bool hasAsset)
         {
             var style = e.style;
-            bool needGraphic = hasAsset || (style != null && (style.fill != null || style.stroke != null));
+            bool needGraphic = hasAsset || (style != null && (style.fill != null || style.stroke != null
+                || (style.fills != null && style.fills.Count > 0)
+                || (style.strokes != null && style.strokes.Count > 0)
+                || (style.shadows != null && style.shadows.Count > 0)));
             if (!needGraphic) return;
 
             // Procedural SDF for rounded/bordered solid panels (crisp at any size,
@@ -245,11 +260,17 @@ namespace FigForge
         {
             if (s == null) return false;
             if (s.fill != null && s.fill.kind == "image") return false;
+            if (s.fills != null)
+            {
+                for (int i = 0; i < s.fills.Count; i++)
+                    if (s.fills[i] != null && s.fills[i].kind == "image") return false;
+            }
             if (s.fill != null && s.fill.kind == "gradient") return IsSdfGradient(s.fill);
             bool rounded = s.cornerRadius > 0.01f || AnyCorner(s.corners);
-            bool border = s.stroke != null;
+            bool border = s.stroke != null || (s.strokes != null && s.strokes.Count > 0);
             bool hasShadow = s.shadows != null && s.shadows.Count > 0; // drop shadow → SDF panel renders it
-            return rounded || border || hasShadow;
+            bool layeredPaint = (s.fills != null && s.fills.Count > 1) || (s.strokes != null && s.strokes.Count > 1);
+            return rounded || border || hasShadow || layeredPaint;
         }
 
         // Apply a captured Figma drop shadow to the SDF graphic. Figma offset is +y
@@ -408,14 +429,26 @@ namespace FigForge
             var rr = go.AddComponent<FigForgeRoundedRect>();
             rr.raycastTarget = !ctx.disableRaycasts;
             var s = e.style;
-            var stroke = s.stroke != null
-                ? FigForgeStroke.Create(ToColor(s.stroke.color), StrokePx(s.stroke.weight, ctx.scaleFactor), StrokeAlign(s.stroke.align))
-                : FigForgeStroke.None;
+            rr.Configure(FigForgeFill.Solid(new Color(0, 0, 0, 0)), FigForgeStroke.None, CornerRadii(s, ctx.scaleFactor));
+            var sh = ShapeFromStyle(s);
+            BuildShapeVisualLayers(go.transform, sh, ctx);
+            ApplyOpacity(go, e, Color.white);
+        }
 
-            var fill = FillFromManifest(s.fill);
-            rr.Configure(fill, stroke, CornerRadii(s, ctx.scaleFactor));
-            if (s.shadows != null && s.shadows.Count > 0) ApplyShadow(rr, s.shadows[0], ctx.scaleFactor);
-            ApplyOpacity(go, e, !fill.disabled ? fill.color : new Color(0, 0, 0, 0));
+        static CanonicalShape ShapeFromStyle(StyleData s)
+        {
+            if (s == null) return null;
+            return new CanonicalShape
+            {
+                cornerRadius = s.cornerRadius,
+                fill = s.fill != null && s.fill.kind == "solid" ? s.fill.color : null,
+                gradient = s.fill != null && s.fill.kind == "gradient" ? s.fill : null,
+                fills = s.fills,
+                stroke = s.stroke,
+                strokes = s.strokes,
+                shadows = s.shadows,
+                shadow = s.shadows != null && s.shadows.Count > 0 ? s.shadows[0] : null,
+            };
         }
 
         // Clip child content. A rounded element (already backed by an SDF
@@ -566,44 +599,39 @@ namespace FigForge
         }
 
         // -----------------------------------------------------------------------
-        // A real interactive Button built from the Figma component's state sprites
-        // (SpriteSwap). No prefab, no hand-wiring.
+        // A real interactive Button built from the Figma component's state sprites.
+        // The visible states are sibling children; HitArea owns raycasts and Label
+        // stays shared.
         static GameObject BuildStateButton(ElementData e, Transform parent, BuildContext ctx)
         {
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "Button" : e.name, parent);
-            var img = go.AddComponent<Image>();
-            img.raycastTarget = true;
             var st = e.canonical.states;
 
             var normal = SpriteByFile(st.normal, ctx);
-            if (normal != null) img.sprite = normal;
-            else img.color = new Color(0.45f, 0.36f, 1f, 1f);
-            // 9-slice the button background so instances scale without smearing
-            // the corner radius (the state sprites were imported with a border).
-            if (normal != null && normal.border.sqrMagnitude > 0.01f)
-            { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
+            var hi = SpriteByFile(st.highlighted, ctx) ?? normal;
+            var pr = SpriteByFile(st.pressed, ctx) ?? hi ?? normal;
+
+            var regularGo = AddSpriteStateChild(go.transform, "Regular", normal, true);
+            var rollGo = AddSpriteStateChild(go.transform, "RollOver", hi, false);
+            var pressGo = AddSpriteStateChild(go.transform, "Pressed", pr, false);
+            var hit = AddHitArea(go.transform, e.canonical.parts);
 
             var btn = go.AddComponent<Button>();
-            btn.targetGraphic = img;
-            var hi = SpriteByFile(st.highlighted, ctx);
-            var pr = SpriteByFile(st.pressed, ctx);
-            if (hi != null || pr != null)
-            {
-                btn.transition = Selectable.Transition.SpriteSwap;
-                var ss = btn.spriteState;
-                ss.highlightedSprite = hi;
-                ss.selectedSprite = hi;
-                ss.pressedSprite = pr;
-                btn.spriteState = ss;
-            }
+            btn.targetGraphic = hit;
+            btn.transition = Selectable.Transition.None;
+
+            var stateObjects = go.AddComponent<FigForgeButtonStateObjects>();
+            stateObjects.regular = regularGo;
+            stateObjects.rollOver = rollGo;
+            stateObjects.pressed = pressGo;
 
             var labelGo = NewRect("Label", go.transform);
-            Stretch(labelGo.GetComponent<RectTransform>());
+            AnchorPart(labelGo.GetComponent<RectTransform>(), e.canonical.parts, "Label");
             var tmp = labelGo.AddComponent<TextMeshProUGUI>();
             tmp.text = e.canonical.label ?? e.name;
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
-            tmp.fontSize = 18f * ctx.scaleFactor;
+            ApplyFontSize(tmp, e.canonical.defLabelFontSize ?? 16f, ctx);
             tmp.raycastTarget = false;
             // The prefab/definition mirrors the canonical COMPONENT's label font.
             ApplyFont(tmp, e.canonical != null ? e.canonical.defLabelFont : null, ctx);
@@ -619,35 +647,307 @@ namespace FigForge
             var sh = e.canonical.shape;
             EnsureSdfShaderIncluded();
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "Button" : e.name, parent);
-            if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>(); // Graphic needs it
-            var rr = go.AddComponent<FigForgeRoundedRect>();
-            rr.raycastTarget = true;
-            ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill);
+
+            var sc = e.canonical.stateColors;
+            var regularShape = e.canonical.stateShapes != null && e.canonical.stateShapes.normal != null
+                ? e.canonical.stateShapes.normal : sh;
+            var rollShape = ShapeForState(regularShape, e.canonical.stateShapes != null ? e.canonical.stateShapes.highlighted : null, sc != null ? sc.highlighted : null);
+            var pressShape = ShapeForState(regularShape, e.canonical.stateShapes != null ? e.canonical.stateShapes.pressed : null, sc != null ? sc.pressed : null);
+            var rootShape = RootShadowShape(e.canonical.rootShape, regularShape);
+            StripRootShadowsFromState(regularShape, rootShape);
+            StripRootShadowsFromState(rollShape, rootShape);
+            StripRootShadowsFromState(pressShape, rootShape);
+
+            if (rootShape != null)
+                AddShapeLayerContainer(go.transform, "Root", rootShape, null, ctx, true);
+            var regularGo = AddShapeStateChild(go.transform, "Regular", regularShape, e.canonical.parts, ctx, true);
+            var rollGo = AddShapeStateChild(go.transform, "RollOver", rollShape, e.canonical.parts, ctx, false);
+            var pressGo = AddShapeStateChild(go.transform, "Pressed", pressShape, e.canonical.parts, ctx, false);
+            var hit = AddHitArea(go.transform, e.canonical.parts);
 
             var btn = go.AddComponent<Button>();
-            btn.targetGraphic = rr;
-            btn.transition = Selectable.Transition.None; // fills driven by FigForgeButtonStateColors
+            btn.targetGraphic = hit;
+            btn.transition = Selectable.Transition.None;
 
-            // Per-state full-fill swap (works for solid AND gradient buttons): the
-            // normal state is the shape's fill (gradient or solid); a captured
-            // hover/press colour is applied as a SOLID so a gradient button
-            // flattens to the Figma rollover/pressed colour, while
-            // an uncaptured state keeps the normal fill.
-            var sc = e.canonical.stateColors;
-            var states = go.AddComponent<FigForgeButtonStateColors>();
-            SetStates(states, fill, sc);
+            var stateObjects = go.AddComponent<FigForgeButtonStateObjects>();
+            stateObjects.regular = regularGo;
+            stateObjects.rollOver = rollGo;
+            stateObjects.pressed = pressGo;
 
             var labelGo = NewRect("Label", go.transform);
-            Stretch(labelGo.GetComponent<RectTransform>());
+            AnchorPart(labelGo.GetComponent<RectTransform>(), e.canonical.parts, "Label");
             var tmp = labelGo.AddComponent<TextMeshProUGUI>();
             tmp.text = e.canonical.label ?? e.name;
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
-            tmp.fontSize = 18f * ctx.scaleFactor;
+            ApplyFontSize(tmp, e.canonical.defLabelFontSize ?? 16f, ctx);
             tmp.raycastTarget = false;
             ApplyFont(tmp, e.canonical.defLabelFont, ctx);
             MatchTextWeight(tmp);
             return go;
+        }
+
+        static GameObject AddSpriteStateChild(Transform parent, string name, Sprite sprite, bool active)
+        {
+            var child = NewRect(name, parent);
+            Stretch(child.GetComponent<RectTransform>());
+            var img = child.AddComponent<Image>();
+            img.raycastTarget = false;
+            if (sprite != null) img.sprite = sprite;
+            else img.color = new Color(0.45f, 0.36f, 1f, 1f);
+            if (sprite != null && sprite.border.sqrMagnitude > 0.01f)
+            { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
+            child.SetActive(active);
+            return child;
+        }
+
+        static GameObject AddShapeStateChild(Transform parent, string name, CanonicalShape shape, Dictionary<string, float[]> parts, BuildContext ctx, bool active)
+        {
+            return AddShapeLayerContainer(parent, name, shape, parts, ctx, active);
+        }
+
+        static GameObject AddShapeLayerContainer(Transform parent, string name, CanonicalShape shape, Dictionary<string, float[]> parts, BuildContext ctx, bool active)
+        {
+            var child = NewRect(name, parent);
+            AnchorPart(child.GetComponent<RectTransform>(), parts, name);
+            BuildShapeVisualLayers(child.transform, shape, ctx);
+            child.SetActive(active);
+            return child;
+        }
+
+        static void BuildShapeVisualLayers(Transform parent, CanonicalShape shape, BuildContext ctx)
+        {
+            if (shape == null) return;
+            var fills = ShapeFills(shape);
+            var strokes = ShapeStrokes(shape);
+            var shadows = ShapeShadows(shape);
+
+            for (int i = 0; i < shadows.Count; i++)
+            {
+                var rr = AddShapeVisualLayer(parent, shadows.Count == 1 ? "Shadow" : $"Shadow {i + 1}", FigForgeFill.Solid(new Color(0, 0, 0, 0)), FigForgeStroke.None, shape, ctx);
+                ApplyShadow(rr, shadows[i], ctx.scaleFactor);
+            }
+
+            if (fills.Count == 0 && strokes.Count == 0 && shadows.Count == 0)
+                fills.Add(FigForgeFill.Solid(new Color(0, 0, 0, 0)));
+
+            for (int i = 0; i < fills.Count; i++)
+                AddShapeVisualLayer(parent, fills.Count == 1 ? "Fill" : $"Fill {i + 1}", fills[i], FigForgeStroke.None, shape, ctx);
+
+            for (int i = 0; i < strokes.Count; i++)
+            {
+                var stroke = StrokeFromManifest(strokes[i], ctx);
+                bool usesGradient;
+                var strokeFill = StrokeFillFromManifest(strokes[i], out usesGradient);
+                AddShapeVisualLayer(parent, strokes.Count == 1 ? "Stroke" : $"Stroke {i + 1}", strokeFill, stroke, shape, ctx, usesGradient);
+            }
+        }
+
+        static FigForgeRoundedRect AddShapeVisualLayer(Transform parent, string name, FigForgeFill fill, FigForgeStroke stroke, CanonicalShape shape, BuildContext ctx, bool strokeUsesFillGradient = false)
+        {
+            var go = NewRect(name, parent);
+            Stretch(go.GetComponent<RectTransform>());
+            if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>();
+            var rr = go.AddComponent<FigForgeRoundedRect>();
+            rr.raycastTarget = false;
+            ApplyShapeValues(shape, ctx.scaleFactor, out _, out _, out var corners);
+            rr.Configure(fill, stroke, corners, strokeUsesFillGradient);
+            return rr;
+        }
+
+        static Image AddHitArea(Transform parent, Dictionary<string, float[]> parts)
+        {
+            var hitGo = NewRect("HitArea", parent);
+            AnchorPart(hitGo.GetComponent<RectTransform>(), parts, "HitArea");
+            var hit = hitGo.AddComponent<Image>();
+            hit.color = new Color(0, 0, 0, 0);
+            hit.raycastTarget = true;
+            return hit;
+        }
+
+        static CanonicalShape ShapeForState(CanonicalShape normal, CanonicalShape stateShape, float[] stateColor)
+        {
+            if (stateShape != null) return stateShape;
+            var sh = CloneShape(normal);
+            if (stateColor != null)
+            {
+                sh.fill = stateColor;
+                sh.fills = new List<Fill> { new Fill { kind = "solid", color = stateColor } };
+                sh.gradient = null;
+                sh.fill2 = null;
+                sh.gradientTransform = null;
+            }
+            return sh;
+        }
+
+        static CanonicalShape RootShadowShape(CanonicalShape root, CanonicalShape regular)
+        {
+            if (root == null || regular == null) return root;
+            var rootShadows = ShapeShadows(root);
+            if (rootShadows.Count == 0) return root;
+            if (HasVisualPaint(root) || root.cornerRadius > 0.001f) return root;
+
+            return new CanonicalShape
+            {
+                cornerRadius = regular.cornerRadius,
+                fill = new[] { 0f, 0f, 0f, 0f },
+                fills = new List<Fill> { new Fill { kind = "solid", color = new[] { 0f, 0f, 0f, 0f } } },
+                shadow = rootShadows[0],
+                shadows = rootShadows,
+            };
+        }
+
+        static bool HasVisualPaint(CanonicalShape sh)
+        {
+            if (sh == null) return false;
+            if (HasVisibleColor(sh.fill)) return true;
+            if (sh.gradient != null || sh.fill2 != null) return true;
+            if (sh.fills != null)
+                for (int i = 0; i < sh.fills.Count; i++)
+                    if (HasVisibleFill(sh.fills[i])) return true;
+            if (HasVisibleStroke(sh.stroke)) return true;
+            if (sh.strokes != null)
+                for (int i = 0; i < sh.strokes.Count; i++)
+                    if (HasVisibleStroke(sh.strokes[i])) return true;
+            return HasVisibleColor(sh.borderColor) && sh.borderWidth > 0.001f;
+        }
+
+        static bool HasVisibleFill(Fill f)
+        {
+            if (f == null) return false;
+            if (f.kind == "image") return true;
+            if (f.kind == "gradient")
+            {
+                if (f.stops == null || f.stops.Count == 0) return true;
+                for (int i = 0; i < f.stops.Count; i++)
+                    if (f.stops[i] != null && HasVisibleColor(f.stops[i].color)) return true;
+                return false;
+            }
+            return HasVisibleColor(f.color);
+        }
+
+        static bool HasVisibleStroke(Stroke s)
+        {
+            if (s == null || s.weight <= 0.001f) return false;
+            return HasVisibleFill(s.fill) || HasVisibleColor(s.color);
+        }
+
+        static bool HasVisibleColor(float[] rgba)
+            => rgba != null && rgba.Length >= 4 && rgba[3] > 0.001f;
+
+        static CanonicalShape CloneShape(CanonicalShape sh)
+        {
+            if (sh == null) return null;
+            return new CanonicalShape
+            {
+                cornerRadius = sh.cornerRadius,
+                fill = sh.fill,
+                gradient = sh.gradient,
+                fill2 = sh.fill2,
+                gradientTransform = sh.gradientTransform,
+                fills = sh.fills,
+                stroke = sh.stroke,
+                strokes = sh.strokes,
+                borderColor = sh.borderColor,
+                borderWidth = sh.borderWidth,
+                borderAlign = sh.borderAlign,
+                shadow = sh.shadow,
+                shadows = sh.shadows,
+            };
+        }
+
+        static List<FigForgeFill> ShapeFills(CanonicalShape sh)
+        {
+            var outFills = new List<FigForgeFill>();
+            if (sh == null) return outFills;
+            if (sh.fills != null)
+            {
+                for (int i = 0; i < sh.fills.Count; i++)
+                    outFills.Add(FillFromManifest(sh.fills[i]));
+            }
+            if (outFills.Count == 0 && sh.fill == null && sh.gradient == null && sh.fill2 == null)
+                outFills.Add(FigForgeFill.Solid(new Color(0, 0, 0, 0)));
+            else if (outFills.Count == 0)
+                outFills.Add(sh.gradient != null && IsSdfGradient(sh.gradient)
+                    ? FillFromManifest(sh.gradient)
+                    : LegacyGradientFill(sh.fill, sh.fill2, sh.gradientTransform));
+            return outFills;
+        }
+
+        static List<Stroke> ShapeStrokes(CanonicalShape sh)
+        {
+            var strokes = new List<Stroke>();
+            if (sh == null) return strokes;
+            if (sh.strokes != null && sh.strokes.Count > 0) strokes.AddRange(sh.strokes);
+            else if (sh.stroke != null) strokes.Add(sh.stroke);
+            else if (sh.borderColor != null && sh.borderWidth > 0.001f)
+            {
+                strokes.Add(new Stroke
+                {
+                    color = sh.borderColor,
+                    weight = sh.borderWidth,
+                    align = sh.borderAlign,
+                    dashed = false,
+                });
+            }
+            return strokes;
+        }
+
+        static List<ShadowData> ShapeShadows(CanonicalShape sh)
+        {
+            var shadows = new List<ShadowData>();
+            if (sh == null) return shadows;
+            if (sh.shadows != null && sh.shadows.Count > 0) shadows.AddRange(sh.shadows);
+            else if (sh.shadow != null) shadows.Add(sh.shadow);
+            return shadows;
+        }
+
+        static void StripRootShadowsFromState(CanonicalShape state, CanonicalShape root)
+        {
+            if (state == null || root == null) return;
+            var rootShadows = ShapeShadows(root);
+            if (rootShadows.Count == 0) return;
+            var stateShadows = ShapeShadows(state);
+            if (stateShadows.Count == 0) return;
+            bool allRootCopies = stateShadows.Count == rootShadows.Count;
+            if (allRootCopies)
+            {
+                for (int i = 0; i < stateShadows.Count; i++)
+                {
+                    if (!SameShadow(stateShadows[i], rootShadows[i])) { allRootCopies = false; break; }
+                }
+            }
+            if (!allRootCopies) return;
+            state.shadow = null;
+            state.shadows = null;
+        }
+
+        static bool SameShadow(ShadowData a, ShadowData b)
+        {
+            if (a == null || b == null) return false;
+            return SigF(a.color) == SigF(b.color)
+                && Mathf.Abs(a.offsetX - b.offsetX) < 0.001f
+                && Mathf.Abs(a.offsetY - b.offsetY) < 0.001f
+                && Mathf.Abs(a.blur - b.blur) < 0.001f
+                && Mathf.Abs(a.spread - b.spread) < 0.001f
+                && a.inner == b.inner;
+        }
+
+        static FigForgeStroke StrokeFromManifest(Stroke stroke, BuildContext ctx)
+        {
+            if (stroke == null) return FigForgeStroke.None;
+            return FigForgeStroke.Create(ToColor(stroke.color), StrokePx(stroke.weight, ctx.scaleFactor), StrokeAlign(stroke.align));
+        }
+
+        static FigForgeFill StrokeFillFromManifest(Stroke stroke, out bool usesGradient)
+        {
+            usesGradient = false;
+            if (stroke != null && stroke.fill != null && stroke.fill.kind == "gradient" && IsSdfGradient(stroke.fill))
+            {
+                usesGradient = true;
+                return FillFromManifest(stroke.fill);
+            }
+            return FigForgeFill.Solid(new Color(0, 0, 0, 0));
         }
 
         // Push a CanonicalShape onto a FigForgeRoundedRect (fill/gradient/stroke/
@@ -657,20 +957,19 @@ namespace FigForge
         {
             ApplyShapeValues(sh, sf, out fill, out var stroke, out var corners);
             rr.Configure(fill, stroke, corners);
-            ApplyShadow(rr, sh.shadow, sf); // null/transparent → no-op
+            var shadows = ShapeShadows(sh);
+            if (shadows.Count > 0) ApplyShadow(rr, shadows[0], sf); // null/transparent → no-op
         }
 
         static void ApplyShapeValues(CanonicalShape sh, float sf, out FigForgeFill fill,
                                      out FigForgeStroke stroke, out Vector4 corners)
         {
-            fill = sh.gradient != null && IsSdfGradient(sh.gradient)
-                ? FillFromManifest(sh.gradient)
-                : LegacyGradientFill(sh.fill, sh.fill2, sh.gradientTransform);
-            stroke = sh.stroke != null
-                ? FigForgeStroke.Create(ToColor(sh.stroke.color), StrokePx(sh.stroke.weight, sf), StrokeAlign(sh.stroke.align))
-                : (sh.borderColor != null
-                    ? FigForgeStroke.Create(ToColor(sh.borderColor), StrokePx(sh.borderWidth, sf), StrokeAlign(sh.borderAlign))
-                    : FigForgeStroke.None);
+            var fills = ShapeFills(sh);
+            fill = fills.Count > 0 ? fills[0] : FigForgeFill.Solid(new Color(0, 0, 0, 0));
+            var strokes = ShapeStrokes(sh);
+            stroke = strokes.Count > 0
+                ? FigForgeStroke.Create(ToColor(strokes[0].color), StrokePx(strokes[0].weight, sf), StrokeAlign(strokes[0].align))
+                : FigForgeStroke.None;
             float br = sh.cornerRadius * sf;
             corners = new Vector4(br, br, br, br);
         }
@@ -705,6 +1004,16 @@ namespace FigForge
         // just this instance — the shared prefab is untouched.
         static void ApplyInstanceShape(GameObject inst, CanonicalShape sh, CanonicalStateColors sc, BuildContext ctx)
         {
+            if (inst.GetComponentInChildren<FigForgeButtonStateObjects>(true) != null)
+            {
+                ApplyStateShape(inst, "Regular", sh, ctx);
+                if (sc != null)
+                {
+                    if (sc.highlighted != null) ApplyStateShape(inst, "RollOver", ShapeForState(sh, null, sc.highlighted), ctx);
+                    if (sc.pressed != null) ApplyStateShape(inst, "Pressed", ShapeForState(sh, null, sc.pressed), ctx);
+                }
+                return;
+            }
             var rr = inst.GetComponentInChildren<FigForgeRoundedRect>(true);
             if (rr == null) return;
             ApplyShapeToRR(rr, sh, ctx.scaleFactor, out var fill);
@@ -720,6 +1029,49 @@ namespace FigForge
             }
         }
 
+        static void ApplyInstanceStateShapes(GameObject inst, CanonicalStateShapes shapes, BuildContext ctx)
+        {
+            if (shapes == null) return;
+            ApplyStateShape(inst, "Regular", shapes.normal, ctx);
+            ApplyStateShape(inst, "RollOver", shapes.highlighted, ctx);
+            ApplyStateShape(inst, "Pressed", shapes.pressed, ctx);
+            var stateObjects = inst.GetComponentInChildren<FigForgeButtonStateObjects>(true);
+            if (stateObjects != null) stateObjects.Refresh();
+        }
+
+        static void ApplyStateShape(GameObject inst, string name, CanonicalShape shape, BuildContext ctx)
+        {
+            if (shape == null) return;
+            var t = inst.transform.Find(name);
+            if (t == null) return;
+            if (t.GetComponent<FigForgeRoundedRect>() != null)
+            {
+                ApplyShapeToRR(t.GetComponent<FigForgeRoundedRect>(), shape, ctx.scaleFactor, out _);
+                return;
+            }
+            ClearChildren(t);
+            BuildShapeVisualLayers(t, shape, ctx);
+        }
+
+        static void ApplyInstanceRootShape(GameObject inst, CanonicalShape shape, BuildContext ctx)
+        {
+            var root = inst.transform.Find("Root");
+            if (root == null)
+            {
+                root = AddShapeLayerContainer(inst.transform, "Root", shape, null, ctx, true).transform;
+                root.SetSiblingIndex(0);
+                return;
+            }
+            ClearChildren(root);
+            BuildShapeVisualLayers(root, shape, ctx);
+        }
+
+        static void ClearChildren(Transform t)
+        {
+            for (int i = t.childCount - 1; i >= 0; i--)
+                UnityEngine.Object.DestroyImmediate(t.GetChild(i).gameObject);
+        }
+
         // Build the three state fills from a base fill + optional captured hover/press
         // colours: 'normal' is the base; an explicit Figma rollover/pressed colour wins
         // for hover/press (as a SOLID), otherwise the state keeps the base fill. Shared
@@ -732,18 +1084,23 @@ namespace FigForge
         }
 
         // Apply a per-instance hover/press colour override onto an instantiated
-        // canonical button: swap just the highlighted/pressed fills of its
-        // FigForgeButtonStateColors to THIS instance's Figma rollover/pressed colour
-        // (as a SOLID, matching BuildShapeButton, so a gradient button flattens to
-        // the rollover colour on hover). The normal/base fill is
-        // left as-is. Runs after ApplyInstanceShape so it wins. No-op for non-SDF
-        // buttons. Creates prefab overrides on just this instance.
-        static void ApplyInstanceStateColors(GameObject inst, CanonicalStateColors sc)
+        // canonical button. Legacy prefabs still use FigForgeButtonStateColors;
+        // new child-state prefabs update the RollOver/Pressed rounded-rect child.
+        static void ApplyInstanceStateColors(GameObject inst, CanonicalStateColors sc, CanonicalShape baseShape, BuildContext ctx)
         {
             var states = inst.GetComponentInChildren<FigForgeButtonStateColors>(true);
-            if (states == null) return;
-            if (sc.highlighted != null) states.highlighted = FigForgeFill.Solid(ToColor(sc.highlighted));
-            if (sc.pressed != null) states.pressed = FigForgeFill.Solid(ToColor(sc.pressed));
+            if (states != null)
+            {
+                if (sc.highlighted != null) states.highlighted = FigForgeFill.Solid(ToColor(sc.highlighted));
+                if (sc.pressed != null) states.pressed = FigForgeFill.Solid(ToColor(sc.pressed));
+                return;
+            }
+
+            if (baseShape == null) return;
+            if (sc.highlighted != null) ApplyStateShape(inst, "RollOver", ShapeForState(baseShape, null, sc.highlighted), ctx);
+            if (sc.pressed != null) ApplyStateShape(inst, "Pressed", ShapeForState(baseShape, null, sc.pressed), ctx);
+            var stateObjects = inst.GetComponentInChildren<FigForgeButtonStateObjects>(true);
+            if (stateObjects != null) stateObjects.Refresh();
         }
 
         // ===================== Canonical controls =====================
@@ -1193,7 +1550,7 @@ namespace FigForge
             tmp.text = e.canonical?.label ?? e.name;
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
-            tmp.fontSize = 18f * ctx.scaleFactor;
+            ApplyFontSize(tmp, e.canonical?.defLabelFontSize ?? 16f, ctx);
             return go;
         }
 
@@ -1217,6 +1574,12 @@ namespace FigForge
             var font = ctx.resolveFont?.Invoke(fam, sty);
             if (font != null) label.font = font;
             label.fontStyle = FauxStyle(sty, font);
+        }
+
+        static void ApplyFontSize(TMP_Text label, float figmaPx, BuildContext ctx)
+        {
+            if (label == null) return;
+            label.fontSize = Mathf.Max(1f, figmaPx * ctx.scaleFactor);
         }
 
         static bool SameFont(CanonicalLabelFont a, CanonicalLabelFont b)
@@ -1342,7 +1705,9 @@ namespace FigForge
         // v15: popup shell falls back to the closed select-box shape before option rows.
         // v16: generated input canonical prefabs build TMP_InputField instead of placeholders.
         // v17: canonical procedural gradients carry full n-stop Gradient data.
-        const int CanonicalSchema = 17;
+        // v18: generated buttons use Regular/RollOver/Pressed/HitArea child objects.
+        // v19: button root/state shapes preserve layered fills, strokes, and effects.
+        const int CanonicalSchema = 19;
 
         static string CanonicalSignature(ElementData e, string kind, float sf)
         {
@@ -1358,6 +1723,8 @@ namespace FigForge
                   .Append(";fg=").Append(SigGradient(sh.gradient))
                   .Append(";gt=").Append(SigF(sh.gradientTransform))
                   .Append(";st=").Append(SigStroke(sh.stroke, sh.borderColor, sh.borderWidth, sh.borderAlign));
+            AppendShapeSig(sb, "btn", sh);
+            AppendShapeSig(sb, "root", c.rootShape);
             if (sh != null && sh.shadow != null)
             {
                 var sd = sh.shadow;
@@ -1367,6 +1734,12 @@ namespace FigForge
             var sc = c.stateColors;
             if (sc != null)
                 sb.Append(";sn=").Append(SigF(sc.normal)).Append(";sh=").Append(SigF(sc.highlighted)).Append(";sp=").Append(SigF(sc.pressed));
+            if (c.stateShapes != null)
+            {
+                AppendShapeSig(sb, "ssn", c.stateShapes.normal);
+                AppendShapeSig(sb, "ssh", c.stateShapes.highlighted);
+                AppendShapeSig(sb, "ssp", c.stateShapes.pressed);
+            }
             if (kind == "input")
                 sb.Append(";ph=").Append(c.placeholder ?? "").Append(";iv=").Append(c.value ?? "");
             if (c.checkShape != null)
@@ -1427,6 +1800,7 @@ namespace FigForge
             sb.Append(";hasShape=").Append(sh != null ? 1 : 0).Append(";hasStates=").Append(hasStates ? 1 : 0);
             if (c.defLabelFont != null)
                 sb.Append(";lf=").Append(c.defLabelFont.family ?? "").Append('/').Append(c.defLabelFont.style ?? "");
+            if (c.defLabelFontSize.HasValue) sb.Append(";lfs=").Append(c.defLabelFontSize.Value.ToString("0.###"));
             return sb.ToString();
         }
 
@@ -1439,6 +1813,12 @@ namespace FigForge
               .Append(';').Append(prefix).Append("fg=").Append(SigGradient(sh.gradient))
               .Append(';').Append(prefix).Append("gt=").Append(SigF(sh.gradientTransform))
               .Append(';').Append(prefix).Append("st=").Append(SigStroke(sh.stroke, sh.borderColor, sh.borderWidth, sh.borderAlign));
+            if (sh.fills != null)
+                for (int i = 0; i < sh.fills.Count; i++)
+                    sb.Append(';').Append(prefix).Append("fill").Append(i).Append('=').Append(SigFill(sh.fills[i]));
+            if (sh.strokes != null)
+                for (int i = 0; i < sh.strokes.Count; i++)
+                    sb.Append(';').Append(prefix).Append("stroke").Append(i).Append('=').Append(SigStroke(sh.strokes[i], null, 0f, null));
             if (sh.shadow != null)
             {
                 sb.Append(';').Append(prefix).Append("sh=").Append(SigF(sh.shadow.color)).Append(',')
@@ -1447,6 +1827,17 @@ namespace FigForge
                   .Append(sh.shadow.blur.ToString("0.###")).Append(',')
                   .Append(sh.shadow.spread.ToString("0.###"));
             }
+            if (sh.shadows != null)
+                for (int i = 0; i < sh.shadows.Count; i++)
+                {
+                    var sd = sh.shadows[i];
+                    sb.Append(';').Append(prefix).Append("shadow").Append(i).Append('=')
+                      .Append(SigF(sd.color)).Append(',')
+                      .Append(sd.offsetX.ToString("0.###")).Append(',')
+                      .Append(sd.offsetY.ToString("0.###")).Append(',')
+                      .Append(sd.blur.ToString("0.###")).Append(',')
+                      .Append(sd.spread.ToString("0.###"));
+                }
         }
 
         static bool CanShareCanonicalBySignature(ElementData e, string kind)
@@ -1471,8 +1862,16 @@ namespace FigForge
         static string SigStroke(Stroke stroke, float[] legacyColor, float legacyWidth, string legacyAlign)
         {
             if (stroke != null)
-                return SigF(stroke.color) + "," + stroke.weight.ToString("0.###") + "," + (stroke.align ?? "") + "," + (stroke.dashed ? "d" : "s");
+                return SigF(stroke.color) + "," + SigFill(stroke.fill) + "," + stroke.weight.ToString("0.###") + "," + (stroke.align ?? "") + "," + (stroke.dashed ? "d" : "s");
             return SigF(legacyColor) + "," + legacyWidth.ToString("0.###") + "," + (legacyAlign ?? "");
+        }
+
+        static string SigFill(Fill f)
+        {
+            if (f == null) return "_";
+            if (f.kind == "solid") return "solid:" + SigF(f.color);
+            if (f.kind == "gradient") return "grad:" + SigGradient(f);
+            return (f.kind ?? "") + ":" + (f.asset ?? "") + ":" + (f.scaleMode ?? "");
         }
 
         static void RegisterInLibrary(BuildContext ctx, string kind, string refName, GameObject prefab, string signature = null)

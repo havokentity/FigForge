@@ -16,6 +16,7 @@ import {
   type ButtonShape,
   type CanonicalKind,
   type CanonicalRef,
+  type CanonicalStateShapes,
   type CanonicalStates,
   type ExportOptions,
   type ExportScale,
@@ -100,12 +101,7 @@ function singleColorGradient(stops: GradientPaint['gradientStops'] | undefined, 
   return stops.every((s) => sameRGBA(first, gradientStopRGBA(s, opacity))) ? first : undefined;
 }
 
-function firstFill(node: SceneNode, options: ExportOptions): Fill | undefined {
-  const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
-  if (!Array.isArray(fills)) return undefined;
-  const paint = fills.find((f) => !isEmptyPaint(f));
-  if (!paint) return undefined;
-
+function paintToFill(paint: Paint, options: ExportOptions): Fill | undefined {
   if (paint.type === 'SOLID') {
     return { kind: 'solid', color: toRGBA(paint.color, paint.opacity) };
   }
@@ -126,20 +122,37 @@ function firstFill(node: SceneNode, options: ExportOptions): Fill | undefined {
   return undefined;
 }
 
-function extractStroke(node: SceneNode): Stroke | undefined {
-  if (!hasVisibleStroke(node)) return undefined;
+function extractFills(node: SceneNode, options: ExportOptions): Fill[] {
+  const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
+  if (!Array.isArray(fills)) return [];
+  return fills.map((f) => isEmptyPaint(f) ? undefined : paintToFill(f, options)).filter((f): f is Fill => !!f);
+}
+
+function firstFill(node: SceneNode, options: ExportOptions): Fill | undefined {
+  return extractFills(node, options)[0];
+}
+
+function extractStrokes(node: SceneNode, options: ExportOptions): Stroke[] {
+  if (!hasVisibleStroke(node)) return [];
   const strokes = (node as unknown as { strokes?: Paint[] }).strokes || [];
-  const paint = strokes.find((f) => !isEmptyPaint(f) && f.type === 'SOLID') as SolidPaint | undefined;
-  if (!paint) return undefined;
   const weight = (node as unknown as { strokeWeight?: number }).strokeWeight ?? 1;
   const alignRaw = (node as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
   const dashes = (node as unknown as { dashPattern?: number[] }).dashPattern || [];
-  return {
-    color: toRGBA(paint.color, paint.opacity),
-    weight: typeof weight === 'number' ? weight : 1,
-    align: alignRaw === 'INSIDE' ? 'inside' : alignRaw === 'OUTSIDE' ? 'outside' : 'center',
-    dashed: dashes.length > 0,
-  };
+  const align = alignRaw === 'INSIDE' ? 'inside' : alignRaw === 'OUTSIDE' ? 'outside' : 'center';
+  return strokes
+    .map((p) => isEmptyPaint(p) ? undefined : paintToFill(p, options))
+    .filter((f): f is Fill => !!f)
+    .map((fill) => ({
+      color: fill.kind === 'solid' ? fill.color : fill.kind === 'gradient' && fill.stops.length ? fill.stops[0].color : [0, 0, 0, 1] as RGBA,
+      fill,
+      weight: typeof weight === 'number' ? weight : 1,
+      align,
+      dashed: dashes.length > 0,
+    }));
+}
+
+function extractStroke(node: SceneNode, options: ExportOptions): Stroke | undefined {
+  return extractStrokes(node, options)[0];
 }
 
 function cornerData(node: SceneNode): { radius: number; corners?: [number, number, number, number] } {
@@ -181,8 +194,10 @@ function extractShadows(node: SceneNode): Shadow[] {
 
 function buildStyle(node: SceneNode, options: ExportOptions, hasAsset: boolean): Style | undefined {
   const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
-  const fill = firstFill(node, options);
-  const stroke = options.rasterizeStrokes ? undefined : extractStroke(node);
+  const fills = extractFills(node, options);
+  const fill = fills[0];
+  const strokes = options.rasterizeStrokes ? [] : extractStrokes(node, options);
+  const stroke = strokes[0];
   const { radius, corners } = cornerData(node);
   const shadows = extractShadows(node);
 
@@ -193,7 +208,16 @@ function buildStyle(node: SceneNode, options: ExportOptions, hasAsset: boolean):
     fill || (!hasAsset && (stroke || radius > 0 || shadows.length > 0) ? { kind: 'solid', color: [0, 0, 0, 0] } : fill);
 
   if (!resolvedFill && !stroke && radius === 0 && opacity === 1 && shadows.length === 0) return undefined;
-  return { opacity, cornerRadius: radius, corners, fill: resolvedFill, stroke, shadows: shadows.length ? shadows : undefined };
+  return {
+    opacity,
+    cornerRadius: radius,
+    corners,
+    fill: resolvedFill,
+    fills: fills.length ? fills : undefined,
+    stroke,
+    strokes: strokes.length ? strokes : undefined,
+    shadows: shadows.length ? shadows : undefined,
+  };
 }
 
 function alignH(v: string | undefined): TextProps['alignH'] {
@@ -407,6 +431,9 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
     const fn = labelNode.fontName as FontName;
     c.labelFont = { family: fn.family, style: fn.style };
   }
+  if (labelNode && typeof labelNode.fontSize === 'number') {
+    c.labelFontSize = labelNode.fontSize;
+  }
   // The canonical COMPONENT's label font — the generated prefab/definition uses
   // this, so the prefab mirrors the component (not whatever an instance overrode).
   const comp = node.type === 'INSTANCE' ? (node as InstanceNode).mainComponent : null;
@@ -414,6 +441,9 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
   if (defNode && defNode.fontName !== figma.mixed) {
     const fn = defNode.fontName as FontName;
     c.defLabelFont = { family: fn.family, style: fn.style };
+  }
+  if (defNode && typeof defNode.fontSize === 'number') {
+    c.defLabelFontSize = defNode.fontSize;
   }
   return c;
 }
@@ -704,35 +734,29 @@ export async function exportDesign(
 
   const shapeDiag: string[] = []; // why a button fell back to PNG (surfaced as a toast)
 
-  // Capture a procedural ButtonShape from ONE node: corner radius, fill (solid or
-  // linear n-stop gradient), stroke, and drop shadow (scanned on the node
-  // and its children). null when the fill can't drive the SDF shader (→ PNG path).
+  // Capture a procedural ButtonShape from ONE Figma node: its own rounded rect
+  // geometry, paint stack, stroke stack, and effect stack. This intentionally does
+  // not borrow from siblings/parents for canonical button states; each Figma node
+  // owns its own visual stack.
   // Shared by every canonical control (button background, toggle box, list row, …).
-  function shapeOf(node: SceneNode, extraShadowSources: SceneNode[] = []): ButtonShape | null {
+  function shapeOf(node: SceneNode): ButtonShape | null {
+    const fills = extractFills(node, options);
     const sf = shapeFill(node);
-    if (!sf) return null;
     const radius = typeof (node as unknown as { cornerRadius?: number }).cornerRadius === 'number'
       ? (node as unknown as { cornerRadius: number }).cornerRadius : 0;
-    const shape: ButtonShape = { cornerRadius: radius, fill: sf.fill };
-    if (sf.gradient) shape.gradient = sf.gradient;
-    const kids = 'children' in node ? ((node as ChildrenMixin).children as SceneNode[]) : [];
-    for (const src of [node, ...extraShadowSources, ...kids]) {
-      const s = extractShadows(src)[0]; if (s) { shape.shadow = s; break; }
+    const ownShadows = extractShadows(node);
+    const strokesAll = options.rasterizeStrokes ? [] : extractStrokes(node, options);
+    if (!sf && fills.length === 0 && strokesAll.length === 0 && ownShadows.length === 0 && radius <= 0) return null;
+    const shape: ButtonShape = { cornerRadius: radius, fill: sf?.fill ?? [0, 0, 0, 0] };
+    if (sf?.gradient) shape.gradient = sf.gradient;
+    if (fills.length) shape.fills = fills;
+    if (strokesAll.length) {
+      shape.strokes = strokesAll;
+      shape.stroke = strokesAll[0];
     }
-    const strokes = (node as unknown as { strokes?: Paint[] }).strokes;
-    const sw = (node as unknown as { strokeWeight?: number }).strokeWeight;
-    if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
-      const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
-      if (sc) {
-        const al = (node as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
-        shape.stroke = {
-          color: toRGBA(sc.color, sc.opacity),
-          weight: sw,
-          align: al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center',
-          dashed: false,
-        };
-      }
-    }
+    const shadows = ownShadows;
+    if (ownShadows[0]) shape.shadow = ownShadows[0];
+    if (shadows.length) shape.shadows = shadows;
     return shape;
   }
 
@@ -745,19 +769,10 @@ export async function exportDesign(
       if (shape.cornerRadius === 0 && radius > 0) shape.cornerRadius = radius;
 
       if (!shape.stroke) {
-        const strokes = (src as unknown as { strokes?: Paint[] }).strokes;
-        const sw = (src as unknown as { strokeWeight?: number }).strokeWeight;
-        if (Array.isArray(strokes) && typeof sw === 'number' && sw > 0) {
-          const sc = strokes.find((s) => !isEmptyPaint(s) && s.type === 'SOLID') as SolidPaint | undefined;
-          if (sc) {
-            const al = (src as unknown as { strokeAlign?: string }).strokeAlign || 'CENTER';
-            shape.stroke = {
-              color: toRGBA(sc.color, sc.opacity),
-              weight: sw,
-              align: al === 'INSIDE' ? 'inside' : al === 'OUTSIDE' ? 'outside' : 'center',
-              dashed: false,
-            };
-          }
+        const strokes = extractStrokes(src, options);
+        if (strokes.length) {
+          shape.stroke = strokes[0];
+          shape.strokes = strokes;
         }
       }
 
@@ -765,8 +780,85 @@ export async function exportDesign(
         const s = extractShadows(src)[0];
         if (s) shape.shadow = s;
       }
+      if (!shape.shadows) {
+        const shadows = extractShadows(src);
+        if (shadows.length) shape.shadows = shadows;
+      }
     }
     return shape;
+  }
+
+  function visualShapeCandidate(node: SceneNode): boolean {
+    return node.type !== 'TEXT' && node.type !== 'SLICE';
+  }
+
+  function stateShape(node: SceneNode): ButtonShape | null {
+    if (visualShapeCandidate(node)) {
+      const own = shapeOf(node);
+      if (own) return own;
+    }
+    if ('children' in node) {
+      const kids = (node as ChildrenMixin).children as SceneNode[];
+      for (const c of kids) {
+        if (c.name.toLowerCase() === 'label' || c.name.toLowerCase() === 'hitarea') continue;
+        const sh = stateShape(c);
+        if (sh) return sh;
+      }
+    }
+    return null;
+  }
+
+  function sameShadow(a: Shadow | undefined, b: Shadow | undefined): boolean {
+    if (!a || !b) return false;
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function stripRootShadowFromState(state: ButtonShape | null, root: ButtonShape | null): ButtonShape | null {
+    if (!state || !root) return state;
+    const rootShadow = root.shadow ?? root.shadows?.[0];
+    if (!rootShadow) return state;
+    const stateShadow = state.shadow ?? state.shadows?.[0];
+    if (!sameShadow(stateShadow, rootShadow)) return state;
+    delete state.shadow;
+    if (state.shadows && state.shadows.every((s) => sameShadow(s, rootShadow))) delete state.shadows;
+    return state;
+  }
+
+  function visibleColor(rgba: RGBA | undefined): boolean {
+    return !!rgba && rgba[3] > 0.001;
+  }
+
+  function visibleFill(fill: Fill | undefined): boolean {
+    if (!fill) return false;
+    if (fill.kind === 'image') return true;
+    if (fill.kind === 'gradient') return fill.stops.length === 0 || fill.stops.some((s) => visibleColor(s.color));
+    return visibleColor(fill.color);
+  }
+
+  function visibleStroke(stroke: Stroke | undefined): boolean {
+    return !!stroke && stroke.weight > 0.001 && (visibleFill(stroke.fill) || visibleColor(stroke.color));
+  }
+
+  function hasVisualPaint(shape: ButtonShape | null): boolean {
+    return !!shape && (
+      (shape.fills != null && shape.fills.some(visibleFill))
+      || (shape.strokes != null && shape.strokes.some(visibleStroke))
+      || visibleStroke(shape.stroke)
+      || visibleColor(shape.fill)
+    );
+  }
+
+  function rootShadowShape(root: ButtonShape | null, regular: ButtonShape): ButtonShape | null {
+    if (!root) return null;
+    const rootShadows = root.shadows ?? (root.shadow ? [root.shadow] : []);
+    if (!rootShadows.length) return root;
+    if (hasVisualPaint(root) || root.cornerRadius > 0.001) return root;
+    return {
+      cornerRadius: regular.cornerRadius,
+      fill: [0, 0, 0, 0],
+      shadows: rootShadows,
+      shadow: rootShadows[0],
+    };
   }
 
   const childByName = (master: SceneNode, name: string): SceneNode | undefined =>
@@ -797,12 +889,23 @@ export async function exportDesign(
     const kids = (master as ChildrenMixin).children as SceneNode[];
     const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
     if (!reg) { if (!silent) shapeDiag.push(`'${master.name}': no layer named 'regular'`); return null; }
-    const shape = shapeOf(reg, [master, ...kids.filter((c) => c !== reg)]);
+    const rawRootShape = shapeOf(master);
+    const shape = stripRootShadowFromState(stateShape(reg), rawRootShape);
     if (!shape) { if (!silent) shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
+    const rootShape = rootShadowShape(rawRootShape, shape);
     const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: shape.fill };
-    const ro = kids.find((c) => c.name.toLowerCase() === 'rollover'); const rc = ro ? stateSolid(ro) : null; if (rc) stateColors.highlighted = rc;
-    const pr = kids.find((c) => c.name.toLowerCase() === 'pressed'); const pc = pr ? stateSolid(pr) : null; if (pc) stateColors.pressed = pc;
-    return { shape, stateColors };
+    const stateShapes: CanonicalStateShapes = { normal: shape };
+    const ro = kids.find((c) => c.name.toLowerCase() === 'rollover');
+    const roShape = stripRootShadowFromState(ro ? stateShape(ro) : null, rootShape);
+    const rc = roShape?.fill ?? (ro ? stateSolid(ro) : null);
+    if (roShape) stateShapes.highlighted = roShape;
+    if (rc) stateColors.highlighted = rc;
+    const pr = kids.find((c) => c.name.toLowerCase() === 'pressed');
+    const prShape = stripRootShadowFromState(pr ? stateShape(pr) : null, rootShape);
+    const pc = prShape?.fill ?? (pr ? stateSolid(pr) : null);
+    if (prShape) stateShapes.pressed = prShape;
+    if (pc) stateColors.pressed = pc;
+    return { shape, rootShape, stateColors, stateShapes, parts: partsOf(master, ['Regular', 'RollOver', 'Pressed', 'HitArea', 'Label']) };
   }
 
   // Text content of a node (its own characters, or the first descendant text).
@@ -819,7 +922,7 @@ export async function exportDesign(
   // shown when on (Toggle.graphic), the initial value, and the label.
   function captureToggle(master: SceneNode, tagValue?: string) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg, [master]) : null;
+    const shape = bg ? shapeOf(bg) : null;
     if (!shape) return null;
     const ckNode = childByName(master, 'Checkmark');
     const checkShape = ckNode ? shapeOf(ckNode) : undefined;
@@ -833,7 +936,7 @@ export async function exportDesign(
   // optional initial Text value, and normalized child layout.
   function captureInput(master: SceneNode) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg, [master]) : null;
+    const shape = bg ? shapeOf(bg) : null;
     const placeholder = textOf(childByName(master, 'Placeholder')) ?? textOf(childByName(master, 'Label'));
     const rawValue = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value'));
     const value = rawValue !== undefined && rawValue.trim().length === 0 ? '' : rawValue;
@@ -850,7 +953,7 @@ export async function exportDesign(
   // and the selected value.
   async function captureDropdown(master: SceneNode, tagValue?: string) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg, [master]) : null;
+    const shape = bg ? shapeOf(bg) : null;
     const arrow = childByName(master, 'Arrow');
     const arrowReg = arrow ? childByName(arrow, 'Regular') : undefined;
     const arrowRoll = arrow ? childByName(arrow, 'Rollover') : undefined;
@@ -866,7 +969,7 @@ export async function exportDesign(
     const bgRollover = bgRoll ? (stateSolid(bgRoll) ?? undefined) : undefined;
     const bgPressed = bgPress ? (stateSolid(bgPress) ?? undefined) : undefined;
     const optsFrame = childByName(master, 'Options');
-    const popupShape = (optsFrame ? shapeOf(optsFrame, [master]) : null) ?? shape ?? undefined;
+    const popupShape = (optsFrame ? shapeOf(optsFrame) : null) ?? shape ?? undefined;
     const optionNodes = optsFrame && 'children' in optsFrame
       ? ((optsFrame as ChildrenMixin).children as SceneNode[])
       : [];
@@ -881,7 +984,7 @@ export async function exportDesign(
     const optReg = optionSource
       ? (childByName(optionSource, 'Regular') ?? (optionMaster ? childByName(optionMaster, 'Regular') : undefined) ?? optionSource)
       : undefined;
-    const optionShape = optReg ? (mergeShapeFallbacks(shapeOf(optReg, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
+    const optionShape = optReg ? (mergeShapeFallbacks(shapeOf(optReg), optionFallbacks) ?? undefined) : undefined;
     const optRoll = optionSource
       ? (childByName(optionSource, 'Rollover') ?? (optionMaster ? childByName(optionMaster, 'Rollover') : undefined))
       : undefined;
@@ -891,9 +994,9 @@ export async function exportDesign(
     const optSelected = optionSource
       ? (childByName(optionSource, 'Selected') ?? (optionMaster ? childByName(optionMaster, 'Selected') : undefined))
       : undefined;
-    const optionRolloverShape = optRoll ? (mergeShapeFallbacks(shapeOf(optRoll, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
-    const optionPressedShape = optPressed ? (mergeShapeFallbacks(shapeOf(optPressed, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
-    const optionSelectedShape = optSelected ? (mergeShapeFallbacks(shapeOf(optSelected, optionFallbacks), optionFallbacks) ?? undefined) : undefined;
+    const optionRolloverShape = optRoll ? (mergeShapeFallbacks(shapeOf(optRoll), optionFallbacks) ?? undefined) : undefined;
+    const optionPressedShape = optPressed ? (mergeShapeFallbacks(shapeOf(optPressed), optionFallbacks) ?? undefined) : undefined;
+    const optionSelectedShape = optSelected ? (mergeShapeFallbacks(shapeOf(optSelected), optionFallbacks) ?? undefined) : undefined;
     const optionRollover = optRoll ? (stateSolid(optRoll) ?? undefined) : undefined;
     const optionPressed = optPressed ? (stateSolid(optPressed) ?? undefined) : undefined;
     const optionSelected = optSelected ? (stateSolid(optSelected) ?? undefined) : undefined;
@@ -916,7 +1019,7 @@ export async function exportDesign(
   // derives the row COUNT from the placed list's height ÷ row height.
   function captureList(master: SceneNode) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg, [master]) : undefined;
+    const shape = bg ? shapeOf(bg) : undefined;
     const item = childByName(master, 'Item');
     if (!item) return null;
     const reg = childByName(item, 'Regular') ?? item;
@@ -931,7 +1034,9 @@ export async function exportDesign(
   const stateByNode = new Map<string, CanonicalStates>();
   const shapeByNode = new Map<string, ReturnType<typeof captureButtonShape>>();
   const instShapeByNode = new Map<string, ButtonShape>(); // per-instance shape override (differs from component)
+  const instRootShapeByNode = new Map<string, ButtonShape>(); // per-instance root visual/effect override
   const instStateColorsByNode = new Map<string, { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }>(); // per-instance rollover/pressed override
+  const instStateShapesByNode = new Map<string, CanonicalStateShapes>(); // per-instance full state-shape override
   const stateDiag: string[] = []; // what hover/press colour was captured, and from where (surfaced as a toast)
   const shadowCapDiag: string[] = []; // whether each button's drop shadow was captured (surfaced as a toast)
   const fmtC = (c?: RGBA) => (c ? `(${c.slice(0, 3).map((n) => Math.round(n * 255)).join(',')})` : 'none');
@@ -961,8 +1066,23 @@ export async function exportDesign(
     if (sh && p.node.type === 'INSTANCE') {
       const inst = captureButtonShape(p.node, true);
       if (inst && JSON.stringify(inst.shape) !== JSON.stringify(sh.shape)) instShapeByNode.set(p.node.id, inst.shape);
+      if (inst && JSON.stringify(inst.rootShape) !== JSON.stringify(sh.rootShape) && inst.rootShape) {
+        instRootShapeByNode.set(p.node.id, inst.rootShape);
+      }
+      if (inst && JSON.stringify(inst.stateShapes) !== JSON.stringify(sh.stateShapes)) {
+        instStateShapesByNode.set(p.node.id, inst.stateShapes);
+      }
       if (inst && JSON.stringify(inst.stateColors) !== JSON.stringify(sh.stateColors)) {
-        instStateColorsByNode.set(p.node.id, inst.stateColors);
+        const colorOverride = { ...inst.stateColors };
+        if (inst.stateShapes.highlighted && JSON.stringify(inst.stateShapes.highlighted) !== JSON.stringify(sh.stateShapes.highlighted)) {
+          delete colorOverride.highlighted;
+        }
+        if (inst.stateShapes.pressed && JSON.stringify(inst.stateShapes.pressed) !== JSON.stringify(sh.stateShapes.pressed)) {
+          delete colorOverride.pressed;
+        }
+        if (colorOverride.normal || colorOverride.highlighted || colorOverride.pressed) {
+          instStateColorsByNode.set(p.node.id, colorOverride);
+        }
         stateDiag.push(`'${p.canonicalRef.ref}' hover ${fmtC(inst.stateColors.highlighted)}/press ${fmtC(inst.stateColors.pressed)} (instance override; component ${fmtC(sh.stateColors.highlighted)}/${fmtC(sh.stateColors.pressed)})`);
       } else if (sh) {
         stateDiag.push(`'${p.canonicalRef.ref}' hover ${fmtC(sh.stateColors.highlighted)}/press ${fmtC(sh.stateColors.pressed)} (component)`);
@@ -1085,10 +1205,18 @@ export async function exportDesign(
     if (canonical && stateByNode.has(node.id)) canonical.states = stateByNode.get(node.id);
     if (canonical && shapeByNode.has(node.id)) {
       const sh = shapeByNode.get(node.id);
-      if (sh) { canonical.shape = sh.shape; canonical.stateColors = sh.stateColors; }
+      if (sh) {
+        canonical.shape = sh.shape;
+        if (sh.rootShape) canonical.rootShape = sh.rootShape;
+        canonical.stateColors = sh.stateColors;
+        canonical.stateShapes = sh.stateShapes;
+        canonical.parts = sh.parts;
+      }
     }
     if (canonical && instShapeByNode.has(node.id)) canonical.instanceShape = instShapeByNode.get(node.id);
+    if (canonical && instRootShapeByNode.has(node.id)) canonical.instanceRootShape = instRootShapeByNode.get(node.id);
     if (canonical && instStateColorsByNode.has(node.id)) canonical.instanceStateColors = instStateColorsByNode.get(node.id);
+    if (canonical && instStateShapesByNode.has(node.id)) canonical.instanceStateShapes = instStateShapesByNode.get(node.id);
     if (canonical && controlByNode.has(node.id)) {
       const instanceDropdownLabel = canonical.kind === 'dropdown' ? canonical.label : undefined;
       const instanceDropdownValue = canonical.kind === 'dropdown' ? canonical.value : undefined;

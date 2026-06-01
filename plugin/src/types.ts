@@ -54,6 +54,7 @@ export type StrokeAlign = 'inside' | 'outside' | 'center';
 
 export interface Stroke {
   color: RGBA;
+  fill?: Fill; // full stroke paint; color is the render fallback/legacy solid
   weight: number;
   align: StrokeAlign;
   dashed: boolean;
@@ -73,7 +74,9 @@ export interface Style {
   cornerRadius: number; // max corner; per-corner detail in `corners`
   corners?: [number, number, number, number]; // tl, tr, br, bl
   fill?: Fill;
+  fills?: Fill[];
   stroke?: Stroke;
+  strokes?: Stroke[];
   shadows?: Shadow[];
 }
 
@@ -132,12 +135,21 @@ export interface ButtonShape {
   gradient?: Extract<Fill, { kind: 'gradient' }>; // linear n-stop gradient background
   fill2?: RGBA; // legacy gradient stop 1
   gradientTransform?: number[]; // legacy gradient affine (Figma row-major)
+  fills?: Fill[];
   stroke?: Stroke;
+  strokes?: Stroke[];
   // Legacy fields kept so older exports still deserialize in Unity.
   borderColor?: RGBA;
   borderWidth?: number;
   borderAlign?: StrokeAlign; // inside|outside|center (default inside)
   shadow?: Shadow; // first drop shadow on the regular layer
+  shadows?: Shadow[];
+}
+
+export interface CanonicalStateShapes {
+  normal?: ButtonShape;
+  highlighted?: ButtonShape;
+  pressed?: ButtonShape;
 }
 
 export interface CanonicalRef {
@@ -151,12 +163,18 @@ export interface CanonicalRef {
   states?: CanonicalStates; // sprite filenames per Button state (from Figma layers)
   labelFont?: { family: string; style: string }; // THIS instance's label font (per-instance override when it differs from the definition)
   defLabelFont?: { family: string; style: string }; // the canonical COMPONENT's label font — the prefab/definition uses this
+  labelFontSize?: number; // THIS instance's Label font size
+  defLabelFontSize?: number; // the canonical COMPONENT's Label font size
   // Procedural background shape (solid buttons): the importer renders this with a
   // crisp SDF shader instead of the exported state PNGs. Absent → PNG fallback.
   shape?: ButtonShape; // the COMPONENT's background (drives the generated prefab)
   instanceShape?: ButtonShape; // THIS instance's background, when it differs from the component (per-instance override)
+  rootShape?: ButtonShape; // root component visuals/effects shared behind every state
+  instanceRootShape?: ButtonShape; // THIS instance's root visuals/effects when they differ
   stateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }; // the COMPONENT's per-state hover/press fills (drives the prefab)
   instanceStateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }; // THIS instance's hover/press fills when they differ from the component
+  stateShapes?: CanonicalStateShapes; // full Regular/RollOver/Pressed rounded-rect styles
+  instanceStateShapes?: CanonicalStateShapes; // THIS instance's full state styles when they differ
   // --- control-specific (toggle/radio/dropdown/list) ---
   checkShape?: ButtonShape; // toggle/radio: the "on" indicator (UGUI Toggle.graphic), shown when value=on
   items?: string[];         // list: the text of each row (first row is the template)

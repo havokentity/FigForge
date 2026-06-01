@@ -65,6 +65,7 @@ namespace FigForge
     public class Stroke
     {
         public float[] color;
+        public Fill fill;                // full stroke paint; color is fallback
         public float weight;
         public string align;             // inside|outside|center
         public bool dashed;
@@ -85,7 +86,9 @@ namespace FigForge
         public float cornerRadius;
         public float[] corners;          // tl,tr,br,bl
         public Fill fill;
+        public List<Fill> fills;
         public Stroke stroke;
+        public List<Stroke> strokes;
         public List<ShadowData> shadows;
     }
 
@@ -115,14 +118,18 @@ namespace FigForge
         public Fill gradient;             // linear n-stop gradient background
         public float[] fill2;             // legacy gradient stop 1 (null = solid fill)
         public float[] gradientTransform; // legacy gradient affine (null = solid fill)
+        public List<Fill> fills;          // all Figma fills, bottom-to-top
         public Stroke stroke;
+        public List<Stroke> strokes;      // all Figma strokes, bottom-to-top
         // Legacy fields kept for older manifests.
         public float[] borderColor;
         public float borderWidth;
         public string borderAlign;        // inside|outside|center (null = inside)
         public ShadowData shadow;         // first drop shadow on the regular layer
+        public List<ShadowData> shadows;  // all visible drop shadows
     }
     public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }
+    public class CanonicalStateShapes { public CanonicalShape normal; public CanonicalShape highlighted; public CanonicalShape pressed; }
 
     public class CanonicalRef
     {
@@ -136,10 +143,16 @@ namespace FigForge
         public CanonicalStates states;   // per-state sprite filenames (button)
         public CanonicalLabelFont labelFont;    // THIS instance's label font (per-instance override when it differs)
         public CanonicalLabelFont defLabelFont; // the canonical COMPONENT's label font (the prefab/definition uses this)
+        public float? labelFontSize;     // THIS instance's Label font size
+        public float? defLabelFontSize;  // the canonical COMPONENT's Label font size
         public CanonicalShape shape;            // procedural background (SDF shader) — overrides the state PNGs when present
         public CanonicalShape instanceShape;    // THIS instance's background when it differs from the component (per-instance override)
+        public CanonicalShape rootShape;        // root component visuals/effects shared behind every state
+        public CanonicalShape instanceRootShape; // THIS instance's root visuals/effects when they differ
         public CanonicalStateColors stateColors; // the COMPONENT's per-state hover/press fills (drives the prefab)
         public CanonicalStateColors instanceStateColors; // THIS instance's hover/press fills when they differ from the component
+        public CanonicalStateShapes stateShapes; // full Regular/RollOver/Pressed rounded-rect styles
+        public CanonicalStateShapes instanceStateShapes; // THIS instance's full state styles when they differ
         // --- control-specific (toggle/radio/dropdown/list) ---
         public CanonicalShape checkShape; // toggle/radio: the "on" indicator (Toggle.graphic), shown when value=on
         public List<string> items;        // list: the text of each row (first row is the template)

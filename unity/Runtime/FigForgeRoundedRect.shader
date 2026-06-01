@@ -51,7 +51,7 @@ Shader "FigForge/RoundedRect"
                 float4 vertex:POSITION;
                 fixed4 color:COLOR;
                 float4 uv0:TEXCOORD0; // xy=quad uv, zw=fill packed RG/BA
-                float4 uv1:TEXCOORD1; // x=gradient kind, y=unused, zw=stroke packed RG/BA
+                float4 uv1:TEXCOORD1; // x=gradient kind, y=stroke uses gradient, zw=stroke packed RG/BA
                 float4 uv2:TEXCOORD2; // xy=shadow packed RG/BA, zw=size
                 float4 uv3:TEXCOORD3; // x=gradient dir packed, yzw=radius tl/tr/br
                 float3 normal:NORMAL; // x=radius bl, y=stroke weight, z=stroke outset
@@ -165,6 +165,7 @@ Shader "FigForge/RoundedRect"
             {
                 float4 fillColor = unpackColor(i.uv0.zw);
                 float gradientKind = i.uv1.x;
+                float strokeGradient = i.uv1.y;
                 float4 strokeColor = unpackColor(i.uv1.zw);
                 float4 shadowColor = unpackColor(i.uv2.xy);
                 float2 size = max(i.uv2.zw, float2(1,1));
@@ -189,14 +190,16 @@ Shader "FigForge/RoundedRect"
                 float aa = max(fwidth(d), 1e-4);
 
                 // ---- fill (optional gradient texture generated from UnityEngine.Gradient) ----
-                fixed4 base = fillColor;
+                fixed4 fillBase = fillColor;
                 if (gradientKind > 0.5)
                 {
                     // Fill-relative coordinate so the gradient spans the FILL rect,
                     // independent of the mesh padding (stroke/shadow).
                     float t = gradientT(gradientKind, p, size, gradientDir.xy);
-                    base = tex2D(_MainTex, float2(t, 0.5));
+                    fillBase = tex2D(_MainTex, float2(t, 0.5));
                 }
+                fixed4 base = (strokeGradient > 0.5) ? fixed4(fillBase.rgb, 0.0) : fillBase;
+                fixed4 strokeBase = (strokeGradient > 0.5) ? fillBase : strokeColor;
 
                 // ---- shape colour (fill + optional stroke ring) ----
                 fixed3 shapeRGB = base.rgb;
@@ -207,8 +210,8 @@ Shader "FigForge/RoundedRect"
                     // inside strokeOutset=0, center=w/2, outside=w (fill stays full size).
                     float inner = strokeOutset - strokeWidth;
                     float inStroke = smoothstep(-aa, aa, d - inner);
-                    shapeRGB = lerp(base.rgb, strokeColor.rgb, inStroke);
-                    shapeFillA = lerp(base.a, strokeColor.a, inStroke);
+                    shapeRGB = lerp(base.rgb, strokeBase.rgb, inStroke);
+                    shapeFillA = lerp(base.a, strokeBase.a, inStroke);
                 }
                 float shapeCov = 1.0 - smoothstep(-aa, aa, d - strokeOutset); // AA edge at the outer stroke edge
                 float shapeA = shapeFillA * shapeCov;
