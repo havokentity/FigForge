@@ -7,6 +7,8 @@ Shader "FigForge/Composite"
         _BlendMode ("Figma Blend Mode", Float) = 1
         _AppearanceOpacity ("Appearance Opacity", Float) = 1
         _ClipRect ("Clip Rect", Vector) = (-1000000000,-1000000000,1000000000,1000000000)
+        _SourceRect ("Source Rect", Vector) = (0,0,1,1)
+        _PageSize ("Page Size", Vector) = (1,1,0,0)
     }
     SubShader
     {
@@ -41,6 +43,8 @@ Shader "FigForge/Composite"
             float _BlendMode;
             float _AppearanceOpacity;
             float4 _ClipRect;
+            float4 _SourceRect;
+            float4 _PageSize;
 
             v2f vert(appdata v)
             {
@@ -52,7 +56,11 @@ Shader "FigForge/Composite"
 
             half4 frag(v2f i) : SV_Target
             {
-                half4 s = tex2D(_Source, i.uv);
+                float2 pixel = i.uv * max(_PageSize.xy, float2(1,1));
+                float2 sourceUv = (pixel - _SourceRect.xy) / max(_SourceRect.zw, float2(1,1));
+                float insideSource = step(0.0, sourceUv.x) * step(0.0, sourceUv.y)
+                    * step(sourceUv.x, 1.0) * step(sourceUv.y, 1.0);
+                half4 s = tex2D(_Source, saturate(sourceUv)) * insideSource;
                 half4 b = tex2D(_Backdrop, i.uv);
                 float as = saturate(s.a * _AppearanceOpacity);
                 float ab = saturate(b.a);
@@ -63,7 +71,6 @@ Shader "FigForge/Composite"
                 float3 co = as * (1.0 - ab) * Cs + as * ab * Bc + (1.0 - as) * ab * Cb;
                 float ao = as + ab * (1.0 - as);
 
-                float2 pixel = i.uv * _ScreenParams.xy;
                 float inside = step(_ClipRect.x, pixel.x) * step(_ClipRect.y, pixel.y)
                     * step(pixel.x, _ClipRect.z) * step(pixel.y, _ClipRect.w);
                 return half4(co * inside, ao * inside);

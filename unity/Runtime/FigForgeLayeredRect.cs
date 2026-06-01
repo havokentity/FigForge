@@ -198,13 +198,40 @@ namespace FigForge
         int _cachedSurfaceWidth;
         int _cachedSurfaceHeight;
         readonly Vector3[] _worldCorners = new Vector3[4];
+        FigForgePageCompositor _pageCompositor;
 
         public IReadOnlyList<FigForgeFill> Fills => fills;
         public IReadOnlyList<FigForgeStrokeLayer> Strokes => strokes;
         public IReadOnlyList<FigForgeEffectLayer> Effects => effects;
         public string Recipe => recipe;
-        public float AppearanceOpacity { get => appearanceOpacity; set { appearanceOpacity = Mathf.Clamp01(value); SetMaterialDirty(); } }
-        public FigForgeBlendMode BlendMode { get => blendMode; set { blendMode = value; SetMaterialDirty(); } }
+        public FigForgeBlendMode CompositorBlendMode => blendMode;
+        public float CompositorOpacity => appearanceOpacity;
+        public float CompositorPad => MeshPad();
+        public RectTransform CompositorRectTransform => rectTransform;
+        public bool RequiresPageCompositor => BlendTier(blendMode) == 2;
+        public float AppearanceOpacity
+        {
+            get => appearanceOpacity;
+            set
+            {
+                appearanceOpacity = Mathf.Clamp01(value);
+                MarkPageCompositorDirty();
+                SetMaterialDirty();
+            }
+        }
+        public FigForgeBlendMode BlendMode
+        {
+            get => blendMode;
+            set
+            {
+                if (blendMode == value) return;
+                blendMode = value;
+                UpdatePageCompositorRegistration();
+                MarkPageCompositorDirty();
+                SetVerticesDirty();
+                SetMaterialDirty();
+            }
+        }
         public FigForgeCompositorMode CompositorMode
         {
             get => compositorMode;
@@ -214,6 +241,8 @@ namespace FigForge
                 compositorMode = value;
                 if (compositorMode == FigForgeCompositorMode.Direct)
                     ReleaseCachedSurface();
+                UpdatePageCompositorRegistration();
+                MarkPageCompositorDirty();
                 SetVerticesDirty();
                 SetMaterialDirty();
             }
@@ -232,6 +261,7 @@ namespace FigForge
                                     List<FigForgeEffectLayer> effects, Vector4 cornerRadii)
         {
             ReleaseCachedSurface();
+            MarkPageCompositorDirty();
             ClampGraphicState();
             this.fills = fills != null ? new List<FigForgeFill>(fills) : new List<FigForgeFill>();
             this.strokes = strokes != null ? new List<FigForgeStrokeLayer>(strokes) : new List<FigForgeStrokeLayer>();
@@ -239,6 +269,7 @@ namespace FigForge
             corners = cornerRadii;
             NormalizeLists();
             RefreshRecipe();
+            MarkPageCompositorDirty();
             SetVerticesDirty();
             SetMaterialDirty();
         }
@@ -247,6 +278,8 @@ namespace FigForge
         {
             appearanceOpacity = Mathf.Clamp01(opacity);
             blendMode = blend;
+            UpdatePageCompositorRegistration();
+            MarkPageCompositorDirty();
             SetMaterialDirty();
         }
 
@@ -812,6 +845,7 @@ namespace FigForge
             if (compositorMode == FigForgeCompositorMode.Direct) return false;
             if (WouldCacheHitTextureLimit()) return false;
             if (compositorMode == FigForgeCompositorMode.CachedSource) return true;
+            if (BlendTier(blendMode) == 2) return true;
             if (BlendTier(blendMode) == 1 && blendMode != FigForgeBlendMode.PassThrough && blendMode != FigForgeBlendMode.Normal)
                 return true;
             return VisibleDropShadowCount() > 0
@@ -880,6 +914,52 @@ namespace FigForge
             _cachedSurfaceKey = null;
             _cachedSurfaceWidth = 0;
             _cachedSurfaceHeight = 0;
+        }
+
+        public RenderTexture GetCompositorSurface()
+        {
+            EnsureCachedSurface();
+            return _cachedSurface;
+        }
+
+        public bool IsRenderedByPageCompositor()
+        {
+            var comp = _pageCompositor != null ? _pageCompositor : GetComponentInParent<FigForgePageCompositor>();
+            return comp != null && comp.ShouldRenderLayer(this);
+        }
+
+        void UpdatePageCompositorRegistration()
+        {
+            if (_pageCompositor != null)
+            {
+                _pageCompositor.Unregister(this);
+                _pageCompositor = null;
+            }
+
+            if (!RequiresPageCompositor || !isActiveAndEnabled) return;
+            _pageCompositor = FindOrCreatePageCompositor();
+            if (_pageCompositor != null)
+                _pageCompositor.Register(this);
+        }
+
+        FigForgePageCompositor FindOrCreatePageCompositor()
+        {
+            var comp = GetComponentInParent<FigForgePageCompositor>();
+            if (comp != null) return comp;
+
+            var screen = GetComponentInParent<FigForgeScreen>();
+            if (screen != null) return screen.gameObject.AddComponent<FigForgePageCompositor>();
+
+            var c = canvas;
+            if (c != null) return c.gameObject.AddComponent<FigForgePageCompositor>();
+
+            return null;
+        }
+
+        void MarkPageCompositorDirty()
+        {
+            var comp = _pageCompositor != null ? _pageCompositor : GetComponentInParent<FigForgePageCompositor>();
+            if (comp != null) comp.MarkDirty();
         }
 
         float SurfaceScaleFactor()
@@ -977,6 +1057,7 @@ namespace FigForge
             if (!ShouldUseCachedSource())
             {
                 ReleaseCachedSurface();
+                MarkPageCompositorDirty();
                 SetVerticesDirty();
                 SetMaterialDirty();
                 return;
@@ -989,6 +1070,7 @@ namespace FigForge
                 return;
 
             ReleaseCachedSurface();
+            MarkPageCompositorDirty();
             SetVerticesDirty();
             SetMaterialDirty();
         }
@@ -1050,6 +1132,13 @@ namespace FigForge
 
         protected override void OnPopulateMesh(VertexHelper vh)
         {
+            if (IsRenderedByPageCompositor())
+            {
+                EnsureCachedSurface();
+                vh.Clear();
+                return;
+            }
+
             UpdateActiveMaterial(ActiveRenderMaterial());
             var r = GetPixelAdjustedRect();
             float pad = MeshPad();
@@ -1090,6 +1179,7 @@ namespace FigForge
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
             Canvas.willRenderCanvases += HandleWillRenderCanvases;
             base.OnEnable();
+            UpdatePageCompositorRegistration();
             ClampGraphicState();
             SetVerticesDirty();
             SetMaterialDirty();
@@ -1099,6 +1189,7 @@ namespace FigForge
         {
             base.OnRectTransformDimensionsChange();
             ReleaseCachedSurface();
+            MarkPageCompositorDirty();
             SetVerticesDirty();
             SetMaterialDirty();
         }
@@ -1107,12 +1198,19 @@ namespace FigForge
         {
             base.OnCanvasHierarchyChanged();
             ReleaseCachedSurface();
+            UpdatePageCompositorRegistration();
+            MarkPageCompositorDirty();
             SetMaterialDirty();
         }
 
         protected override void OnDisable()
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
+            if (_pageCompositor != null)
+            {
+                _pageCompositor.Unregister(this);
+                _pageCompositor = null;
+            }
             ReleaseCachedSurface();
             base.OnDisable();
         }
@@ -1135,6 +1233,8 @@ namespace FigForge
             NormalizeLists();
             RefreshRecipe();
             ReleaseCachedSurface();
+            UpdatePageCompositorRegistration();
+            MarkPageCompositorDirty();
             base.OnValidate();
             SetVerticesDirty();
             SetMaterialDirty();
