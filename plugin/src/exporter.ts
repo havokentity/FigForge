@@ -289,6 +289,21 @@ function firstTextLabel(node: SceneNode): string | undefined {
   return undefined;
 }
 
+function childByExactName(node: SceneNode, name: string): SceneNode | undefined {
+  return 'children' in node
+    ? ((node as ChildrenMixin).children as SceneNode[]).find((c) => c.name.toLowerCase() === name.toLowerCase())
+    : undefined;
+}
+
+function firstTextUnderNamedChild(node: SceneNode, names: string[]): string | undefined {
+  for (const name of names) {
+    const child = childByExactName(node, name);
+    const text = child ? firstTextLabel(child) : undefined;
+    if (text !== undefined) return text;
+  }
+  return undefined;
+}
+
 /** First TEXT node under a node — used to read a canonical instance's label font. */
 function firstTextNode(node: SceneNode): TextNode | undefined {
   if (node.type === 'TEXT') return node as TextNode;
@@ -317,7 +332,7 @@ function gatherTexts(node: SceneNode): string[] {
 
 /** Initial control state from instance variant properties, where detectable. */
 function canonicalValue(node: SceneNode, kind: CanonicalKind): string | undefined {
-  if (kind === 'input') return firstTextLabel(node);
+  if (kind === 'input') return firstTextUnderNamedChild(node, ['Text', 'Value']);
   if (kind === 'toggle') {
     const props = (node as unknown as {
       componentProperties?: Record<string, { value: unknown }>;
@@ -345,6 +360,13 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
     instanceName: ref.instanceName,
     label: textLabel || ref.instanceName,
   };
+  if (ref.kind === 'input') {
+    const placeholder = firstTextUnderNamedChild(node, ['Placeholder', 'Label']) || textLabel;
+    if (placeholder !== undefined) {
+      c.placeholder = placeholder;
+      c.label = placeholder;
+    }
+  }
   const value = canonicalValue(node, ref.kind);
   if (value !== undefined) c.value = value;
   if (ref.kind === 'dropdown') {
@@ -768,6 +790,22 @@ export async function exportDesign(
       parts: partsOf(master, ['Background', 'Checkmark', 'Label']) };
   }
 
+  // Capture an input field: Background (TMP_InputField.targetGraphic), Placeholder,
+  // optional initial Text value, and normalized child layout.
+  function captureInput(master: SceneNode) {
+    const bg = childByName(master, 'Background');
+    const shape = bg ? shapeOf(bg, [master]) : null;
+    const placeholder = textOf(childByName(master, 'Placeholder')) ?? textOf(childByName(master, 'Label'));
+    const value = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value'));
+    return {
+      shape: shape ?? undefined,
+      label: placeholder,
+      placeholder,
+      value,
+      parts: partsOf(master, ['Background', 'Placeholder', 'Text', 'Value']),
+    };
+  }
+
   // Capture a dropdown: Background, the option list (each text in the 'Options' frame),
   // and the selected value.
   async function captureDropdown(master: SceneNode, tagValue?: string) {
@@ -900,6 +938,15 @@ export async function exportDesign(
     if (ref.kind === 'toggle' || ref.kind === 'radio') {
       const t = captureToggle(master, ref.value);
       if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts });
+    } else if (ref.kind === 'input') {
+      const i = captureInput(master);
+      controlByNode.set(p.node.id, {
+        shape: i.shape,
+        label: i.label,
+        placeholder: i.placeholder,
+        value: i.value,
+        parts: i.parts,
+      });
     } else if (ref.kind === 'dropdown') {
       const d = await captureDropdown(master, ref.value);
       controlByNode.set(p.node.id, {
@@ -1005,10 +1052,17 @@ export async function exportDesign(
     if (canonical && controlByNode.has(node.id)) {
       const instanceDropdownLabel = canonical.kind === 'dropdown' ? canonical.label : undefined;
       const instanceDropdownValue = canonical.kind === 'dropdown' ? canonical.value : undefined;
+      const instanceInputLabel = canonical.kind === 'input' ? canonical.label : undefined;
+      const instanceInputPlaceholder = canonical.kind === 'input' ? canonical.placeholder : undefined;
+      const instanceInputValue = canonical.kind === 'input' ? canonical.value : undefined;
       Object.assign(canonical, controlByNode.get(node.id));
       if (canonical.kind === 'dropdown') {
         if (instanceDropdownLabel !== undefined) canonical.label = instanceDropdownLabel;
         if (instanceDropdownValue !== undefined) canonical.value = instanceDropdownValue;
+      } else if (canonical.kind === 'input') {
+        if (instanceInputLabel !== undefined) canonical.label = instanceInputLabel;
+        if (instanceInputPlaceholder !== undefined) canonical.placeholder = instanceInputPlaceholder;
+        if (instanceInputValue !== undefined) canonical.value = instanceInputValue;
       }
     }
     const nav = navFor(node);

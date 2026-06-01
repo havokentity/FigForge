@@ -2,8 +2,9 @@
 // FigForge — procedural rounded-rect UI graphic. Drives the FigForge/RoundedRect
 // SDF shader from serialized params (corner radius, fill, optional gradient,
 // border), so a button background is razor-crisp at any size and matches the
-// Figma vector — no exported PNG, no 9-slice. Per-instance material; params and
-// rect size are pushed to the shader. FigForgeButtonStateColors swaps the fill.
+// Figma vector — no exported PNG, no 9-slice. All instances share one material;
+// per-rect params are encoded into the quad vertices so uGUI can batch them.
+// FigForgeButtonStateColors swaps the fill.
 // =============================================================================
 
 using UnityEngine;
@@ -60,19 +61,13 @@ namespace FigForge
         [SerializeField] float shadowBlur = 0f;              // px
         [SerializeField] float shadowSpread = 0f;            // px
 
-        Material _mat;
-        static readonly int IdFill = Shader.PropertyToID("_FillColor");
-        static readonly int IdFill2 = Shader.PropertyToID("_Fill2");
-        static readonly int IdBorder = Shader.PropertyToID("_BorderColor");
-        static readonly int IdBorderW = Shader.PropertyToID("_BorderWidth");
-        static readonly int IdRadius = Shader.PropertyToID("_Radius");
-        static readonly int IdSize = Shader.PropertyToID("_Size");
-        static readonly int IdGrad = Shader.PropertyToID("_GradientDir");
-        static readonly int IdPad = Shader.PropertyToID("_Pad");
-        static readonly int IdStrokeOutset = Shader.PropertyToID("_StrokeOutset");
-        static readonly int IdShadowColor = Shader.PropertyToID("_ShadowColor");
-        static readonly int IdShadowOffset = Shader.PropertyToID("_ShadowOffset");
-        static readonly int IdShadowParams = Shader.PropertyToID("_ShadowParams");
+        static Material _sharedMat;
+        const AdditionalCanvasShaderChannels SdfChannels =
+            AdditionalCanvasShaderChannels.TexCoord1 |
+            AdditionalCanvasShaderChannels.TexCoord2 |
+            AdditionalCanvasShaderChannels.TexCoord3 |
+            AdditionalCanvasShaderChannels.Normal |
+            AdditionalCanvasShaderChannels.Tangent;
 
         // How far the stroke extends OUTSIDE the fill edge (scaled px).
         float StrokeOutset() => Mathf.Max(0f, borderWidth) * Mathf.Clamp01(borderAlign);
@@ -135,70 +130,34 @@ namespace FigForge
             shadowColor = color; shadowOffset = offset; shadowBlur = blur; shadowSpread = spread;
         }
 
-        Material EnsureMat()
+        static Material EnsureMat()
         {
-            if (_mat == null)
+            if (_sharedMat == null)
             {
                 var sh = Shader.Find("FigForge/RoundedRect");
-                if (sh != null) _mat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave };
+                if (sh != null) _sharedMat = new Material(sh) { hideFlags = HideFlags.HideAndDontSave };
             }
-            return _mat;
+            return _sharedMat;
         }
 
         public override Material material { get => EnsureMat() ?? base.material; set { } }
 
-        // Write our SDF params onto a material. Factored out so we can re-apply them
-        // to the mask-modified material too (see GetModifiedMaterial).
-        void ApplyParams(Material m)
+        void EnsureCanvasChannels()
         {
-            if (m == null) return;
-            var r = rectTransform.rect;
-            m.SetColor(IdFill, fillColor);
-            m.SetColor(IdFill2, fillColor2);
-            m.SetColor(IdBorder, borderColor);
-            m.SetFloat(IdBorderW, borderWidth);
-            m.SetVector(IdRadius, corners);
-            m.SetVector(IdSize, new Vector4(r.width, r.height, 0, 0));
-            m.SetVector(IdGrad, new Vector4(gradientDir.x, gradientDir.y, 0, 0));
-            m.SetFloat(IdStrokeOutset, StrokeOutset());
-            m.SetFloat(IdPad, MeshPad());
-            m.SetColor(IdShadowColor, shadowColor);
-            m.SetVector(IdShadowOffset, new Vector4(shadowOffset.x, shadowOffset.y, 0, 0));
-            m.SetVector(IdShadowParams, new Vector4(shadowBlur, shadowSpread, 0, 0));
+            var c = canvas;
+            if (c != null && (c.additionalShaderChannels & SdfChannels) != SdfChannels)
+                c.additionalShaderChannels |= SdfChannels;
         }
 
         void Push()
         {
-            var m = EnsureMat();
-            if (m == null) return;
-            ApplyParams(m);
-            // Belt-and-suspenders for MASKED graphics: the UGUI Mask renders us through
-            // a cached StencilMaterial COPY of _mat, not _mat itself. GetModifiedMaterial
-            // re-applies our params to that copy, but only on the next canvas rebuild —
-            // a per-frame pointer enter/exit can revert the swap before that runs. So also
-            // push directly onto the live copy now (same shader → it's our stencil copy),
-            // making a hover/press fill swap take effect immediately under a mask.
-            var cr = canvasRenderer;
-            var live = cr != null ? cr.GetMaterial() : null;
-            if (live != null && live != m && live.shader == m.shader) ApplyParams(live);
-            SetMaterialDirty();
+            EnsureMat();
+            EnsureCanvasChannels();
+            SetVerticesDirty();
         }
 
-        // When this graphic is inside a UGUI Mask, the mask wraps our per-instance
-        // material in a StencilMaterial COPY that is cached by base-material reference
-        // — so later uniform changes (a hover/press fill swap, or a resize) never reach
-        // the actually-rendered copy and nothing updates on screen. SetMaterialDirty
-        // re-runs this each time, so re-apply our params to whatever material the mask
-        // hands back, keeping the masked copy in sync with fillColor/gradient/size.
-        public override Material GetModifiedMaterial(Material baseMaterial)
-        {
-            var m = base.GetModifiedMaterial(baseMaterial);
-            if (m != null && m != baseMaterial) ApplyParams(m);
-            return m;
-        }
-
-        // White vertices — the shader supplies fill/border/gradient; vertex color
-        // is only the CanvasRenderer tint (kept opaque white).
+        // The shader supplies fill/border/gradient; vertex color is reserved for
+        // Graphic.color / CanvasRenderer tint.
         protected override void OnPopulateMesh(VertexHelper vh)
         {
             var r = GetPixelAdjustedRect();
@@ -207,21 +166,65 @@ namespace FigForge
             // box at the rect size). UV stays 0..1.
             float pad = MeshPad();
             float x0 = r.x - pad, y0 = r.y - pad, x1 = r.xMax + pad, y1 = r.yMax + pad;
-            var c = Color.white;
+            var c = color;
+            var fill = PackColor(fillColor);
+            var fill2 = PackColor(fillColor2);
+            var border = PackColor(borderColor);
+            var shadow = PackColor(shadowColor);
+            float grad = PackSignedUnitPair(gradientDir);
+            var uv0 = new Vector4(0, 0, fill.x, fill.y);
+            var uv1 = new Vector4(fill2.x, fill2.y, border.x, border.y);
+            var uv2 = new Vector4(shadow.x, shadow.y, r.width, r.height);
+            var uv3 = new Vector4(grad, corners.x, corners.y, corners.z);
+            var n = new Vector3(corners.w, borderWidth, StrokeOutset());
+            var t = new Vector4(shadowOffset.x, shadowOffset.y, shadowBlur, shadowSpread);
             vh.Clear();
-            vh.AddVert(new Vector3(x0, y0), c, new Vector2(0, 0));
-            vh.AddVert(new Vector3(x0, y1), c, new Vector2(0, 1));
-            vh.AddVert(new Vector3(x1, y1), c, new Vector2(1, 1));
-            vh.AddVert(new Vector3(x1, y0), c, new Vector2(1, 0));
+            AddVert(vh, new Vector3(x0, y0), c, uv0, uv1, uv2, uv3, n, t);
+            uv0.y = 1f; AddVert(vh, new Vector3(x0, y1), c, uv0, uv1, uv2, uv3, n, t);
+            uv0.x = 1f; AddVert(vh, new Vector3(x1, y1), c, uv0, uv1, uv2, uv3, n, t);
+            uv0.y = 0f; AddVert(vh, new Vector3(x1, y0), c, uv0, uv1, uv2, uv3, n, t);
             vh.AddTriangle(0, 1, 2);
             vh.AddTriangle(2, 3, 0);
         }
 
+        static void AddVert(VertexHelper vh, Vector3 pos, Color32 color, Vector4 uv0, Vector4 uv1, Vector4 uv2, Vector4 uv3, Vector3 normal, Vector4 tangent)
+        {
+            var v = UIVertex.simpleVert;
+            v.position = pos;
+            v.color = color;
+            v.uv0 = uv0;
+            v.uv1 = uv1;
+            v.uv2 = uv2;
+            v.uv3 = uv3;
+            v.normal = normal;
+            v.tangent = tangent;
+            vh.AddVert(v);
+        }
+
+        static Vector2 PackColor(Color c)
+            => new Vector2(PackBytes(c.r, c.g), PackBytes(c.b, c.a));
+
+        static float PackBytes(float a, float b)
+        {
+            int ai = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(a) * 255f), 0, 255);
+            int bi = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(b) * 255f), 0, 255);
+            return (ai * 256 + bi) / 65535f;
+        }
+
+        static float PackSignedUnitPair(Vector2 v)
+        {
+            if (v.sqrMagnitude <= 1e-8f) return 0f;
+            v = Vector2.ClampMagnitude(v, 1f);
+            int x = Mathf.Clamp(Mathf.RoundToInt((v.x * 0.5f + 0.5f) * 255f), 0, 255);
+            int y = Mathf.Clamp(Mathf.RoundToInt((v.y * 0.5f + 0.5f) * 255f), 0, 255);
+            return (x * 256 + y + 1) / 65536f;
+        }
+
         protected override void OnEnable() { base.OnEnable(); Push(); }
+        protected override void OnCanvasHierarchyChanged() { base.OnCanvasHierarchyChanged(); EnsureCanvasChannels(); }
         protected override void OnRectTransformDimensionsChange() { base.OnRectTransformDimensionsChange(); Push(); }
 #if UNITY_EDITOR
         protected override void OnValidate() { base.OnValidate(); Push(); }
 #endif
-        protected override void OnDestroy() { if (_mat != null) DestroyImmediate(_mat); base.OnDestroy(); }
     }
 }

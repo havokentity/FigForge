@@ -128,6 +128,7 @@ namespace FigForge
         public string instanceName;
         public string label;
         public string value;             // initial state (toggle on/off, slider value, input text)
+        public string placeholder;       // input placeholder text
         public List<string> options;     // dropdown options
         public CanonicalStates states;   // per-state sprite filenames (button)
         public CanonicalLabelFont labelFont;    // THIS instance's label font (per-instance override when it differs)

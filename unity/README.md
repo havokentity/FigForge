@@ -29,5 +29,5 @@ Pick one with the **UI backend** dropdown:
 - Constraint-driven `RectTransform` anchors (stretch / pin / proportional), not everything centered.
 - Sprite images, **solid + gradient fills**, **real stroke borders**, **rotation**, and procedural **rounded panels** for fill-only rounded containers.
 - `TextMeshProUGUI` text with per-family/style font mapping.
-- **Canonical UI elements**: a layer named `Btn_<instance>_<ref>` becomes an instance of the matching prefab in your assigned **Canonical Library** (Create ▸ FigForge ▸ Canonical Library). Buttons are supported today.
+- **Canonical UI elements**: layers like `Btn_<instance>_<ref>` and `Inp_<instance>_<ref>` become generated or library-backed uGUI controls through your **Canonical Library** (Create ▸ FigForge ▸ Canonical Library).
 - **Connected scenes**: each imported frame becomes a `BaseScreen` under a shared `Canvas` + `ScreenManager`, so several pages live in one navigable scene.

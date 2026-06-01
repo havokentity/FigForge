@@ -21,6 +21,7 @@ wired — only structure, references, and navigation *data*.
 
 - `canonical.kind` ∈ button | toggle | input | dropdown | slider
 - `canonical.value?` — initial state (toggle on/off, slider value, input text) when detectable
+- `canonical.placeholder?` — placeholder text for input fields
 - `canonical.options?` — string[] for dropdowns (from Figma list children; heuristic)
 - `element.nav?` — `{ target: "<screenName>", trigger: "click" }` from Figma prototype reactions (data only)
 

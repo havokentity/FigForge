@@ -21,16 +21,69 @@ const merged = new Set<string>();
 const forcedPng = new Set<string>();
 let currentTree: TreeNode | null = null;
 let selectedId: string | null = null;
+let expandedNodes = new Set<string>();
+
+type TreeFilter = 'all' | 'exported' | 'hidden' | 'merged' | 'canonical';
+type PreviewZoomMode = 'fit' | 'actual' | 'manual';
+interface UiPrefs {
+  scale?: string;
+  chips?: Record<string, boolean>;
+  componentsPage?: boolean;
+  unityPort?: string;
+  windowPreset?: string;
+  mcpDesired?: boolean;
+  treeFilter?: TreeFilter;
+}
+
+const PREFS_KEY = 'figforge.ui.prefs';
+const TREE_FILTERS = new Set<TreeFilter>(['all', 'exported', 'hidden', 'merged', 'canonical']);
+const hasTreeFilters = Boolean(document.getElementById('treeFilters'));
+let activeTreeFilter: TreeFilter = hasTreeFilters ? readTreeFilter(readPrefs().treeFilter) : 'all';
+let previewImg: HTMLImageElement | null = null;
+let previewObjectUrl: string | null = null;
+let previewZoom = 1;
+let previewZoomMode: PreviewZoomMode = 'fit';
+
+function readPrefs(): UiPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(patch: UiPrefs) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...readPrefs(), ...patch }));
+  } catch {
+    // Figma can deny storage in some runtimes; preferences are best-effort.
+  }
+}
+
+function readTreeFilter(value: unknown): TreeFilter {
+  return typeof value === 'string' && TREE_FILTERS.has(value as TreeFilter) ? (value as TreeFilter) : 'all';
+}
 
 // ---------------------------------------------------------------------------
 // Header chrome
 // ---------------------------------------------------------------------------
-let lastPreset = 'M';
+const savedPreset = readPrefs().windowPreset;
+let lastPreset = savedPreset === 'S' || savedPreset === 'L' ? savedPreset : 'M';
+function setSizePresetUi(preset: string) {
+  document.querySelectorAll('#sizeSeg button').forEach((x) => {
+    x.classList.toggle('active', (x as HTMLElement).dataset.size === preset);
+  });
+}
+setSizePresetUi(lastPreset);
+if (lastPreset !== 'M') post({ type: 'resize-ui', preset: lastPreset });
 document.querySelectorAll('#sizeSeg button').forEach((b) =>
   b.addEventListener('click', () => {
-    document.querySelectorAll('#sizeSeg button').forEach((x) => x.classList.remove('active'));
-    b.classList.add('active');
     lastPreset = (b as HTMLElement).dataset.size!;
+    setSizePresetUi(lastPreset);
+    savePrefs({ windowPreset: lastPreset });
     post({ type: 'resize-ui', preset: lastPreset });
   })
 );
@@ -46,16 +99,39 @@ minBtn.addEventListener('click', () => {
 });
 
 $('#reloadBtn').addEventListener('click', () => post({ type: 'reload' }));
+const savedScale = readPrefs().scale;
+if (savedScale) {
+  const scaleEl = $('#scale') as HTMLSelectElement;
+  if ([...scaleEl.options].some((o) => o.value === savedScale)) scaleEl.value = savedScale;
+}
+$('#scale').addEventListener('change', () => savePrefs({ scale: ($('#scale') as HTMLSelectElement).value }));
 const compPageOn = () => {
   const el = document.getElementById('componentsPageChk') as HTMLInputElement | null;
   return el ? el.checked : true; // default ON
 };
+const componentsPageChk = document.getElementById('componentsPageChk') as HTMLInputElement | null;
+if (componentsPageChk) {
+  const saved = readPrefs().componentsPage;
+  if (typeof saved === 'boolean') componentsPageChk.checked = saved;
+  componentsPageChk.closest('.chip')?.classList.toggle('on', componentsPageChk.checked);
+  componentsPageChk.addEventListener('change', () => {
+    componentsPageChk.closest('.chip')?.classList.toggle('on', componentsPageChk.checked);
+    savePrefs({ componentsPage: componentsPageChk.checked });
+  });
+}
+const unityPortEl = document.getElementById('unityPort') as HTMLInputElement | null;
+if (unityPortEl) {
+  const saved = readPrefs().unityPort;
+  if (saved) unityPortEl.value = saved;
+  unityPortEl.addEventListener('input', () => savePrefs({ unityPort: unityPortEl.value }));
+}
 $('#createBtnBtn').addEventListener('click', () => {
   setStatus('Creating button component…');
   post({ type: 'create-button', componentsPage: compPageOn() });
 });
 for (const [id, kind] of [
   ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
+  ['createInputBtn', 'input'],
   ['createDropdownBtn', 'dropdown'], ['createListBtn', 'list'],
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
@@ -68,9 +144,16 @@ for (const [id, kind] of [
 function wireChip(id: string) {
   const el = $(`#${id}`);
   const input = el.querySelector('input') as HTMLInputElement;
+  const saved = readPrefs().chips?.[id];
+  if (typeof saved === 'boolean') input.checked = saved;
+  el.classList.toggle('on', input.checked);
   el.addEventListener('click', (e) => {
-    if (e.target !== input) input.checked = !input.checked;
+    if (e.target !== input) {
+      e.preventDefault();
+      input.checked = !input.checked;
+    }
     el.classList.toggle('on', input.checked);
+    savePrefs({ chips: { ...(readPrefs().chips || {}), [id]: input.checked } });
   });
 }
 ['optAutoMerge', 'optGradients', 'optRasterStroke'].forEach(wireChip);
@@ -86,17 +169,23 @@ const TYPE_SHORT: Record<string, string> = {
 function renderTree() {
   const host = $('#tree');
   host.innerHTML = '';
+  updateTreeStats();
+  updateTreeFilterUi();
   if (!currentTree) {
     host.innerHTML = '<div class="empty">Select a frame in Figma.</div>';
     return;
   }
   const query = ($('#search') as HTMLInputElement).value.trim().toLowerCase();
-  const expanded = new Set<string>(); // simple: everything expanded for now
+  const revealingMatches = Boolean(query) || activeTreeFilter !== 'all';
 
-  const walk = (node: TreeNode) => {
-    const match = !query || node.displayName.toLowerCase().includes(query);
-    const childEls = node.children.map(walk).filter(Boolean) as HTMLElement[];
-    if (!match && childEls.length === 0) return null;
+  const walk = (node: TreeNode): HTMLElement | null => {
+    const children = node.children || [];
+    const expanded = expandedNodes.has(node.id);
+    const nameMatch = !query || node.displayName.toLowerCase().includes(query);
+    const filterMatch = matchesTreeFilter(node);
+    const selfMatch = nameMatch && filterMatch;
+    const childEls = (revealingMatches || expanded) ? children.map(walk).filter(Boolean) as HTMLElement[] : [];
+    if (!selfMatch && childEls.length === 0) return null;
 
     const row = document.createElement('div');
     row.className = 'row';
@@ -105,11 +194,20 @@ function renderTree() {
     row.style.paddingLeft = `${8 + node.depth * 12}px`;
 
     row.innerHTML = `
-      <span class="twirl">${node.children.length ? '▸' : ''}</span>
+      <span class="twirl" title="${children.length ? 'Expand/collapse' : ''}">${children.length ? (expanded || revealingMatches ? '▾' : '▸') : ''}</span>
       <span class="type-tag">${TYPE_SHORT[node.type] || node.type.slice(0, 3)}</span>
       <span class="tname">${escapeHtml(node.displayName)}</span>
       ${node.canonicalRef ? `<span class="canon-tag" title="canonical: ${escapeHtml(node.canonicalRef)}">${escapeHtml(node.canonicalRef)}</span>` : ''}
     `;
+    const twirl = row.querySelector('.twirl') as HTMLElement | null;
+    if (twirl && children.length) {
+      twirl.style.cursor = 'pointer';
+      twirl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggle(expandedNodes, node.id);
+        renderTree();
+      });
+    }
 
     const eye = miniBtn('👁', excluded.has(node.id) ? '' : 'on', 'Toggle export', () => {
       toggle(excluded, node.id); post({ type: 'toggle-visibility', nodeId: node.id }); renderTree();
@@ -137,11 +235,16 @@ function renderTree() {
     const frag = document.createElement('div');
     frag.appendChild(row);
     childEls.forEach((c) => frag.appendChild(c));
-    return frag as unknown as HTMLElement;
+    return frag;
   };
 
   const tree = walk(currentTree);
   if (tree) host.appendChild(tree);
+  else host.innerHTML = '<div class="empty">No matching layers.</div>';
+}
+
+function primeExpandedNodes(root: TreeNode) {
+  expandedNodes = new Set([root.id]);
 }
 
 function miniBtn(label: string, cls: string, title: string, onClick: () => void): HTMLButtonElement {
@@ -155,7 +258,100 @@ function miniBtn(label: string, cls: string, title: string, onClick: () => void)
 function toggle(set: Set<string>, id: string) { set.has(id) ? set.delete(id) : set.add(id); }
 function escapeHtml(s: string) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!)); }
 
+function matchesTreeFilter(node: TreeNode): boolean {
+  switch (activeTreeFilter) {
+    case 'exported': return !excluded.has(node.id) && node.visible;
+    case 'hidden': return excluded.has(node.id) || !node.visible;
+    case 'merged': return merged.has(node.id);
+    case 'canonical': return Boolean(node.canonicalRef);
+    default: return true;
+  }
+}
+
+function updateTreeStats() {
+  const el = document.getElementById('treeStats');
+  if (!el) return;
+  if (!currentTree) {
+    el.textContent = '';
+    return;
+  }
+  const stats = { total: 0, exported: 0, excluded: 0, merged: 0, raster: 0 };
+  const walk = (node: TreeNode) => {
+    stats.total += 1;
+    if (!excluded.has(node.id) && node.visible) stats.exported += 1;
+    if (excluded.has(node.id) || !node.visible) stats.excluded += 1;
+    if (merged.has(node.id)) stats.merged += 1;
+    if (forcedPng.has(node.id)) stats.raster += 1;
+    (node.children || []).forEach(walk);
+  };
+  walk(currentTree);
+  el.textContent = `total ${stats.total} · exported ${stats.exported} · excluded ${stats.excluded} · merged ${stats.merged} · raster ${stats.raster}`;
+}
+
+function updateTreeFilterUi() {
+  const host = document.getElementById('treeFilters');
+  if (!host) return;
+  host.querySelectorAll<HTMLButtonElement>('button[data-filter]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.filter === activeTreeFilter);
+  });
+}
+
+function wireTreeFilters() {
+  const host = document.getElementById('treeFilters');
+  if (!host) return;
+  host.addEventListener('click', (e) => {
+    const target = e.target;
+    const btn = target instanceof HTMLElement ? target.closest<HTMLButtonElement>('button[data-filter]') : null;
+    if (!btn) return;
+    activeTreeFilter = readTreeFilter(btn.dataset.filter);
+    savePrefs({ treeFilter: activeTreeFilter });
+    renderTree();
+  });
+  updateTreeFilterUi();
+}
+
 $('#search').addEventListener('input', renderTree);
+wireTreeFilters();
+
+// ---------------------------------------------------------------------------
+// Preview zoom
+// ---------------------------------------------------------------------------
+function updatePreviewZoom() {
+  if (!previewImg) return;
+  if (previewZoomMode === 'fit') {
+    previewImg.style.width = '';
+    previewImg.style.height = '';
+    previewImg.style.maxWidth = '100%';
+    previewImg.style.maxHeight = '100%';
+    setPreviewZoomLabel('Fit');
+    return;
+  }
+  previewImg.style.maxWidth = 'none';
+  previewImg.style.maxHeight = 'none';
+  previewImg.style.width = `${Math.max(1, Math.round(previewImg.naturalWidth * previewZoom))}px`;
+  previewImg.style.height = 'auto';
+  setPreviewZoomLabel(`${Math.round(previewZoom * 100)}%`);
+}
+
+function setPreviewZoomLabel(text: string) {
+  const label = document.getElementById('previewZoomLabel');
+  if (label) label.textContent = text;
+}
+
+function setPreviewZoom(mode: PreviewZoomMode, zoom = previewZoom) {
+  previewZoomMode = mode;
+  previewZoom = Math.min(4, Math.max(0.1, zoom));
+  updatePreviewZoom();
+}
+
+function wirePreviewZoom() {
+  document.getElementById('previewFit')?.addEventListener('click', () => setPreviewZoom('fit', 1));
+  document.getElementById('previewActual')?.addEventListener('click', () => setPreviewZoom('actual', 1));
+  document.getElementById('previewZoomOut')?.addEventListener('click', () => setPreviewZoom('manual', previewZoomMode === 'fit' ? 0.9 : previewZoom - 0.1));
+  document.getElementById('previewZoomIn')?.addEventListener('click', () => setPreviewZoom('manual', previewZoomMode === 'fit' ? 1.1 : previewZoom + 0.1));
+  setPreviewZoomLabel('Fit');
+}
+wirePreviewZoom();
 
 // ---------------------------------------------------------------------------
 // Export
@@ -189,6 +385,7 @@ function currentOptions() {
 }
 
 $('#exportBtn').addEventListener('click', () => {
+  frameExportTarget = 'zip';
   setStatus('Exporting…');
   showProgress(true);
   post({ type: 'export', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
@@ -196,6 +393,7 @@ $('#exportBtn').addEventListener('click', () => {
 
 // Where the next page export goes: download a .zip, or POST straight to Unity.
 let pageExportTarget: 'zip' | 'unity' = 'zip';
+let frameExportTarget: 'zip' | 'unity' = 'zip';
 
 $('#exportPageBtn').addEventListener('click', () => {
   pageExportTarget = 'zip';
@@ -206,9 +404,16 @@ $('#exportPageBtn').addEventListener('click', () => {
 
 $('#exportUnityBtn').addEventListener('click', () => {
   pageExportTarget = 'unity';
-  setStatus('Exporting whole page → Unity…');
+  setStatus('Exporting page → Unity…');
   showProgress(true);
   post({ type: 'export-page', scale: parseScale(), options: currentOptions() });
+});
+
+$('#exportFrameUnityBtn').addEventListener('click', () => {
+  frameExportTarget = 'unity';
+  setStatus('Exporting frame → Unity…');
+  showProgress(true);
+  post({ type: 'export', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
 });
 
 function unityImportUrl(): string {
@@ -229,6 +434,15 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
     else setStatus(`Unity refused the import (HTTP ${res.status}).`, true);
   } catch (e) {
     setStatus(`Couldn't reach Unity at ${url} — is the FigForge importer open with live import enabled?`, true);
+  }
+}
+
+function screenFromManifest(manifestJson: string): string {
+  try {
+    const parsed = JSON.parse(manifestJson);
+    return parsed?.screen?.name || 'screen';
+  } catch {
+    return 'screen';
   }
 }
 
@@ -357,10 +571,20 @@ function disconnectMcp() {
 }
 
 $('#mcpCtl').addEventListener('click', () => {
-  if (wantConnected) disconnectMcp();
-  else { wantConnected = true; connectMcp(); }
+  if (wantConnected) {
+    savePrefs({ mcpDesired: false });
+    disconnectMcp();
+  } else {
+    wantConnected = true;
+    savePrefs({ mcpDesired: true });
+    connectMcp();
+  }
 });
 setMcp('off');
+if (readPrefs().mcpDesired) {
+  wantConnected = true;
+  connectMcp();
+}
 
 // ---------------------------------------------------------------------------
 // main → ui
@@ -371,28 +595,38 @@ window.onmessage = (event: MessageEvent) => {
 
   switch (msg.type) {
     case 'selection-info':
+      const previousRootId = currentTree?.id;
       currentTree = msg.tree;
       selectedId = null;
+      if (currentTree && currentTree.id !== previousRootId) primeExpandedNodes(currentTree);
       setStatus(`${msg.name} · ${msg.elementCount} layers`);
       ($('#exportBtn') as HTMLButtonElement).disabled = false;
+      ($('#exportFrameUnityBtn') as HTMLButtonElement).disabled = false;
       renderTree();
       break;
 
     case 'no-selection':
       currentTree = null;
       ($('#exportBtn') as HTMLButtonElement).disabled = true;
+      ($('#exportFrameUnityBtn') as HTMLButtonElement).disabled = true;
+      expandedNodes = new Set();
       setStatus('Select a frame, component, or group.');
       renderTree();
       break;
 
     case 'element-preview': {
+      if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
       const blob = new Blob([new Uint8Array(msg.imageData)], { type: 'image/png' });
       const url = URL.createObjectURL(blob);
+      previewObjectUrl = url;
       $('#previewHead').textContent = `${msg.name} · ${msg.figmaType} · ${Math.round(msg.size.w)}×${Math.round(msg.size.h)}`;
       $('#previewWrap').innerHTML = '';
       const img = document.createElement('img');
       img.src = url;
+      previewImg = img;
+      img.onload = () => updatePreviewZoom();
       $('#previewWrap').appendChild(img);
+      updatePreviewZoom();
       break;
     }
 
@@ -404,8 +638,17 @@ window.onmessage = (event: MessageEvent) => {
     case 'export-complete':
       showProgress(false);
       setProgress(0);
-      downloadBundle(msg.manifest, msg.assets);
-      setStatus(`Exported ${msg.assets.length} asset(s). Bundle downloaded.`);
+      if (frameExportTarget === 'unity') {
+        const screenName = screenFromManifest(msg.manifest);
+        frameExportTarget = 'zip';
+        sendToUnity(
+          { name: screenName, initial: screenName },
+          [{ name: screenName, manifest: msg.manifest, assets: msg.assets, role: 'screen' }]
+        );
+      } else {
+        downloadBundle(msg.manifest, msg.assets);
+        setStatus(`Exported ${msg.assets.length} asset(s). Bundle downloaded.`);
+      }
       break;
 
     case 'export-page-complete':
@@ -421,6 +664,7 @@ window.onmessage = (event: MessageEvent) => {
 
     case 'export-error':
       showProgress(false);
+      frameExportTarget = 'zip';
       setStatus(msg.message, true);
       break;
 

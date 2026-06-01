@@ -8,9 +8,12 @@
     --bg-secondary: var(--figma-color-bg-secondary, #2c2c2c);
     --bg-tertiary: var(--figma-color-bg-tertiary, #383838);
     --bg-hover: var(--figma-color-bg-hover, #383838);
+    --bg-selected: var(--figma-color-bg-selected, #39324d);
     --text: var(--figma-color-text, #ffffff);
     --text-secondary: var(--figma-color-text-secondary, #b3b3b3);
+    --text-tertiary: var(--figma-color-text-tertiary, #8c8c8c);
     --border: var(--figma-color-border, #444);
+    --border-strong: var(--figma-color-border-strong, #555);
     --brand: #7c5cff;
     --brand-strong: #6a47ff;
     --accent: var(--figma-color-bg-brand, #0d99ff);
@@ -35,26 +38,38 @@
 
   /* ---- header ---- */
   header {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 10px;
     padding: 8px 10px; border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--bg-secondary), var(--bg));
+    background: var(--bg-secondary);
+    min-height: 40px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
   }
   .logo {
     width: 22px; height: 22px; border-radius: 6px; flex: none;
     background: linear-gradient(135deg, var(--brand), var(--accent));
     display: grid; place-items: center; font-weight: 800; color: #fff; font-size: 12px;
-    box-shadow: 0 2px 8px rgba(124,92,255,.4);
+    box-shadow: 0 1px 6px rgba(124,92,255,.32);
   }
-  .title { font-weight: 700; font-size: 13px; letter-spacing: .2px; }
+  .title-wrap { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .title { font-weight: 700; font-size: 13px; letter-spacing: 0; }
   .pill {
-    font-size: 9px; padding: 2px 6px; border-radius: 999px;
+    font-size: 9px; padding: 1px 5px; border-radius: 999px;
     background: var(--bg-tertiary); color: var(--text-secondary);
   }
   .spacer { flex: 1; }
-  .seg { display: flex; background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 2px; }
+  .header-actions {
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+  }
+  .seg {
+    display: flex; background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 2px; min-height: 26px;
+  }
   .seg button {
     border: none; background: transparent; color: var(--text-secondary);
-    font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+    font-size: 10px; padding: 3px 7px; border-radius: 4px; cursor: pointer;
+    min-width: 23px; font-family: inherit;
   }
   .seg button.active { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex: none; }
@@ -63,15 +78,17 @@
   /* MCP connect/disconnect control (header) */
   .mcp {
     display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap;
-    background: var(--bg-tertiary); border: 1px solid transparent;
-    border-radius: var(--radius-sm); padding: 4px 9px; font-size: 10px; color: var(--text-secondary);
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 4px 8px; font-size: 10px; color: var(--text-secondary);
+    min-height: 26px;
   }
   .mcp:hover { color: var(--text); background: var(--bg-hover); }
   .mcp.connected { border-color: var(--ok); color: var(--text); }
   .mcp.connecting { border-color: var(--warn); }
   .icon-btn {
-    border: none; background: var(--bg-tertiary); color: var(--text-secondary);
-    width: 24px; height: 24px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
+    border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-secondary);
+    width: 26px; height: 26px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
+    display: inline-grid; place-items: center; font-family: inherit;
   }
   .icon-btn:hover { color: var(--text); background: var(--bg-hover); }
 
@@ -79,7 +96,8 @@
   body.minimized main,
   body.minimized #sizeSeg,
   body.minimized #version,
-  body.minimized #mcpLabel { display: none; }
+  body.minimized #mcpLabel,
+  body.minimized .title { display: none; }
   body.minimized header { border-bottom: none; }
 
   main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
@@ -87,30 +105,75 @@
 
   /* ---- toolbar ---- */
   .toolbar {
-    display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+    display: flex; align-items: center; gap: 6px; padding: 7px 10px;
     border-bottom: 1px solid var(--border); flex-wrap: wrap;
   }
-  .toolbar.subtools { padding-top: 6px; padding-bottom: 6px; background: var(--bg); }
-  .toolbar-label { font-size: 9px; letter-spacing: .6px; text-transform: uppercase; color: var(--text-secondary); }
+  .toolbar.primary-tools { background: var(--bg); }
+  .toolbar-label {
+    font-size: 9px; letter-spacing: .6px; text-transform: uppercase; color: var(--text-tertiary);
+    font-weight: 700;
+  }
   select, input[type="text"], input[type="number"] {
     background: var(--bg-tertiary); color: var(--text); border: 1px solid var(--border);
     border-radius: var(--radius-sm); padding: 5px 7px; font-size: 11px; font-family: inherit;
+    min-height: 26px;
   }
   .chip {
     display: inline-flex; align-items: center; gap: 5px; font-size: 10px;
     padding: 5px 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary);
     color: var(--text-secondary); cursor: pointer; border: 1px solid transparent;
+    min-height: 26px; font-family: inherit;
   }
   .chip input { accent-color: var(--brand); }
   .chip.on { color: var(--text); border-color: var(--brand); }
+  button.chip { border-color: var(--border); }
+  button.chip:hover, .chip:hover { color: var(--text); background: var(--bg-hover); }
+  .create-area {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+  }
+  .create-group { min-width: 0; }
+  .create-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .create-grid {
+    display: grid; grid-template-columns: repeat(6, minmax(48px, 1fr)); gap: 5px;
+  }
+  .create-grid .chip {
+    justify-content: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding-left: 6px; padding-right: 6px;
+  }
+  .create-settings {
+    display: flex; align-items: end; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
+  }
+  .port-chip input {
+    width: 54px; background: transparent; border: none; color: inherit; padding: 0; min-height: 16px;
+  }
+  .port-chip input:focus { outline: none; }
 
   /* ---- split ---- */
   .split { flex: 1; display: flex; overflow: hidden; }
   .tree-pane { flex: 1.3; display: flex; flex-direction: column; border-right: 1px solid var(--border); min-width: 0; }
   .preview-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .search { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  .tree-top { padding: 7px 10px; border-bottom: 1px solid var(--border); display: grid; gap: 6px; }
   .search input { width: 100%; }
+  .tree-filter-row {
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+  }
+  .tree-filters { flex: 1; min-width: 0; }
+  .tree-filters button {
+    flex: 1; padding-left: 5px; padding-right: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .tree { flex: 1; overflow: auto; padding: 4px 0; }
+  .tree-stats {
+    display: flex; align-items: center; gap: 7px; min-height: 25px;
+    padding: 5px 10px; border-top: 1px solid var(--border);
+    color: var(--text-tertiary); font-size: 10px; white-space: nowrap; overflow: hidden;
+    background: var(--bg-secondary);
+  }
+  .tree-stats:empty::before { content: "No selection"; }
 
   .row {
     display: flex; align-items: center; gap: 5px; padding: 3px 8px; cursor: pointer;
@@ -131,15 +194,30 @@
   .mini.png.on { background: var(--warn); color: #000; }
 
   /* ---- preview ---- */
-  .preview-head { padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-secondary); }
+  .preview-head {
+    display: flex; align-items: center; gap: 8px; min-height: 40px;
+    padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-secondary);
+  }
+  #previewHead {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .preview-zoom {
+    display: flex; align-items: center; gap: 4px; flex: none;
+  }
+  .preview-zoom .icon-btn {
+    width: auto; min-width: 28px; padding: 0 6px; white-space: nowrap;
+  }
+  .zoom-label {
+    min-width: 36px; text-align: center; color: var(--text-secondary); font-size: 10px;
+  }
   .canvas-wrap {
     flex: 1; display: grid; place-items: center; overflow: auto; padding: 14px;
     background-color: var(--bg-secondary);
     background-image:
-      linear-gradient(45deg, #00000022 25%, transparent 25%),
-      linear-gradient(-45deg, #00000022 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, #00000022 75%),
-      linear-gradient(-45deg, transparent 75%, #00000022 75%);
+      linear-gradient(45deg, #00000016 25%, transparent 25%),
+      linear-gradient(-45deg, #00000016 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #00000016 75%),
+      linear-gradient(-45deg, transparent 75%, #00000016 75%);
     background-size: 16px 16px;
     background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   }
@@ -148,41 +226,97 @@
 
   /* ---- footer ---- */
   footer { border-top: 1px solid var(--border); padding: 8px 10px; background: var(--bg-secondary); }
-  .statusline { font-size: 10px; color: var(--text-secondary); margin-bottom: 7px; min-height: 13px; font-family: ui-monospace, Menlo, monospace; }
+  .status-wrap {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch;
+  }
+  .status-card {
+    min-width: 0; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg); padding: 7px 8px; min-height: 86px;
+    display: flex; flex-direction: column;
+  }
+  .status-meta {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    color: var(--text-tertiary); font-size: 9px; text-transform: uppercase; letter-spacing: .6px;
+    margin-bottom: 5px; font-weight: 700;
+  }
+  .statusline {
+    font-size: 10px; color: var(--text-secondary); min-height: 13px;
+    font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    margin-top: auto;
+  }
+  .statusline:empty::before { content: "Ready"; color: var(--text-tertiary); }
   .statusline.err { color: var(--danger); }
-  .progress { height: 4px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; margin-bottom: 7px; display: none; }
+  .progress { height: 4px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; margin-top: 7px; display: none; }
   .progress.show { display: block; }
   .progress > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--brand), var(--accent)); transition: width .15s; }
+  .export-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; min-width: 270px; }
   .btn-primary {
-    width: 100%; border: none; border-radius: var(--radius); padding: 10px;
+    border: none; border-radius: var(--radius); padding: 9px 10px; min-height: 34px;
     background: linear-gradient(135deg, var(--brand), var(--brand-strong)); color: #fff;
-    font-weight: 700; font-size: 12px; cursor: pointer;
+    font-weight: 700; font-size: 12px; cursor: pointer; font-family: inherit;
   }
-  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
-  .btn-ghost { background: var(--bg-tertiary); color: var(--text); border: none; border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; font-size: 11px; }
+  .btn-unity {
+    grid-column: 1 / -1; min-height: 46px; font-size: 13px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent), 0 8px 22px rgba(0,0,0,.22);
+  }
+  .btn-frame-unity { color: #fff; border-color: color-mix(in srgb, var(--accent) 44%, var(--border)); }
+  .btn-primary:disabled, .btn-ghost:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-ghost {
+    background: var(--bg-tertiary); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; font-size: 11px; font-family: inherit;
+    min-height: 34px; white-space: nowrap;
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); }
+
+  @media (max-width: 520px) {
+    .create-area { grid-template-columns: 1fr; }
+    .create-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .create-settings { justify-content: flex-start; align-items: center; }
+    .export-actions { min-width: 0; }
+    .tree-filter-row { align-items: stretch; flex-direction: column; gap: 4px; }
+    #mcpLabel { display: none; }
+  }
+  @media (max-width: 430px) {
+    header { gap: 6px; }
+    .title-wrap { gap: 4px; }
+    .seg button { min-width: 21px; padding-left: 5px; padding-right: 5px; }
+    .toolbar { padding-left: 8px; padding-right: 8px; }
+    .split { flex-direction: column; }
+    .tree-pane { flex: 1; border-right: none; border-bottom: 1px solid var(--border); min-height: 160px; }
+    .preview-pane { flex: .9; min-height: 140px; }
+    .status-wrap { grid-template-columns: 1fr; }
+    .export-actions { width: 100%; }
+  }
 </style>
 </head>
 <body>
   <header>
-    <div class="logo">F</div>
-    <div class="title">FigForge</div>
-    <span class="pill" id="version">v1.0</span>
+    <div class="brand">
+      <div class="logo">F</div>
+      <div class="title-wrap">
+        <div class="title">FigForge</div>
+        <span class="pill" id="version">v1.0</span>
+      </div>
+    </div>
     <div class="spacer"></div>
-    <div class="seg" id="sizeSeg">
-      <button data-size="S">S</button>
-      <button data-size="M" class="active">M</button>
-      <button data-size="L">L</button>
+    <div class="header-actions">
+      <div class="seg" id="sizeSeg" aria-label="Plugin size">
+        <button data-size="S">S</button>
+        <button data-size="M" class="active">M</button>
+        <button data-size="L">L</button>
+      </div>
+      <div class="mcp" id="mcpCtl" title="Connect to the local FigForge MCP bridge (ws://127.0.0.1:1994)">
+        <span class="dot" id="mcpDot"></span>
+        <span id="mcpLabel">Connect MCP</span>
+      </div>
+      <button class="icon-btn" id="minBtn" title="Minimize">—</button>
     </div>
-    <div class="mcp" id="mcpCtl" title="Connect to the local FigForge MCP bridge (ws://127.0.0.1:1994)">
-      <span class="dot" id="mcpDot"></span>
-      <span id="mcpLabel">Connect MCP</span>
-    </div>
-    <button class="icon-btn" id="minBtn" title="Minimize">—</button>
   </header>
 
   <main>
     <section class="panel" id="panel-export">
-      <div class="toolbar">
+      <div class="toolbar primary-tools">
+        <span class="toolbar-label">Export</span>
         <select id="scale" title="Export scale">
           <option value="s:0.5">0.5×</option>
           <option value="s:1">1×</option>
@@ -201,36 +335,75 @@
         <button class="icon-btn" id="reloadBtn" title="Rescan selection">⟳</button>
       </div>
 
-      <div class="toolbar subtools">
-        <span class="toolbar-label">Create</span>
-        <button class="chip" id="createBtnBtn" title="Create a canonical Button component on the FigForge Components page">＋ Button</button>
-        <button class="chip" id="createToggleBtn" title="Create a canonical Toggle (on/off switch) component">＋ Toggle</button>
-        <button class="chip" id="createRadioBtn" title="Create a canonical Radio button component (group radios under one frame)">＋ Radio</button>
-        <button class="chip" id="createDropdownBtn" title="Create a canonical Dropdown component">＋ Dropdown</button>
-        <button class="chip" id="createListBtn" title="Create a canonical scrollable List component">＋ List</button>
-        <label class="chip" title="ON: masters live on a dedicated FigForge Components page. OFF: masters are parked on your current page."><input type="checkbox" id="componentsPageChk" checked style="margin:0 4px 0 0; vertical-align:middle;" />Components page</label>
-        <div class="spacer"></div>
-        <label class="chip" title="Unity live-import port (FigForge importer must have live import enabled)">Unity :<input type="number" id="unityPort" value="1995" min="1024" max="65535" style="width:54px; background:transparent; border:none; color:inherit;" /></label>
+      <div class="create-area">
+        <div class="create-group">
+          <div class="create-head">
+            <span class="toolbar-label">Create canonical</span>
+          </div>
+          <div class="create-grid">
+            <button class="chip" id="createBtnBtn" title="Create a canonical Button component on the FigForge Components page">＋ Button</button>
+            <button class="chip" id="createToggleBtn" title="Create a canonical Toggle (on/off switch) component">＋ Toggle</button>
+            <button class="chip" id="createRadioBtn" title="Create a canonical Radio button component (group radios under one frame)">＋ Radio</button>
+            <button class="chip" id="createInputBtn" title="Create a canonical InputField component">＋ Input</button>
+            <button class="chip" id="createDropdownBtn" title="Create a canonical Dropdown component">＋ Dropdown</button>
+            <button class="chip" id="createListBtn" title="Create a canonical scrollable List component">＋ List</button>
+          </div>
+        </div>
+        <div class="create-settings">
+          <label class="chip" title="ON: masters live on a dedicated FigForge Components page. OFF: masters are parked on your current page."><input type="checkbox" id="componentsPageChk" checked />Components page</label>
+          <label class="chip port-chip" title="Unity live-import port (FigForge importer must have live import enabled)">Unity <input type="number" id="unityPort" value="1995" min="1024" max="65535" /></label>
+        </div>
       </div>
 
       <div class="split">
         <div class="tree-pane">
-          <div class="search"><input type="text" id="search" placeholder="Search layers…" /></div>
+          <div class="tree-top">
+            <div class="search"><input type="text" id="search" placeholder="Search layers…" /></div>
+            <div class="tree-filter-row">
+              <span class="toolbar-label">Filter</span>
+              <div class="seg tree-filters" id="treeFilters">
+                <button data-filter="all" class="active">All</button>
+                <button data-filter="exported">Exported</button>
+                <button data-filter="hidden">Hidden</button>
+                <button data-filter="merged">Merged</button>
+                <button data-filter="canonical">Canonical</button>
+              </div>
+            </div>
+          </div>
           <div class="tree" id="tree"><div class="empty">Select a frame in Figma.</div></div>
+          <div class="tree-stats" id="treeStats"></div>
         </div>
         <div class="preview-pane">
-          <div class="preview-head" id="previewHead">No element selected</div>
+          <div class="preview-head">
+            <div id="previewHead">No element selected</div>
+            <div class="preview-zoom" aria-label="Preview zoom">
+              <button class="icon-btn" id="previewFit" title="Fit preview">Fit</button>
+              <button class="icon-btn" id="previewActual" title="Actual size">1×</button>
+              <button class="icon-btn" id="previewZoomOut" title="Zoom out">−</button>
+              <span class="zoom-label" id="previewZoomLabel">Fit</span>
+              <button class="icon-btn" id="previewZoomIn" title="Zoom in">＋</button>
+            </div>
+          </div>
           <div class="canvas-wrap" id="previewWrap"><div class="empty">Click a layer to preview</div></div>
         </div>
       </div>
 
       <footer>
-        <div class="statusline" id="status"></div>
-        <div class="progress" id="progress"><div></div></div>
-        <div style="display:flex; gap:6px;">
-          <button class="btn-primary" id="exportBtn" style="flex:2" disabled>Export Frame</button>
-          <button class="btn-ghost" id="exportPageBtn" style="flex:1" title="Export every top-level frame on this page as a connected project bundle (.zip)">Export Page</button>
-          <button class="btn-ghost" id="exportUnityBtn" style="flex:1" title="Send every frame on this page straight to Unity (FigForge importer with live import enabled) — no zip">→ Unity</button>
+        <div class="status-wrap">
+          <div class="status-card">
+            <div class="status-meta">
+              <span>Status</span>
+              <span>Bundle / Unity</span>
+            </div>
+            <div class="statusline" id="status"></div>
+            <div class="progress" id="progress"><div></div></div>
+          </div>
+          <div class="export-actions">
+            <button class="btn-primary btn-unity" id="exportUnityBtn" title="Send every top-level frame on this page straight to Unity (FigForge importer with live import enabled)">→ Send Page to Unity</button>
+            <button class="btn-ghost btn-frame-unity" id="exportFrameUnityBtn" title="Send only the selected frame straight to Unity" disabled>Send Frame</button>
+            <button class="btn-ghost" id="exportBtn" disabled>Download Frame</button>
+            <button class="btn-ghost" id="exportPageBtn" title="Export every top-level frame on this page as a connected project bundle (.zip)">Download Page</button>
+          </div>
         </div>
       </footer>
     </section>

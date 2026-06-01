@@ -568,7 +568,7 @@ function enclosingScreenFrame(nodes: readonly SceneNode[]): FrameNode | undefine
 }
 
 // Canonical master component names FigForge knows how to create.
-const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'Dropdown', 'List', 'ListItem'];
+const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'List', 'ListItem'];
 
 // Find an existing canonical master by name ANYWHERE in the document (masters no
 // longer need to live on a dedicated page — they can sit loose on any design page,
@@ -616,6 +616,7 @@ async function createCanonical(kind: string): Promise<ComponentNode> {
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
+    case 'input': return createInputField();
     case 'dropdown': return createDropdown();
     case 'list': return createList();
     default: throw new Error(`unknown canonical kind '${kind}'`);
@@ -660,6 +661,49 @@ async function createToggleLike(kind: CanonicalKind, ref: string, circular: bool
     parkMaster(comp);
   }
   placeInstance(comp); // each click drops another instance on your page (so you can make many / group radios)
+  return comp;
+}
+
+// InputField: Background + Placeholder + optional Text value. The generated Unity
+// prefab becomes a TMP_InputField; skin the Background and text layers in Figma.
+async function createInputField(): Promise<ComponentNode> {
+  const reuse = findMaster('InputField');
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const W = 240, H = 44, R = 8;
+
+  const comp = figma.createComponent();
+  comp.name = 'InputField'; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
+
+  const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
+  bg.strokes = [{ type: 'SOLID', color: { r: 0.8, g: 0.8, b: 0.85 } }]; bg.strokeWeight = 1;
+  bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(bg);
+
+  const placeholder = figma.createText();
+  placeholder.fontName = font; placeholder.name = 'Placeholder'; placeholder.characters = 'Enter text';
+  placeholder.fontSize = 14; placeholder.fills = [{ type: 'SOLID', color: { r: 0.55, g: 0.56, b: 0.62 } }];
+  placeholder.textAlignVertical = 'CENTER';
+  comp.appendChild(placeholder);
+  placeholder.x = 12; placeholder.y = (H - placeholder.height) / 2;
+  placeholder.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+
+  const value = figma.createText();
+  value.fontName = font; value.name = 'Text'; value.characters = '';
+  value.fontSize = 14; value.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+  value.textAlignVertical = 'CENTER'; value.visible = false;
+  comp.appendChild(value);
+  value.x = 12; value.y = (H - value.height) / 2;
+  value.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+
+  const hit = solidRect('HitArea', W, H, 0, { r: 0, g: 0, b: 0 }, 0);
+  hit.x = 0; hit.y = 0; hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(hit);
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'input', ref: 'InputField' }));
+  parkMaster(comp);
+  placeInstance(comp);
   return comp;
 }
 

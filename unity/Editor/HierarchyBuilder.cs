@@ -86,6 +86,10 @@ namespace FigForge
                 {
                     inst = BuildToggle(e, parent, ctx);
                 }
+                else if (canonicalKind == "input")
+                {
+                    inst = BuildInputField(e, parent, ctx);
+                }
                 else if (canonicalKind == "dropdown")
                 {
                     inst = BuildDropdown(e, parent, ctx);
@@ -784,6 +788,75 @@ namespace FigForge
             return go;
         }
 
+        // InputField: Background + text viewport + placeholder + value text.
+        static GameObject BuildInputField(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? "InputField" : e.name, parent);
+            var input = go.AddComponent<TMP_InputField>();
+            input.transition = Selectable.Transition.None;
+            input.lineType = TMP_InputField.LineType.SingleLine;
+            input.contentType = TMP_InputField.ContentType.Standard;
+            input.customCaretColor = true;
+            input.caretColor = new Color(0.1f, 0.1f, 0.12f, 1f);
+            input.selectionColor = new Color(0.49f, 0.36f, 1f, 0.28f);
+
+            var bgGo = NewRect("Background", go.transform);
+            AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
+            var bg = AddShapeGraphic(bgGo, c.shape, ctx);
+            input.targetGraphic = bg;
+
+            var area = NewRect("Text Area", go.transform);
+            var art = area.GetComponent<RectTransform>();
+            if (c.parts != null && c.parts.ContainsKey("Text")) AnchorPart(art, c.parts, "Text");
+            else if (c.parts != null && c.parts.ContainsKey("Value")) AnchorPart(art, c.parts, "Value");
+            else if (c.parts != null && c.parts.ContainsKey("Placeholder")) AnchorPart(art, c.parts, "Placeholder");
+            else
+            {
+                art.anchorMin = Vector2.zero;
+                art.anchorMax = Vector2.one;
+                art.offsetMin = new Vector2(12f * sf, 2f * sf);
+                art.offsetMax = new Vector2(-12f * sf, -2f * sf);
+            }
+            area.AddComponent<RectMask2D>();
+            input.textViewport = art;
+
+            var placeholderGo = NewRect("Placeholder", area.transform);
+            Stretch(placeholderGo.GetComponent<RectTransform>());
+            var placeholder = placeholderGo.AddComponent<TextMeshProUGUI>();
+            placeholder.text = c.placeholder ?? c.label ?? "";
+            placeholder.alignment = TextAlignmentOptions.MidlineLeft;
+            placeholder.color = new Color(0.55f, 0.56f, 0.62f, 1f);
+            placeholder.fontSize = 14f * sf;
+            placeholder.raycastTarget = false;
+            placeholder.textWrappingMode = TextWrappingModes.NoWrap;
+            placeholder.overflowMode = TextOverflowModes.Overflow;
+            ApplyFont(placeholder, c.defLabelFont, ctx);
+            MatchTextWeight(placeholder);
+
+            var textGo = NewRect("Text", area.transform);
+            Stretch(textGo.GetComponent<RectTransform>());
+            var text = textGo.AddComponent<TextMeshProUGUI>();
+            text.text = "";
+            text.alignment = TextAlignmentOptions.MidlineLeft;
+            text.color = new Color(0.1f, 0.1f, 0.12f, 1f);
+            text.fontSize = 14f * sf;
+            text.raycastTarget = false;
+            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.overflowMode = TextOverflowModes.Overflow;
+            ApplyFont(text, c.defLabelFont, ctx);
+            MatchTextWeight(text);
+
+            input.placeholder = placeholder;
+            input.textComponent = text;
+            input.SetTextWithoutNotify(c.value ?? "");
+
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.control = input; bind.label = placeholder; bind.valueText = text; bind.background = bg;
+            return go;
+        }
+
         // Dropdown: Background + caption + arrow + a standard (hidden) TMP_Dropdown template.
         static GameObject BuildDropdown(ElementData e, Transform parent, BuildContext ctx)
         {
@@ -1177,6 +1250,7 @@ namespace FigForge
                 (kind == "button" && e.canonical.shape != null) ? BuildShapeButton(e, null, ctx)   // crisp SDF shader
                 : (kind == "button" && e.canonical.states != null) ? BuildStateButton(e, null, ctx) // exported state PNGs
                 : ((kind == "toggle" || kind == "radio") && e.canonical.shape != null) ? BuildToggle(e, null, ctx)
+                : (kind == "input") ? BuildInputField(e, null, ctx)
                 : (kind == "dropdown") ? BuildDropdown(e, null, ctx)
                 : BuildPlaceholderButton(e, null, ctx);
             if (temp == null) return candidate; // generation failed — keep whatever we had
@@ -1220,7 +1294,8 @@ namespace FigForge
         // v13: popup shell can be styled independently from the Options frame.
         // v14: popup shell also masks dropdown option rows to its rounded silhouette.
         // v15: popup shell falls back to the closed select-box shape before option rows.
-        const int CanonicalSchema = 15;
+        // v16: generated input canonical prefabs build TMP_InputField instead of placeholders.
+        const int CanonicalSchema = 16;
 
         static string CanonicalSignature(ElementData e, string kind, float sf)
         {
@@ -1245,6 +1320,8 @@ namespace FigForge
             var sc = c.stateColors;
             if (sc != null)
                 sb.Append(";sn=").Append(SigF(sc.normal)).Append(";sh=").Append(SigF(sc.highlighted)).Append(";sp=").Append(SigF(sc.pressed));
+            if (kind == "input")
+                sb.Append(";ph=").Append(c.placeholder ?? "").Append(";iv=").Append(c.value ?? "");
             if (c.checkShape != null)
             {
                 var cs = c.checkShape;

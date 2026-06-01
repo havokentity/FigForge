@@ -88,7 +88,7 @@ importer reads. Change one side, change the other. Everything else is detail.
 | ↻ Rotation | preserved on the `RectTransform` |
 | ✎ Vector / icon | rasterized PNG, hash-deduped |
 | 🅣 Text | `TextMeshProUGUI` + per-family/style font mapping |
-| 🔘 `Btn_<name>_<Ref>` layer | a real **canonical prefab** instance |
+| 🔘 `Btn_<name>_<Ref>` / `Inp_<name>_<Ref>` layer | a real **canonical prefab** instance |
 | 🗂 Several frames | one navigable scene — `BaseScreen` pages under a `ScreenManager` |
 | 👻 Empty/placeholder paint, failed export | falls back to the fill colour — **no junk PNG, no white box** |
 
@@ -99,7 +99,7 @@ force-rasterize text, search the tree, and live-preview any node.
 > **Two Unity backends.** The importer can build classic **uGUI** (GameObjects +
 > `RectTransform`/`Image`/TMP) *or* **UI Toolkit** — a generated `.uxml` + `.uss`
 > (absolute/stretch layout, native borders & rounded corners, baked gradients,
-> image backgrounds, `<Button>` for canonical layers, optional in-scene
+> image backgrounds, canonical controls, optional in-scene
 > `UIDocument`). Flip it with the **UI backend** dropdown.
 
 ---
@@ -205,6 +205,7 @@ The part that makes FigForge more than an importer. Name a Figma layer like this
 
 ```text
 Btn_<instanceName>_<canonicalRef>          Btn_Save_PrimaryButton
+Inp_<instanceName>_<canonicalRef>          Inp_Email_InputField
 └┬┘ └─────┬──────┘ └──────┬──────┘
  │        │               └─ which reusable definition to drop in
  │        └─ this instance's own name
@@ -268,8 +269,8 @@ mirrors it field-for-field. Full schema → [`docs/plugin-guide.md`](docs/plugin
 
 ## ✦ On the bench (not built yet)
 
-A 2D `SpriteRenderer` output mode · dashed-stroke fidelity · more canonical kinds
-beyond buttons (inputs, toggles). PRs welcome.
+A 2D `SpriteRenderer` output mode · dashed-stroke fidelity · richer canonical
+control behaviours. PRs welcome.
 
 ---
 

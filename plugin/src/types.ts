@@ -143,6 +143,7 @@ export interface CanonicalRef {
   instanceName: string; // the design-specific name (middle token)
   label?: string; // text to stamp onto the instance, if any
   value?: string; // initial state: toggle on/off, slider value, input text
+  placeholder?: string; // input placeholder text
   options?: string[]; // dropdown options
   states?: CanonicalStates; // sprite filenames per Button state (from Figma layers)
   labelFont?: { family: string; style: string }; // THIS instance's label font (per-instance override when it differs from the definition)

@@ -38,7 +38,12 @@ namespace FigForge
             if (label != null && !string.IsNullOrEmpty(labelText)) label.text = labelText;
 
             var input = control as TMP_InputField;
-            if (input != null && value != null) input.text = value;
+            if (input != null)
+            {
+                if (input.placeholder is TMP_Text placeholder && !string.IsNullOrEmpty(labelText))
+                    placeholder.text = labelText;
+                if (value != null) input.text = value;
+            }
 
             var toggle = control as Toggle;
             if (toggle != null && value != null)
