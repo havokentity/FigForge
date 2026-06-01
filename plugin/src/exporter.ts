@@ -304,6 +304,12 @@ function firstTextUnderNamedChild(node: SceneNode, names: string[]): string | un
   return undefined;
 }
 
+function inputValueText(node: SceneNode): string | undefined {
+  const value = firstTextUnderNamedChild(node, ['Text', 'Value']);
+  if (value === undefined) return undefined;
+  return value.trim().length === 0 ? '' : value;
+}
+
 /** First TEXT node under a node — used to read a canonical instance's label font. */
 function firstTextNode(node: SceneNode): TextNode | undefined {
   if (node.type === 'TEXT') return node as TextNode;
@@ -332,7 +338,7 @@ function gatherTexts(node: SceneNode): string[] {
 
 /** Initial control state from instance variant properties, where detectable. */
 function canonicalValue(node: SceneNode, kind: CanonicalKind): string | undefined {
-  if (kind === 'input') return firstTextUnderNamedChild(node, ['Text', 'Value']);
+  if (kind === 'input') return inputValueText(node);
   if (kind === 'toggle') {
     const props = (node as unknown as {
       componentProperties?: Record<string, { value: unknown }>;
@@ -796,7 +802,8 @@ export async function exportDesign(
     const bg = childByName(master, 'Background');
     const shape = bg ? shapeOf(bg, [master]) : null;
     const placeholder = textOf(childByName(master, 'Placeholder')) ?? textOf(childByName(master, 'Label'));
-    const value = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value'));
+    const rawValue = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value'));
+    const value = rawValue !== undefined && rawValue.trim().length === 0 ? '' : rawValue;
     return {
       shape: shape ?? undefined,
       label: placeholder,

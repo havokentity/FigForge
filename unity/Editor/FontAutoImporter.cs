@@ -28,6 +28,7 @@ namespace FigForge
     public static class FontAutoImporter
     {
         const string FontFolder = "Assets/FigForge/Fonts";
+        const float FigForgeFontFaceDilate = 0.2f;
         static readonly Dictionary<string, TMP_FontAsset> _cache = new Dictionary<string, TMP_FontAsset>();
         static readonly HashSet<string> Weights = new HashSet<string>(new[]
             { "thin", "extralight", "ultralight", "light", "medium", "semibold", "demibold",
@@ -41,13 +42,14 @@ namespace FigForge
         {
             if (string.IsNullOrEmpty(family)) return null;
             string key = Norm(family) + "|" + Norm(style);
-            if (_cache.TryGetValue(key, out var hit)) return hit;
+            if (_cache.TryGetValue(key, out var hit)) { ApplyFigForgeFontDefaults(hit); return hit; }
 
             var existing = BestExisting(family, style);
             TMP_FontAsset asset;
             if (existing.tier == 0) asset = existing.asset;       // already have the exact face
             else asset = Generate(family, style, log) ?? existing.asset;
 
+            ApplyFigForgeFontDefaults(asset);
             if (asset == null)
                 log?.Invoke($"font '{family} {style}' not found — install it or drop a .ttf/.otf in {FontFolder}/ and re-import (using TMP default)");
             _cache[key] = asset;
@@ -80,7 +82,7 @@ namespace FigForge
 
                 string outPath = $"{FontFolder}/{Safe(Path.GetFileNameWithoutExtension(src))} SDF.asset";
                 var prior = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(outPath);
-                if (prior != null) return prior; // reuse
+                if (prior != null) { ApplyFigForgeFontDefaults(prior); return prior; } // reuse
 
                 var font = AssetDatabase.LoadAssetAtPath<Font>(src);
                 if (font == null) return null;
@@ -93,6 +95,7 @@ namespace FigForge
                 if (tmp.material != null) { tmp.material.name = tmp.name + " Material"; AssetDatabase.AddObjectToAsset(tmp.material, tmp); }
                 if (tmp.atlasTextures != null)
                     foreach (var tex in tmp.atlasTextures) if (tex != null) AssetDatabase.AddObjectToAsset(tex, tmp);
+                ApplyFigForgeFontDefaults(tmp);
                 AssetDatabase.SaveAssets();
                 AssetDatabase.ImportAsset(outPath);
                 log?.Invoke($"auto-imported font '{family} {style}' → {outPath} (source: {src})");
@@ -177,6 +180,19 @@ namespace FigForge
 
         static bool IsFontFile(string p) =>
             p.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".otf", StringComparison.OrdinalIgnoreCase);
+
+        static void ApplyFigForgeFontDefaults(TMP_FontAsset asset)
+        {
+            if (asset == null) return;
+            var path = AssetDatabase.GetAssetPath(asset);
+            if (string.IsNullOrEmpty(path) || !path.StartsWith(FontFolder + "/", StringComparison.Ordinal)) return;
+
+            var mat = asset.material;
+            if (mat == null) return;
+            mat.SetFloat(ShaderUtilities.ID_FaceDilate, FigForgeFontFaceDilate);
+            EditorUtility.SetDirty(mat);
+            EditorUtility.SetDirty(asset);
+        }
 
         // ---- tokenisation / helpers --------------------------------------------
         static HashSet<string> Tokens(string s)

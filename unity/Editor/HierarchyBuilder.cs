@@ -719,14 +719,9 @@ namespace FigForge
             return rr;
         }
 
-        // SDF text renders ~1px thinner than Figma's rasterized text; a small positive
-        // face dilate matches Figma's apparent weight without going full-bold.
-        const float TextFaceDilate = 0.1f;
         static void MatchTextWeight(TMP_Text tmp)
         {
             if (tmp == null) return;
-            var mat = tmp.fontMaterial; // per-instance copy
-            mat.SetFloat(TMPro.ShaderUtilities.ID_FaceDilate, TextFaceDilate);
             tmp.UpdateMeshPadding();
         }
 

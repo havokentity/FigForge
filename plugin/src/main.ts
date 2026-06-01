@@ -668,7 +668,11 @@ async function createToggleLike(kind: CanonicalKind, ref: string, circular: bool
 // prefab becomes a TMP_InputField; skin the Background and text layers in Figma.
 async function createInputField(): Promise<ComponentNode> {
   const reuse = findMaster('InputField');
-  if (reuse) { placeInstance(reuse); return reuse; }
+  if (reuse) {
+    await normalizeInputFieldMaster(reuse);
+    placeInstance(reuse);
+    return reuse;
+  }
 
   const font = await loadUiFont();
   const W = 240, H = 44, R = 8;
@@ -685,16 +689,20 @@ async function createInputField(): Promise<ComponentNode> {
   placeholder.fontName = font; placeholder.name = 'Placeholder'; placeholder.characters = 'Enter text';
   placeholder.fontSize = 14; placeholder.fills = [{ type: 'SOLID', color: { r: 0.55, g: 0.56, b: 0.62 } }];
   placeholder.textAlignVertical = 'CENTER';
+  placeholder.textAutoResize = 'NONE';
+  placeholder.resize(W - 24, H);
   comp.appendChild(placeholder);
-  placeholder.x = 12; placeholder.y = (H - placeholder.height) / 2;
+  placeholder.x = 12; placeholder.y = 0;
   placeholder.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
 
   const value = figma.createText();
-  value.fontName = font; value.name = 'Text'; value.characters = '';
+  value.fontName = font; value.name = 'Text'; value.characters = ' ';
   value.fontSize = 14; value.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
-  value.textAlignVertical = 'CENTER'; value.visible = false;
+  value.textAlignVertical = 'CENTER';
+  value.textAutoResize = 'NONE';
+  value.resize(W - 24, H);
   comp.appendChild(value);
-  value.x = 12; value.y = (H - value.height) / 2;
+  value.x = 12; value.y = 0;
   value.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
 
   const hit = solidRect('HitArea', W, H, 0, { r: 0, g: 0, b: 0 }, 0);
@@ -705,6 +713,27 @@ async function createInputField(): Promise<ComponentNode> {
   parkMaster(comp);
   placeInstance(comp);
   return comp;
+}
+
+async function normalizeInputFieldMaster(comp: ComponentNode): Promise<void> {
+  const text = comp.findOne((n) => n.type === 'TEXT' && (n.name === 'Text' || n.name === 'Value')) as TextNode | null;
+  if (!text) return;
+  if (text.fontName !== figma.mixed) await figma.loadFontAsync(text.fontName as FontName);
+  if (text.characters.length === 0) text.characters = ' ';
+  text.visible = true;
+  text.textAutoResize = 'NONE';
+  text.resize(Math.max(1, comp.width - 24), comp.height);
+  text.x = 12;
+  text.y = 0;
+
+  const placeholder = comp.findOne((n) => n.type === 'TEXT' && (n.name === 'Placeholder' || n.name === 'Label')) as TextNode | null;
+  if (placeholder) {
+    if (placeholder.fontName !== figma.mixed) await figma.loadFontAsync(placeholder.fontName as FontName);
+    placeholder.textAutoResize = 'NONE';
+    placeholder.resize(Math.max(1, comp.width - 24), comp.height);
+    placeholder.x = 12;
+    placeholder.y = 0;
+  }
 }
 
 // The reusable dropdown option row — its own component (Regular/Rollover/Pressed/
