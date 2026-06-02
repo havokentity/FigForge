@@ -1555,6 +1555,14 @@ namespace FigForge
             rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
         }
 
+        // A control's targetGraphic must receive raycasts to be clickable, but SDF /
+        // asset / vector backgrounds default raycastTarget=false (they're decorative).
+        // Re-enable it on the control background so toggle/radio/dropdown/input click.
+        static void MakeClickTarget(Graphic g, BuildContext ctx)
+        {
+            if (g != null) g.raycastTarget = !ctx.disableRaycasts;
+        }
+
         // Background Graphic from a CanonicalShape (crisp SDF) or a transparent Image.
         // Add the CanvasRenderer up front: Toggle.isOn cross-fades graphic.canvasRenderer
         // the instant we set it, before RequireComponent would otherwise add one.
@@ -1612,6 +1620,7 @@ namespace FigForge
             AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
             var bg = AddShapeGraphic(bgGo, c.shape, ctx);
             toggle.targetGraphic = bg;
+            MakeClickTarget(bg, ctx); // SDF/asset backgrounds default raycastTarget=false
 
             if (c.checkShape != null)
             {
@@ -1659,6 +1668,7 @@ namespace FigForge
             AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
             var bg = AddShapeGraphic(bgGo, c.shape, ctx);
             input.targetGraphic = bg;
+            MakeClickTarget(bg, ctx);
 
             var area = NewRect("Text Area", go.transform);
             var art = area.GetComponent<RectTransform>();
@@ -1722,6 +1732,7 @@ namespace FigForge
             AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
             var bg = AddShapeGraphic(bgGo, c.shape, ctx);
             dd.targetGraphic = bg;
+            MakeClickTarget(bg, ctx);
             ApplyDropdownBackgroundStates(bg, c, ctx);
 
             var caption = AddControlLabel(go, "Label", c.value, c.parts, "Label", ctx, TextAlignmentOptions.MidlineLeft);
@@ -1878,6 +1889,7 @@ namespace FigForge
                 itemGraphic = ibImg;
             }
             itemToggle.targetGraphic = itemGraphic;
+            MakeClickTarget(itemGraphic, ctx);
             itemToggle.graphic = null; // selected state is represented by optionSelected fill, not a TMP checkmark box
 
             var itemLbl = NewRect("Item Label", item.transform);
