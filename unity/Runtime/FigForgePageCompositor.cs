@@ -10,8 +10,8 @@ namespace FigForge
     [AddComponentMenu("FigForge/Page Compositor")]
     public class FigForgePageCompositor : MonoBehaviour
     {
-        readonly List<FigForgeLayeredRect> _advancedLayers = new List<FigForgeLayeredRect>();
-        readonly List<FigForgeLayeredRect> _paintLayers = new List<FigForgeLayeredRect>();
+        readonly List<IFigForgeCompositorSource> _advancedLayers = new List<IFigForgeCompositorSource>();
+        readonly List<IFigForgeCompositorSource> _paintLayers = new List<IFigForgeCompositorSource>();
         readonly Vector3[] _worldCorners = new Vector3[4];
 
         RectTransform _rectTransform;
@@ -27,21 +27,21 @@ namespace FigForge
 
         public bool IsActive => isActiveAndEnabled && ActiveAdvancedCount() > 0;
 
-        public void Register(FigForgeLayeredRect layer)
+        public void Register(IFigForgeCompositorSource layer)
         {
             if (layer == null || _advancedLayers.Contains(layer)) return;
             _advancedLayers.Add(layer);
             MarkDirty();
         }
 
-        public void Unregister(FigForgeLayeredRect layer)
+        public void Unregister(IFigForgeCompositorSource layer)
         {
             if (layer == null) return;
             if (_advancedLayers.Remove(layer))
                 MarkDirty();
         }
 
-        public bool ShouldRenderLayer(FigForgeLayeredRect layer)
+        public bool ShouldRenderLayer(IFigForgeCompositorSource layer)
         {
             return IsActive
                 && layer != null
@@ -99,7 +99,10 @@ namespace FigForge
 
             EnsurePresentGraphic();
             if (_presentGraphic != null)
+            {
                 _presentGraphic.enabled = true;
+                PositionPresentGraphic();
+            }
 
             if (UpdateTargetSize() || LayoutChanged())
                 MarkDirty();
@@ -259,7 +262,7 @@ namespace FigForge
         }
 #endif
 
-        Vector4 LayerSourceRect(FigForgeLayeredRect layer, RenderTexture surface)
+        Vector4 LayerSourceRect(IFigForgeCompositorSource layer, RenderTexture surface)
         {
             var pageRect = _rectTransform.rect;
             var bounds = RectTransformUtility.CalculateRelativeRectTransformBounds(_rectTransform, layer.CompositorRectTransform);
@@ -326,7 +329,7 @@ namespace FigForge
             _paintLayers.Sort(CompareHierarchy);
         }
 
-        static int CompareHierarchy(FigForgeLayeredRect a, FigForgeLayeredRect b)
+        static int CompareHierarchy(IFigForgeCompositorSource a, IFigForgeCompositorSource b)
         {
             if (a == b) return 0;
             if (a == null) return -1;
@@ -406,7 +409,7 @@ namespace FigForge
             go.hideFlags = HideFlags.HideAndDontSave;
             if (go.transform.parent != transform)
                 go.transform.SetParent(transform, false);
-            go.transform.SetAsFirstSibling();
+            PositionPresentGraphic();
 
             var rt = go.transform as RectTransform;
             rt.anchorMin = Vector2.zero;
@@ -421,6 +424,17 @@ namespace FigForge
                 _presentGraphic = go.AddComponent<FigForgePageCompositeGraphic>();
             _presentGraphic.raycastTarget = false;
             _presentGraphic.color = Color.white;
+        }
+
+        void PositionPresentGraphic()
+        {
+            if (_presentGraphic == null) return;
+            var present = _presentGraphic.transform;
+            var fill = transform.Find("Fill");
+            if (fill != null && fill != present)
+                present.SetSiblingIndex(fill.GetSiblingIndex() + 1);
+            else
+                present.SetAsFirstSibling();
         }
 
         static void DestroyRuntimeMaterial(Material material)

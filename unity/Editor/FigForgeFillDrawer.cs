@@ -8,14 +8,14 @@ namespace FigForge
     {
         const float Gap = 2f;
         const float ToggleWidth = 18f;
-        const float ModeWidth = 104f;
+        const float ModeWidth = 118f;
         static readonly GUIContent[] ModeLabels =
         {
-            new GUIContent("Solid"),
-            new GUIContent("Linear"),
-            new GUIContent("Radial"),
-            new GUIContent("Angular"),
-            new GUIContent("Diamond"),
+            new GUIContent("Solid Paint"),
+            new GUIContent("Linear Grad"),
+            new GUIContent("Radial Grad"),
+            new GUIContent("Angular Grad"),
+            new GUIContent("Diamond Grad"),
         };
 
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)

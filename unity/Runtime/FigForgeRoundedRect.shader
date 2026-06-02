@@ -151,6 +151,62 @@ Shader "FigForge/RoundedRect"
                 return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
             }
 
+            float roundRectPerimeterT(float2 p, float2 halfSize, float r)
+            {
+                r = clamp(r, 0.0, min(halfSize.x, halfSize.y));
+                float2 straight = max(halfSize - r, float2(0.0, 0.0));
+                float top = 2.0 * straight.x;
+                float side = 2.0 * straight.y;
+                float arc = 1.57079632679 * r;
+                float beforeRight = top + arc;
+                float beforeBottom = beforeRight + side + arc;
+                float beforeLeft = beforeBottom + top + arc;
+
+                if (r <= 0.001)
+                {
+                    if (p.y >= straight.y && abs(p.x) <= straight.x) return p.x + straight.x;
+                    if (p.x >= straight.x && abs(p.y) <= straight.y) return top + (straight.y - p.y);
+                    if (p.y <= -straight.y && abs(p.x) <= straight.x) return top + side + (straight.x - p.x);
+                    return top + side + top + (p.y + straight.y);
+                }
+
+                if (p.y >= straight.y && abs(p.x) <= straight.x) return p.x + straight.x;
+                if (p.x > straight.x && p.y > straight.y)
+                {
+                    float a = atan2(p.y - straight.y, p.x - straight.x);
+                    return top + (1.57079632679 - a) * r;
+                }
+                if (p.x >= straight.x && abs(p.y) <= straight.y) return beforeRight + (straight.y - p.y);
+                if (p.x > straight.x && p.y < -straight.y)
+                {
+                    float a = atan2(p.y + straight.y, p.x - straight.x);
+                    return beforeRight + side + (-a) * r;
+                }
+                if (p.y <= -straight.y && abs(p.x) <= straight.x) return beforeBottom + (straight.x - p.x);
+                if (p.x < -straight.x && p.y < -straight.y)
+                {
+                    float a = atan2(p.y + straight.y, p.x + straight.x);
+                    return beforeBottom + top + ((-1.57079632679) - a) * r;
+                }
+                if (p.x <= -straight.x && abs(p.y) <= straight.y) return beforeLeft + (p.y + straight.y);
+
+                float a2 = atan2(p.y - straight.y, p.x + straight.x);
+                return beforeLeft + side + (3.14159265359 - a2) * r;
+            }
+
+            float strokeDashMask(float2 p, float2 size, float rad, float strokeWidth, float strokeOutset, float aa)
+            {
+                float dash = max(1.0, strokeWidth * 3.0);
+                float period = dash * 2.0;
+                float centerOffset = strokeOutset - strokeWidth * 0.5;
+                float2 centerHalf = max(float2(1.0, 1.0), size * 0.5 + centerOffset);
+                float centerRad = clamp(rad + centerOffset, 0.0, min(centerHalf.x, centerHalf.y));
+                float s = roundRectPerimeterT(p, centerHalf, centerRad);
+                float phase = s - floor(s / period) * period;
+                float edge = max(aa, fwidth(s));
+                return saturate(1.0 - smoothstep(dash - edge, dash + edge, phase));
+            }
+
             // erf approximation (Abramowitz & Stegun 7.1.26, ~1e-7 max error) — used
             // for a true Gaussian drop-shadow falloff that matches Figma.
             float erfApprox(float x)
@@ -171,9 +227,10 @@ Shader "FigForge/RoundedRect"
                 float2 size = max(i.uv2.zw, float2(1,1));
                 float2 gradientDir = unpackGradientDir(i.uv3.x);
                 float4 radius = float4(i.uv3.y, i.uv3.z, i.uv3.w, i.normal.x);
-                float strokeWidth = i.normal.y;
+                float strokeWidth = abs(i.normal.y);
+                float dashedStroke = i.normal.y < -0.001 ? 1.0 : 0.0;
                 float strokeOutset = i.normal.z;
-                float2 shadowOffset = i.tangent.xy;
+                float2 shadowOffset = i.tangent.xy * float2(1.0, -1.0);
                 float shadowBlur = i.tangent.z;
                 float shadowSpread = i.tangent.w;
                 float pad = meshPad(shadowColor, shadowOffset, shadowBlur, shadowSpread, strokeOutset);
@@ -202,22 +259,31 @@ Shader "FigForge/RoundedRect"
                 fixed4 strokeBase = (strokeGradient > 0.5) ? fillBase : strokeColor;
 
                 // ---- shape colour (fill + optional stroke ring) ----
-                fixed3 shapeRGB = base.rgb;
-                float shapeFillA = base.a;
+                float fillCov = 1.0 - smoothstep(-aa, aa, d);
+                fixed4 shape = fixed4(base.rgb, base.a * fillCov);
+                float shapeCov = fillCov;
                 if (strokeWidth > 0.001)
                 {
                     // stroke ring runs [strokeOutset - width, strokeOutset]:
                     // inside strokeOutset=0, center=w/2, outside=w (fill stays full size).
                     float inner = strokeOutset - strokeWidth;
-                    float inStroke = smoothstep(-aa, aa, d - inner);
-                    shapeRGB = lerp(base.rgb, strokeBase.rgb, inStroke);
-                    shapeFillA = lerp(base.a, strokeBase.a, inStroke);
+                    float inStroke = smoothstep(-aa * 2.0, 0.0, d - inner);
+                    float outerCov = 1.0 - smoothstep(-aa, aa, d - strokeOutset);
+                    float dashMask = dashedStroke > 0.5 ? strokeDashMask(p, size, rad, strokeWidth, strokeOutset, aa) : 1.0;
+                    float strokeCov = outerCov * inStroke * dashMask;
+                    float srcA = strokeBase.a * strokeCov;
+                    float keepShape = shapeCov > 1e-4 ? saturate((shapeCov - srcA) / shapeCov) : 0.0;
+                    float dstA = shape.a * keepShape;
+                    float outA = srcA + dstA;
+                    fixed3 outRGB = (strokeBase.rgb * srcA + shape.rgb * dstA) / max(outA, 1e-4);
+                    shape = fixed4(outRGB, outA);
+                    shapeCov = max(shapeCov, strokeCov);
                 }
-                float shapeCov = 1.0 - smoothstep(-aa, aa, d - strokeOutset); // AA edge at the outer stroke edge
-                float shapeA = shapeFillA * shapeCov;
+                fixed3 shapeRGB = shape.rgb;
+                float shapeA = shape.a;
 
                 // ---- drop shadow (Gaussian silhouette BEHIND the shape, matches Figma) ----
-                // The shadow is the fill silhouette (offset, expanded by spread) blurred by
+                // The shadow is the rendered silhouette (offset, expanded by spread) blurred by
                 // a Gaussian. Figma's "Blur" B maps to std dev sigma = B/2; coverage at a
                 // point is the Gaussian CDF of its signed distance to the expanded edge:
                 // scov = 0.5 * erfc((d - spread) / (sigma*sqrt2)). True Gaussian tail, not a
@@ -225,7 +291,7 @@ Shader "FigForge/RoundedRect"
                 float shadowA = 0.0;
                 if (shadowColor.a > 0.001)
                 {
-                    float ds = sdRoundBox(p - shadowOffset.xy, size * 0.5, rad);  // cast by the fill silhouette
+                    float ds = sdRoundBox(p - shadowOffset.xy, size * 0.5, rad) - strokeOutset;  // cast by the outer rendered silhouette
                     float spread = shadowSpread;
                     float sigma = max(shadowBlur * 0.5, aa);                     // Figma blur → std dev (>= AA)
                     float x = (ds - spread) / (sigma * 1.41421356);              // distance from expanded edge, in sqrt2*sigma
@@ -240,6 +306,8 @@ Shader "FigForge/RoundedRect"
                         shadowA = 1.0 - pow(1.0 - shadowA, 2.2);
                     #endif
                 }
+                if (base.a <= 0.001 && strokeBase.a <= 0.001)
+                    shadowA *= 1.0 - fillCov;
 
                 // ---- composite shadow UNDER shape (straight alpha) ----
                 float outA = shapeA + shadowA * (1.0 - shapeA);

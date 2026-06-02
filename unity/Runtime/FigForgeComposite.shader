@@ -73,7 +73,7 @@ Shader "FigForge/Composite"
 
                 float inside = step(_ClipRect.x, pixel.x) * step(_ClipRect.y, pixel.y)
                     * step(pixel.x, _ClipRect.z) * step(pixel.y, _ClipRect.w);
-                return half4(co * inside, ao * inside);
+                return half4(lerp(b.rgb, co, inside), lerp(b.a, ao, inside));
             }
             ENDCG
         }

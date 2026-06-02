@@ -175,9 +175,10 @@ namespace FigForge
 
     [RequireComponent(typeof(CanvasRenderer))]
     [AddComponentMenu("FigForge/Layered Rect")]
-    public class FigForgeLayeredRect : MaskableGraphic
+    public class FigForgeLayeredRect : MaskableGraphic, IFigForgeCompositorSource
     {
         const float MaxCachedSurfaceScale = 16f;
+        const int SurfaceShaderRevision = 2;
 
         [SerializeField] List<FigForgeFill> fills = new List<FigForgeFill>();
         [SerializeField] List<FigForgeStrokeLayer> strokes = new List<FigForgeStrokeLayer>();
@@ -208,7 +209,13 @@ namespace FigForge
         public float CompositorOpacity => appearanceOpacity;
         public float CompositorPad => MeshPad();
         public RectTransform CompositorRectTransform => rectTransform;
-        public bool RequiresPageCompositor => BlendTier(blendMode) == 2;
+        // Page compositor disabled: the MVP only replays FigForge layers, so when it
+        // activates its full-screen present graphic blanks all foreign uGUI (text,
+        // plain Images) on the page. Until it composites foreign content, advanced
+        // blend modes fall back to best-effort per-graphic blending (renders, doesn't
+        // blank the page). Flip back to `BlendTier(blendMode) == 2` once it can.
+        public const bool PageCompositorEnabled = false;
+        public bool RequiresPageCompositor => PageCompositorEnabled && BlendTier(blendMode) == 2;
         public float AppearanceOpacity
         {
             get => appearanceOpacity;
@@ -281,6 +288,44 @@ namespace FigForge
             UpdatePageCompositorRegistration();
             MarkPageCompositorDirty();
             SetMaterialDirty();
+        }
+
+        public void SetPrimaryFill(FigForgeFill fill)
+        {
+            fill.Normalize();
+            if (fills == null) fills = new List<FigForgeFill>();
+            if (fills.Count == 0) fills.Add(fill);
+            else fills[0] = fill;
+            ReleaseCachedSurface();
+            MarkPageCompositorDirty();
+            NormalizeLists();
+            RefreshRecipe();
+            SetVerticesDirty();
+            SetMaterialDirty();
+        }
+
+        public void SetStyle(FigForgeShapeStyle style)
+        {
+            var nextFills = new List<FigForgeFill>();
+            if (VisibleFill(style.fill)) nextFills.Add(style.fill);
+
+            var nextStrokes = new List<FigForgeStrokeLayer>();
+            if (style.stroke.enabled)
+            {
+                nextStrokes.Add(FigForgeStrokeLayer.Create(
+                    FigForgeFill.Solid(style.stroke.color),
+                    style.stroke.weight,
+                    style.stroke.align,
+                    style.stroke.style == FigForgeStrokeStyle.Dashed,
+                    style.stroke.dash,
+                    style.stroke.gap));
+            }
+
+            var nextEffects = new List<FigForgeEffectLayer>();
+            if (style.shadowColor.a > 0.001f)
+                nextEffects.Add(FigForgeEffectLayer.DropShadow(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread));
+
+            ConfigureLayers(nextFills, nextStrokes, nextEffects, style.corners);
         }
 
         public override Material material
@@ -490,16 +535,6 @@ namespace FigForge
                     dst = UnityEngine.Rendering.BlendMode.One;
                     srcA = UnityEngine.Rendering.BlendMode.One;
                     dstA = UnityEngine.Rendering.BlendMode.One;
-                    break;
-                case FigForgeBlendMode.Darken:
-                    src = UnityEngine.Rendering.BlendMode.One;
-                    dst = UnityEngine.Rendering.BlendMode.One;
-                    op = BlendOp.Min;
-                    break;
-                case FigForgeBlendMode.Lighten:
-                    src = UnityEngine.Rendering.BlendMode.One;
-                    dst = UnityEngine.Rendering.BlendMode.One;
-                    op = BlendOp.Max;
                     break;
             }
 
@@ -845,7 +880,13 @@ namespace FigForge
             if (compositorMode == FigForgeCompositorMode.Direct) return false;
             if (WouldCacheHitTextureLimit()) return false;
             if (compositorMode == FigForgeCompositorMode.CachedSource) return true;
-            if (BlendTier(blendMode) == 2) return true;
+            // Darken/Lighten blend directly against the framebuffer (BlendOp Min/Max),
+            // so they render direct — no cached surface needed. Other tier-2 modes
+            // still cache (they need destination-read compositing, currently disabled).
+            if (BlendTier(blendMode) == 2
+                && blendMode != FigForgeBlendMode.Darken
+                && blendMode != FigForgeBlendMode.Lighten)
+                return true;
             if (BlendTier(blendMode) == 1 && blendMode != FigForgeBlendMode.PassThrough && blendMode != FigForgeBlendMode.Normal)
                 return true;
             return VisibleDropShadowCount() > 0
@@ -863,8 +904,6 @@ namespace FigForge
                 case FigForgeBlendMode.Multiply:
                 case FigForgeBlendMode.Screen:
                 case FigForgeBlendMode.PlusLighter:
-                case FigForgeBlendMode.Darken:
-                case FigForgeBlendMode.Lighten:
                     return 1;
                 default:
                     return 2;
@@ -1085,6 +1124,7 @@ namespace FigForge
             unchecked
             {
                 uint hash = 2166136261u;
+                Hash(ref hash, SurfaceShaderRevision);
                 Hash(ref hash, width);
                 Hash(ref hash, height);
                 Hash(ref hash, pad);
@@ -1125,6 +1165,18 @@ namespace FigForge
         void ApplyBlendState(Material target, bool alphaBlend)
         {
             target.SetFloat("_BlendMode", (float)blendMode);
+            // Darken/Lighten are separable min/max ops — the GPU does them directly
+            // against the framebuffer (the overlay already holds the backdrop), so
+            // they render correctly without the destination-read page compositor.
+            // The direct path outputs straight (un-premultiplied) colour and clips
+            // transparent pixels, so min/max stays clean (no dark/black fringe).
+            if (blendMode == FigForgeBlendMode.Darken || blendMode == FigForgeBlendMode.Lighten)
+            {
+                target.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+                target.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.One);
+                target.SetInt("_BlendOp", (int)(blendMode == FigForgeBlendMode.Darken ? BlendOp.Min : BlendOp.Max));
+                return;
+            }
             target.SetInt("_SrcBlend", alphaBlend ? (int)UnityEngine.Rendering.BlendMode.SrcAlpha : (int)UnityEngine.Rendering.BlendMode.One);
             target.SetInt("_DstBlend", alphaBlend ? (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha : (int)UnityEngine.Rendering.BlendMode.Zero);
             target.SetInt("_BlendOp", (int)BlendOp.Add);

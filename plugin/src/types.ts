@@ -29,6 +29,24 @@ export interface Rect {
 }
 
 // ---------------------------------------------------------------------------
+// Vector drawings — flat triangle meshes for crisp procedural vector geometry
+// (icons, arrows, glyphs). Built by the plugin's tessellator; streamed straight
+// into a CanvasRenderer by FigForgeVectorGraphic. When present, preferred over
+// the PNG `asset` fallback. Verts are node-local px (top-left origin, +y down).
+// ---------------------------------------------------------------------------
+export interface VectorMesh {
+  color: RGBA;      // straight (non-premultiplied) base colour for this region
+  verts: number[];  // x0,y0,x1,y1,… node-local px
+  tris: number[];   // triangle indices into verts
+  alpha: number[];  // per-vertex alpha multiplier (1 = solid core, 0 = AA fringe)
+}
+
+export interface VectorDrawing {
+  bounds: [number, number]; // node width,height px — maps verts into the RectTransform
+  meshes: VectorMesh[];     // draw order: fills first, strokes on top
+}
+
+// ---------------------------------------------------------------------------
 // Fills — discriminated union so gradients/images survive into Unity instead
 // of being flattened to a single solid colour.
 // ---------------------------------------------------------------------------
@@ -58,26 +76,32 @@ export interface Stroke {
   weight: number;
   align: StrokeAlign;
   dashed: boolean;
+  dashPattern: number[];
 }
 
 export interface Shadow {
+  kind?: 'dropShadow' | 'innerShadow' | 'layerBlur';
   color: RGBA;
   offsetX: number;
   offsetY: number;
   blur: number;   // Figma effect radius
   spread: number;
   inner: boolean; // false = drop shadow (rendered); true = inner shadow (captured, not yet rendered)
+  blurMode?: 'uniform' | 'progressive';
+  startBlur?: number;
+  endBlur?: number;
 }
 
 export interface Style {
   opacity: number;
+  blendMode?: string;
   cornerRadius: number; // max corner; per-corner detail in `corners`
   corners?: [number, number, number, number]; // tl, tr, br, bl
   fill?: Fill;
   fills?: Fill[];
   stroke?: Stroke;
   strokes?: Stroke[];
-  shadows?: Shadow[];
+  effects?: Shadow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +154,11 @@ export interface CanonicalStates {
 
 /** Procedural background of a button (rendered by the SDF shader). */
 export interface ButtonShape {
+  asset?: string; // PNG fallback for vector/icon shapes whose path geometry is not a rounded rect
+  vector?: VectorDrawing; // procedural vector mesh (preferred over `asset` when present)
   cornerRadius: number;
+  opacity?: number;
+  blendMode?: string;
   fill?: RGBA; // solid colour, or legacy gradient fallback colour
   gradient?: Extract<Fill, { kind: 'gradient' }>; // linear n-stop gradient background
   fill2?: RGBA; // legacy gradient stop 1
@@ -142,8 +170,7 @@ export interface ButtonShape {
   borderColor?: RGBA;
   borderWidth?: number;
   borderAlign?: StrokeAlign; // inside|outside|center (default inside)
-  shadow?: Shadow; // first drop shadow on the regular layer
-  shadows?: Shadow[];
+  effects?: Shadow[];
 }
 
 export interface CanonicalStateShapes {
@@ -258,6 +285,7 @@ export interface ManifestElement {
   style?: Style;
   text?: TextProps;
   asset?: string | null; // PNG filename when rasterized
+  vector?: VectorDrawing; // procedural vector mesh (preferred over `asset` when present)
   assetBounds?: AssetBounds;
   nineSlice?: NineSlice;
   canonical?: CanonicalRef;
@@ -280,6 +308,10 @@ export interface ManifestFont {
   styles: string[];
 }
 
+export interface ManifestSettings {
+  fontFaceDilate: number;
+}
+
 export interface ScreenInfo {
   id: string;
   name: string;
@@ -297,6 +329,7 @@ export interface Manifest {
   elements: ManifestElement[];
   assets: ManifestAsset[];
   fonts: ManifestFont[];
+  settings: ManifestSettings;
   canonicalRefs: string[]; // distinct canonical ref names referenced by elements
 }
 
@@ -333,6 +366,7 @@ export interface ExportOptions {
   rasterizeStrokes: boolean; // when false, strokes become manifest data
   emitGradients: boolean;
   emitImageFills: boolean;
+  fontFaceDilate: number;
 }
 
 export const DEFAULT_EXPORT_SCALE: ExportScale = { type: 'scale', value: 2 };
@@ -341,6 +375,7 @@ export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   rasterizeStrokes: false,
   emitGradients: true,
   emitImageFills: true,
+  fontFaceDilate: 0.15,
 };
 
 export interface ElementConfig {

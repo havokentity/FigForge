@@ -11,7 +11,11 @@
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.100.0",
+    "@types/earcut": "^3.0.0",
     "esbuild": "^0.21.5",
     "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "earcut": "^3.0.2"
   }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace FigForge
 {
@@ -39,6 +40,54 @@ namespace FigForge
             _bytes += entry.bytes;
             Trim();
             return rt;
+        }
+
+        // Bake an arbitrary triangle MESH (verts in surface pixel space, bottom-left
+        // origin) into a cached surface — the vector-graphic analogue of Acquire's
+        // fullscreen blit. The mesh's per-vertex colours are flattened with
+        // premultiplied-over blending so overlapping fill/stroke/AA composite once.
+        public static RenderTexture AcquireMesh(string key, int width, int height, Mesh mesh, Material material)
+        {
+            if (string.IsNullOrEmpty(key) || material == null || mesh == null) return null;
+
+            if (_entries.TryGetValue(key, out var entry) && entry.texture != null)
+            {
+                entry.refCount++;
+                entry.lastUsed = ++_clock;
+                _entries[key] = entry;
+                return entry.texture;
+            }
+
+            var rt = Rent(width, height);
+            BakeMesh(rt, mesh, material);
+            entry = new Entry
+            {
+                texture = rt,
+                bytes = EstimateBytes(width, height),
+                refCount = 1,
+                lastUsed = ++_clock,
+            };
+            _entries[key] = entry;
+            _bytes += entry.bytes;
+            Trim();
+            return rt;
+        }
+
+        static void BakeMesh(RenderTexture target, Mesh mesh, Material material)
+        {
+            var cmd = new CommandBuffer { name = "FigForgeVectorBake" };
+            cmd.SetRenderTarget(target);
+            cmd.ClearRenderTarget(true, true, Color.clear);
+            // Pixel-space ortho so mesh verts in [0,w]x[0,h] (bottom-left origin) map
+            // 1:1 to the surface. The mesh is already authored in RT pixel space, so
+            // keep the projection unflipped; otherwise node-local top content lands at
+            // the bottom of the cached surface.
+            var proj = Matrix4x4.Ortho(0f, target.width, 0f, target.height, -1f, 100f);
+            proj = GL.GetGPUProjectionMatrix(proj, false);
+            cmd.SetViewProjectionMatrices(Matrix4x4.identity, proj);
+            cmd.DrawMesh(mesh, Matrix4x4.identity, material, 0, 0);
+            Graphics.ExecuteCommandBuffer(cmd);
+            cmd.Release();
         }
 
         public static void Release(string key)

@@ -10,7 +10,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text;
 using TMPro;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -58,18 +60,19 @@ namespace FigForge
                 foreach (var kv in ctx.registered) reg.Register(kv.Key, kv.Value);
             }
             ConfigurePageCompositor(pageRoot, ctx);
+            WarmUpGeneratedGraphics(pageRoot);
             return pageRoot;
         }
 
         static void ConfigurePageCompositor(GameObject pageRoot, BuildContext ctx)
         {
             if (pageRoot == null) return;
-            var layered = pageRoot.GetComponentsInChildren<FigForgeLayeredRect>(true);
+            var sources = pageRoot.GetComponentsInChildren<IFigForgeCompositorSource>(true);
             bool needsPageCompositor = false;
-            for (int i = 0; i < layered.Length; i++)
+            for (int i = 0; i < sources.Length; i++)
             {
-                var layer = layered[i];
-                if (layer == null || FigForgeLayeredRect.BlendTier(layer.CompositorBlendMode) != 2) continue;
+                var layer = sources[i];
+                if (layer == null || !layer.RequiresPageCompositor) continue;
                 needsPageCompositor = true;
                 WarnIfAdvancedBlendUnderStencilMask(layer, ctx);
             }
@@ -79,9 +82,9 @@ namespace FigForge
                 pageRoot.AddComponent<FigForgePageCompositor>();
         }
 
-        static void WarnIfAdvancedBlendUnderStencilMask(FigForgeLayeredRect layer, BuildContext ctx)
+        static void WarnIfAdvancedBlendUnderStencilMask(IFigForgeCompositorSource layer, BuildContext ctx)
         {
-            var masks = layer.GetComponentsInParent<Mask>(true);
+            var masks = layer.transform.GetComponentsInParent<Mask>(true);
             for (int i = 0; i < masks.Length; i++)
             {
                 var mask = masks[i];
@@ -102,6 +105,46 @@ namespace FigForge
             }
             parts.Reverse();
             return string.Join("/", parts.ToArray());
+        }
+
+        static void WarmUpGeneratedGraphics(GameObject pageRoot)
+        {
+            if (pageRoot == null) return;
+
+            EditorApplication.delayCall += () =>
+            {
+                if (pageRoot == null) return;
+                var rects = pageRoot.GetComponentsInChildren<FigForgeRoundedRect>(true);
+                for (int i = 0; i < rects.Length; i++)
+                {
+                    var rr = rects[i];
+                    if (rr == null) continue;
+                    _ = rr.mainTexture; // builds/caches gradient textures.
+                    var mat = rr.materialForRendering;
+                    if (mat != null)
+                    {
+                        try { mat.SetPass(0); } catch { /* shader may compile lazily in SceneView */ }
+                    }
+                    rr.SetVerticesDirty();
+                    rr.SetMaterialDirty();
+                }
+                var layered = pageRoot.GetComponentsInChildren<FigForgeLayeredRect>(true);
+                for (int i = 0; i < layered.Length; i++)
+                {
+                    var rr = layered[i];
+                    if (rr == null) continue;
+                    _ = rr.mainTexture;
+                    var mat = rr.materialForRendering;
+                    if (mat != null)
+                    {
+                        try { mat.SetPass(0); } catch { /* shader may compile lazily in SceneView */ }
+                    }
+                    rr.SetVerticesDirty();
+                    rr.SetMaterialDirty();
+                }
+                Canvas.ForceUpdateCanvases();
+                SceneView.RepaintAll();
+            };
         }
 
         static GameObject BuildElement(ElementData e, Dictionary<string, ElementData> index, Transform parent, BuildContext ctx)
@@ -262,11 +305,22 @@ namespace FigForge
         static void ApplyVisual(GameObject go, ElementData e, BuildContext ctx, bool hasAsset)
         {
             var style = e.style;
-            bool needGraphic = hasAsset || (style != null && (style.fill != null || style.stroke != null
+            bool hasVector = HasVector(e.vector);
+            bool needGraphic = hasAsset || hasVector || (style != null && (style.fill != null || style.stroke != null
                 || (style.fills != null && style.fills.Count > 0)
                 || (style.strokes != null && style.strokes.Count > 0)
-                || (style.shadows != null && style.shadows.Count > 0)));
+                || (style.effects != null && style.effects.Count > 0)));
             if (!needGraphic) return;
+
+            // Crisp procedural vector mesh wins over PNG/SDF for representable glyphs.
+            // Strokes are baked into the mesh; opacity + blend mode are applied live by
+            // the graphic (no separate stroke pass, no ApplyOpacity double-dim).
+            if (hasVector && TryBuildVectorGraphic(go, e.vector, ctx, !ctx.disableRaycasts,
+                    BlendModeFromManifest(style != null ? style.blendMode : null),
+                    style != null ? style.opacity : 1f))
+            {
+                return;
+            }
 
             // Procedural SDF for rounded/bordered solid panels (crisp at any size,
             // per-corner). Gradients stay on the baked path; images are textures;
@@ -283,7 +337,7 @@ namespace FigForge
                 // bordered panel) so it scales without smearing the corners.
                 if (img.sprite != null && img.sprite.border.sqrMagnitude > 0.01f)
                 { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
-                ApplyOpacity(go, e, Color.white);
+                ApplyOpacity(go, e, Color.white, opacityBaked: true);
             }
             else if (style?.fill != null)
             {
@@ -312,7 +366,7 @@ namespace FigForge
             if (s.fill != null && s.fill.kind == "gradient") return IsSdfGradient(s.fill);
             bool rounded = s.cornerRadius > 0.01f || AnyCorner(s.corners);
             bool border = s.stroke != null || (s.strokes != null && s.strokes.Count > 0);
-            bool hasShadow = s.shadows != null && s.shadows.Count > 0; // drop shadow → SDF panel renders it
+            bool hasShadow = s.effects != null && s.effects.Count > 0;
             bool layeredPaint = (s.fills != null && s.fills.Count > 1) || (s.strokes != null && s.strokes.Count > 1);
             return rounded || border || hasShadow || layeredPaint;
         }
@@ -321,10 +375,11 @@ namespace FigForge
         // DOWN; flip for Unity's +y-up. color.a==0 / null → no-op.
         static void ApplyShadow(FigForgeRoundedRect rr, ShadowData s, float sf)
         {
+            if (EffectKind(s) != "dropShadow") return;
             if (s == null || s.color == null) return;
             var c = ToColor(s.color);
             if (c.a <= 0.001f) return;
-            rr.SetShadow(c, new Vector2(s.offsetX * sf, -s.offsetY * sf), s.blur * sf, s.spread * sf);
+            rr.SetShadow(c, new Vector2(s.offsetX * sf, s.offsetY * sf), s.blur * sf, s.spread * sf);
         }
 
         // A gradient the SDF shader can render: linear/radial/angular/diamond with 2+ stops.
@@ -392,7 +447,7 @@ namespace FigForge
                 return FigForgeFill.GradientFill(ToUnityGradient(fill.stops), GradientKind(fill), GradientDir(fill.transform), c);
             }
             if (fill != null && fill.kind == "solid") return FigForgeFill.Solid(ToColor(fill.color));
-            return FigForgeFill.Solid(new Color(0, 0, 0, 0));
+            return FigForgeFill.None;
         }
 
         static FigForgeFill LegacyGradientFill(float[] fill, float[] fill2, float[] transform)
@@ -424,6 +479,32 @@ namespace FigForge
             }
         }
 
+        static FigForgeBlendMode BlendModeFromManifest(string mode)
+        {
+            switch (mode)
+            {
+                case "passThrough": return FigForgeBlendMode.PassThrough;
+                case "darken": return FigForgeBlendMode.Darken;
+                case "multiply": return FigForgeBlendMode.Multiply;
+                case "plusDarker": return FigForgeBlendMode.PlusDarker;
+                case "colorBurn": return FigForgeBlendMode.ColorBurn;
+                case "lighten": return FigForgeBlendMode.Lighten;
+                case "screen": return FigForgeBlendMode.Screen;
+                case "plusLighter": return FigForgeBlendMode.PlusLighter;
+                case "colorDodge": return FigForgeBlendMode.ColorDodge;
+                case "overlay": return FigForgeBlendMode.Overlay;
+                case "softLight": return FigForgeBlendMode.SoftLight;
+                case "hardLight": return FigForgeBlendMode.HardLight;
+                case "difference": return FigForgeBlendMode.Difference;
+                case "exclusion": return FigForgeBlendMode.Exclusion;
+                case "hue": return FigForgeBlendMode.Hue;
+                case "saturation": return FigForgeBlendMode.Saturation;
+                case "color": return FigForgeBlendMode.Color;
+                case "luminosity": return FigForgeBlendMode.Luminosity;
+                default: return FigForgeBlendMode.Normal;
+            }
+        }
+
         // Strokes render ~1px thinner than their Figma weight because the SDF edge
         // is anti-aliased on BOTH sides (a thin border has little solid core). Add a
         // small px bias so outlines read at (or a hair above) the design weight.
@@ -451,31 +532,36 @@ namespace FigForge
             _sdfShaderRegistered = true;
             try
             {
-                var shader = Shader.Find("FigForge/RoundedRect");
-                if (shader == null) return;
                 var so = new UnityEditor.SerializedObject(UnityEngine.Rendering.GraphicsSettings.GetGraphicsSettings());
                 var arr = so.FindProperty("m_AlwaysIncludedShaders");
                 if (arr == null) return;
-                for (int i = 0; i < arr.arraySize; i++)
-                    if (arr.GetArrayElementAtIndex(i).objectReferenceValue == shader) return;
-                int idx = arr.arraySize;
-                arr.InsertArrayElementAtIndex(idx);
-                arr.GetArrayElementAtIndex(idx).objectReferenceValue = shader;
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/RoundedRect"));
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/LayeredRect4"));
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/CachedQuad"));
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/LayerBlur"));
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/Composite"));
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/VectorBake"));
                 so.ApplyModifiedProperties();
             }
             catch { /* best effort — editor still works via Shader.Find */ }
         }
 
+        static void AddAlwaysIncludedShader(UnityEditor.SerializedProperty arr, Shader shader)
+        {
+            if (shader == null || arr == null) return;
+            for (int i = 0; i < arr.arraySize; i++)
+                if (arr.GetArrayElementAtIndex(i).objectReferenceValue == shader) return;
+            int idx = arr.arraySize;
+            arr.InsertArrayElementAtIndex(idx);
+            arr.GetArrayElementAtIndex(idx).objectReferenceValue = shader;
+        }
+
         static void BuildSdfPanel(GameObject go, ElementData e, BuildContext ctx)
         {
             EnsureSdfShaderIncluded();
-            if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>();
-            var rr = go.AddComponent<FigForgeRoundedRect>();
-            rr.raycastTarget = !ctx.disableRaycasts;
             var s = e.style;
-            rr.Configure(FigForgeFill.Solid(new Color(0, 0, 0, 0)), FigForgeStroke.None, CornerRadii(s, ctx.scaleFactor));
             var sh = ShapeFromStyle(s);
-            BuildShapeVisualLayers(go.transform, sh, ctx);
+            BuildShapeVisualLayers(go, sh, ctx);
             ApplyOpacity(go, e, Color.white);
         }
 
@@ -485,13 +571,14 @@ namespace FigForge
             return new CanonicalShape
             {
                 cornerRadius = s.cornerRadius,
+                opacity = s.opacity,
+                blendMode = s.blendMode,
                 fill = s.fill != null && s.fill.kind == "solid" ? s.fill.color : null,
                 gradient = s.fill != null && s.fill.kind == "gradient" ? s.fill : null,
                 fills = s.fills,
                 stroke = s.stroke,
                 strokes = s.strokes,
-                shadows = s.shadows,
-                shadow = s.shadows != null && s.shadows.Count > 0 ? s.shadows[0] : null,
+                effects = s.effects,
             };
         }
 
@@ -501,7 +588,7 @@ namespace FigForge
         // RectMask2D.
         static void ApplyClip(GameObject go)
         {
-            if (go.GetComponent<FigForgeRoundedRect>() != null)
+            if (go.GetComponent<FigForgeRoundedRect>() != null || go.GetComponent<FigForgeLayeredRect>() != null)
             {
                 var mask = go.AddComponent<Mask>();
                 mask.showMaskGraphic = true; // still draw the panel's own fill/gradient/border
@@ -551,7 +638,7 @@ namespace FigForge
             img.type = Image.Type.Sliced;
             img.pixelsPerUnitMultiplier = 1f;
             img.color = ToColor(stroke.color);
-            if (stroke.dashed) ctx.log($"stroke on '{e.name}' is dashed — rendered solid (dashed not yet supported)");
+            if (stroke.dashed) ctx.log($"stroke on '{e.name}' is dashed — use SDF/layered rect for procedural dashed rendering");
         }
 
         static void ApplyText(GameObject go, ElementData e, BuildContext ctx)
@@ -626,16 +713,27 @@ namespace FigForge
             g.childForceExpandWidth = false; g.childForceExpandHeight = false;
         }
 
-        static void ApplyOpacity(GameObject go, ElementData e, Color baseColor)
+        // opacityBaked: the graphic is a Figma-exported PNG whose alpha already
+        // encodes the node's layer opacity (exportAsync bakes it in). Re-multiplying
+        // it onto the leaf Graphic would double-dim, so skip that path. Container
+        // opacity (CanvasGroup over child elements) still applies, since children are
+        // separate GameObjects the baked PNG doesn't cover.
+        static void ApplyOpacity(GameObject go, ElementData e, Color baseColor, bool opacityBaked = false)
         {
             float o = e.style != null ? e.style.opacity : 1f;
+            var layered = go.GetComponent<FigForgeLayeredRect>();
+            if (layered != null)
+            {
+                layered.ConfigureAppearance(o, BlendModeFromManifest(e.style != null ? e.style.blendMode : null));
+                return;
+            }
             if (o >= 0.999f) return;
             if (e.children != null && e.children.Count > 0)
             {
                 var cg = go.GetComponent<CanvasGroup>() ?? go.AddComponent<CanvasGroup>();
                 cg.alpha = o;
             }
-            else
+            else if (!opacityBaked)
             {
                 var g = go.GetComponent<Graphic>();
                 if (g != null) { var c = g.color; c.a *= o; g.color = c; }
@@ -677,6 +775,7 @@ namespace FigForge
             tmp.color = Color.white;
             ApplyFontSize(tmp, e.canonical.defLabelFontSize ?? 16f, ctx);
             tmp.raycastTarget = false;
+            ConfigureButtonLabelText(tmp);
             // The prefab/definition mirrors the canonical COMPONENT's label font.
             ApplyFont(tmp, e.canonical != null ? e.canonical.defLabelFont : null, ctx);
             MatchTextWeight(tmp);
@@ -703,7 +802,7 @@ namespace FigForge
             StripRootShadowsFromState(pressShape, rootShape);
 
             if (rootShape != null)
-                AddShapeLayerContainer(go.transform, "Root", rootShape, null, ctx, true);
+                BuildButtonRootVisualLayers(go, rootShape, ctx);
             var regularGo = AddShapeStateChild(go.transform, "Regular", regularShape, e.canonical.parts, ctx, true);
             var rollGo = AddShapeStateChild(go.transform, "RollOver", rollShape, e.canonical.parts, ctx, false);
             var pressGo = AddShapeStateChild(go.transform, "Pressed", pressShape, e.canonical.parts, ctx, false);
@@ -726,6 +825,7 @@ namespace FigForge
             tmp.color = Color.white;
             ApplyFontSize(tmp, e.canonical.defLabelFontSize ?? 16f, ctx);
             tmp.raycastTarget = false;
+            ConfigureButtonLabelText(tmp);
             ApplyFont(tmp, e.canonical.defLabelFont, ctx);
             MatchTextWeight(tmp);
             return go;
@@ -754,40 +854,266 @@ namespace FigForge
         {
             var child = NewRect(name, parent);
             AnchorPart(child.GetComponent<RectTransform>(), parts, name);
-            BuildShapeVisualLayers(child.transform, shape, ctx);
+            BuildShapeVisualLayers(child, shape, ctx);
             child.SetActive(active);
             return child;
         }
 
-        static void BuildShapeVisualLayers(Transform parent, CanonicalShape shape, BuildContext ctx)
+        static void BuildShapeVisualLayers(GameObject owner, CanonicalShape shape, BuildContext ctx, bool allowOwnerRenderer = true)
         {
             if (shape == null) return;
+            // Crisp procedural vector mesh wins over the PNG fallback when present.
+            if (allowOwnerRenderer && TryBuildShapeVector(owner, shape, ctx, false))
+                return;
+            if (allowOwnerRenderer && TryBuildShapeAsset(owner, shape, ctx, false))
+                return;
+
             var fills = ShapeFills(shape);
             var strokes = ShapeStrokes(shape);
             var shadows = ShapeShadows(shape);
 
+            if (allowOwnerRenderer && TryBuildLayeredRect(owner, shape, fills, strokes, shadows, ctx))
+                return;
+
+            if (allowOwnerRenderer)
+                RemoveOwnerVisualRenderers(owner);
+
+            if (fills.Count == 0 && strokes.Count == 0 && shadows.Count == 0)
+            {
+                AddShapePaintLayer(owner.transform, "Fill", FigForgeFill.None, FigForgeStroke.None, shape, ctx);
+                return;
+            }
+
+            // Figma paints fills as a stack, then strokes on top. Drop shadows are
+            // effects of the whole rendered object, so render them behind paint.
             for (int i = 0; i < shadows.Count; i++)
             {
-                var rr = AddShapeVisualLayer(parent, shadows.Count == 1 ? "Shadow" : $"Shadow {i + 1}", FigForgeFill.Solid(new Color(0, 0, 0, 0)), FigForgeStroke.None, shape, ctx);
+                var rr = AddShapePaintLayer(owner.transform, LayerName("Effect", i, shadows.Count), FigForgeFill.None, FigForgeStroke.None, shape, ctx);
                 ApplyShadow(rr, shadows[i], ctx.scaleFactor);
             }
 
-            if (fills.Count == 0 && strokes.Count == 0 && shadows.Count == 0)
-                fills.Add(FigForgeFill.Solid(new Color(0, 0, 0, 0)));
-
             for (int i = 0; i < fills.Count; i++)
-                AddShapeVisualLayer(parent, fills.Count == 1 ? "Fill" : $"Fill {i + 1}", fills[i], FigForgeStroke.None, shape, ctx);
+                AddShapePaintLayer(owner.transform, LayerName("Fill", i, fills.Count), fills[i], FigForgeStroke.None, shape, ctx);
 
             for (int i = 0; i < strokes.Count; i++)
             {
-                var stroke = StrokeFromManifest(strokes[i], ctx);
                 bool usesGradient;
                 var strokeFill = StrokeFillFromManifest(strokes[i], out usesGradient);
-                AddShapeVisualLayer(parent, strokes.Count == 1 ? "Stroke" : $"Stroke {i + 1}", strokeFill, stroke, shape, ctx, usesGradient);
+                AddShapePaintLayer(owner.transform, LayerName("Stroke", i, strokes.Count), strokeFill, StrokeFromManifest(strokes[i], ctx), shape, ctx, usesGradient);
             }
         }
 
-        static FigForgeRoundedRect AddShapeVisualLayer(Transform parent, string name, FigForgeFill fill, FigForgeStroke stroke, CanonicalShape shape, BuildContext ctx, bool strokeUsesFillGradient = false)
+        // ---- Procedural vector mesh (FigForgeVectorGraphic) -----------------------
+        static bool HasVector(VectorDrawing v)
+            => v != null && v.meshes != null && v.meshes.Count > 0;
+
+        // Bake all of a drawing's fill/stroke meshes into one flat vertex/index/colour
+        // buffer and attach a FigForgeVectorGraphic. Per-vertex colour = region colour
+        // × AA alpha; opacity + Figma blend mode are applied live by the graphic.
+        static bool TryBuildVectorGraphic(GameObject owner, VectorDrawing v, BuildContext ctx, bool raycast,
+                                          FigForgeBlendMode blend, float opacity)
+        {
+            if (!HasVector(v)) return false;
+            var verts = new List<float>();
+            var tris = new List<int>();
+            var colors = new List<Color32>();
+            foreach (var m in v.meshes)
+            {
+                if (m == null || m.verts == null || m.tris == null) continue;
+                int baseV = verts.Count / 2;
+                int nv = m.verts.Count / 2;
+                Color baseCol = (m.color != null && m.color.Length >= 4)
+                    ? new Color(m.color[0], m.color[1], m.color[2], m.color[3])
+                    : Color.white;
+                for (int i = 0; i < nv; i++)
+                {
+                    verts.Add(m.verts[i * 2]);
+                    verts.Add(m.verts[i * 2 + 1]);
+                    float a = (m.alpha != null && i < m.alpha.Count) ? m.alpha[i] : 1f;
+                    var c = baseCol;
+                    c.a *= a;
+                    colors.Add(c);
+                }
+                for (int i = 0; i + 2 < m.tris.Count; i += 3)
+                {
+                    tris.Add(m.tris[i] + baseV);
+                    tris.Add(m.tris[i + 1] + baseV);
+                    tris.Add(m.tris[i + 2] + baseV);
+                }
+            }
+            if (verts.Count < 6 || tris.Count < 3) return false;
+
+            RemoveOwnerVisualRenderers(owner);
+            if (owner.GetComponent<CanvasRenderer>() == null) owner.AddComponent<CanvasRenderer>();
+            var g = owner.AddComponent<FigForgeVectorGraphic>();
+            var bounds = (v.bounds != null && v.bounds.Length >= 2)
+                ? new Vector2(v.bounds[0], v.bounds[1]) : Vector2.one;
+            g.Configure(bounds, verts.ToArray(), tris.ToArray(), colors.ToArray(),
+                raycast && !ctx.disableRaycasts, blend, opacity);
+            return true;
+        }
+
+        // Vector mesh for a canonical shape. Opacity + blend mode are applied live by
+        // the graphic (mesh renders at full opacity; opacity folds in at draw/present).
+        static bool TryBuildShapeVector(GameObject owner, CanonicalShape shape, BuildContext ctx, bool raycast)
+        {
+            if (shape == null || !HasVector(shape.vector)) return false;
+            return TryBuildVectorGraphic(owner, shape.vector, ctx, raycast,
+                BlendModeFromManifest(shape.blendMode), shape.opacity);
+        }
+
+        static bool TryBuildLayeredRect(GameObject owner, CanonicalShape shape, List<FigForgeFill> fills, List<Stroke> strokes, List<ShadowData> shadows, BuildContext ctx)
+        {
+            if (shape != null && HasVector(shape.vector)) return false;
+            if (HasShapeAsset(shape, ctx)) return false;
+            if (!CanUseLayeredRect(fills, strokes, shadows)) return false;
+
+            RemoveOwnerVisualRenderers(owner);
+            if (owner.GetComponent<CanvasRenderer>() == null) owner.AddComponent<CanvasRenderer>();
+            var rr = owner.AddComponent<FigForgeLayeredRect>();
+            rr.raycastTarget = false;
+            ApplyShapeValues(shape, ctx.scaleFactor, out _, out _, out var corners);
+            rr.ConfigureLayers(fills, LayeredStrokes(strokes, ctx), LayeredEffects(shadows, ctx), corners);
+            rr.ConfigureAppearance(shape != null ? shape.opacity : 1f, BlendModeFromManifest(shape != null ? shape.blendMode : null));
+            return true;
+        }
+
+        static bool HasShapeAsset(CanonicalShape shape, BuildContext ctx)
+            => shape != null
+               && !string.IsNullOrEmpty(shape.asset)
+               && ctx.sprites != null
+               && ctx.sprites.ContainsKey(shape.asset);
+
+        static bool TryBuildShapeAsset(GameObject owner, CanonicalShape shape, BuildContext ctx, bool raycastTarget)
+        {
+            if (!HasShapeAsset(shape, ctx))
+            {
+                // A shape that references a vector PNG we never received degrades to
+                // a procedural rounded-rect box. Surface it so a dropped/blank asset
+                // is debuggable instead of silently wrong.
+                if (shape != null && !string.IsNullOrEmpty(shape.asset))
+                    ctx.log($"shape sprite asset '{shape.asset}' missing for {owner.name} — using procedural fallback");
+                return false;
+            }
+            RemoveOwnerVisualRenderers(owner);
+            if (owner.GetComponent<CanvasRenderer>() == null) owner.AddComponent<CanvasRenderer>();
+            var img = owner.AddComponent<Image>();
+            img.sprite = ctx.sprites[shape.asset];
+            // Figma exportAsync bakes the node's appearance into this PNG, including
+            // layer opacity/effects. Keep the Unity tint neutral so opacity is not
+            // applied a second time on vector/icon fallbacks.
+            img.color = Color.white;
+            img.raycastTarget = raycastTarget && !ctx.disableRaycasts;
+            return true;
+        }
+
+        static bool CanUseLayeredRect(List<FigForgeFill> fills, List<Stroke> strokes, List<ShadowData> shadows)
+        {
+            if (fills.Count > 4 || strokes.Count > 4) return false;
+            int drop = 0, inner = 0, blur = 0;
+            for (int i = 0; i < shadows.Count; i++)
+            {
+                switch (EffectKind(shadows[i]))
+                {
+                    case "innerShadow": inner++; break;
+                    case "layerBlur": blur++; break;
+                    default: drop++; break;
+                }
+            }
+            if (drop > 4 || inner > 4 || blur > 1) return false;
+            return true;
+        }
+
+        static List<FigForgeStrokeLayer> LayeredStrokes(List<Stroke> strokes, BuildContext ctx)
+        {
+            var outStrokes = new List<FigForgeStrokeLayer>();
+            for (int i = 0; i < strokes.Count; i++)
+                outStrokes.Add(StrokeLayerFromManifest(strokes[i], ctx));
+            return outStrokes;
+        }
+
+        static FigForgeStrokeLayer StrokeLayerFromManifest(Stroke stroke, BuildContext ctx)
+        {
+            if (stroke == null) return default;
+            DashPattern(stroke, ctx.scaleFactor, out var dash, out var gap);
+            return FigForgeStrokeLayer.Create(
+                StrokePaintFromManifest(stroke),
+                StrokePx(stroke.weight, ctx.scaleFactor),
+                StrokeAlign(stroke.align),
+                stroke.dashed,
+                dash,
+                gap);
+        }
+
+        static FigForgeFill StrokePaintFromManifest(Stroke stroke)
+        {
+            if (stroke == null) return FigForgeFill.None;
+            if (stroke.fill != null && stroke.fill.kind == "gradient" && IsSdfGradient(stroke.fill))
+                return FillFromManifest(stroke.fill);
+            if (stroke.fill != null && stroke.fill.kind == "solid")
+                return FillFromManifest(stroke.fill);
+            return FigForgeFill.Solid(ToColor(stroke.color));
+        }
+
+        static List<FigForgeEffectLayer> LayeredEffects(List<ShadowData> shadows, BuildContext ctx)
+        {
+            var outEffects = new List<FigForgeEffectLayer>();
+            for (int i = 0; i < shadows.Count; i++)
+            {
+                var s = shadows[i];
+                if (s == null) continue;
+                string kind = EffectKind(s);
+                if (kind == "layerBlur")
+                {
+                    float start = (s.startBlur ?? s.blur) * ctx.scaleFactor;
+                    float end = (s.endBlur ?? s.blur) * ctx.scaleFactor;
+                    var effect = FigForgeEffectLayer.LayerBlur(start);
+                    effect.blurMode = string.Equals(s.blurMode, "progressive", StringComparison.OrdinalIgnoreCase)
+                        ? FigForgeLayerBlurMode.Progressive
+                        : FigForgeLayerBlurMode.Uniform;
+                    effect.endBlur = end;
+                    effect.enabled = Mathf.Max(effect.blur, effect.endBlur) > 0.001f;
+                    outEffects.Add(effect);
+                    continue;
+                }
+
+                if (s.color == null) continue;
+                var c = ToColor(s.color);
+                if (c.a <= 0.001f) continue;
+                var offset = new Vector2(s.offsetX * ctx.scaleFactor, s.offsetY * ctx.scaleFactor);
+                float blur = s.blur * ctx.scaleFactor;
+                float spread = s.spread * ctx.scaleFactor;
+                outEffects.Add(kind == "innerShadow"
+                    ? FigForgeEffectLayer.InnerShadow(c, offset, blur, spread)
+                    : FigForgeEffectLayer.DropShadow(c, offset, blur, spread));
+            }
+            return outEffects;
+        }
+
+        static string EffectKind(ShadowData effect)
+        {
+            if (effect == null) return "dropShadow";
+            if (!string.IsNullOrEmpty(effect.kind)) return effect.kind;
+            return effect.inner ? "innerShadow" : "dropShadow";
+        }
+
+        static void RemoveOwnerVisualRenderers(GameObject owner)
+        {
+            var layered = owner.GetComponents<FigForgeLayeredRect>();
+            for (int i = layered.Length - 1; i >= 0; i--)
+                if (layered[i] != null) UnityEngine.Object.DestroyImmediate(layered[i]);
+
+            var rounded = owner.GetComponents<FigForgeRoundedRect>();
+            for (int i = rounded.Length - 1; i >= 0; i--)
+                if (rounded[i] != null) UnityEngine.Object.DestroyImmediate(rounded[i]);
+        }
+
+        static string LayerName(string prefix, int index, int count)
+        {
+            return count == 1 ? prefix : $"{prefix} {index + 1}";
+        }
+
+        static FigForgeRoundedRect AddShapePaintLayer(Transform parent, string name, FigForgeFill fill, FigForgeStroke stroke, CanonicalShape shape, BuildContext ctx, bool strokeUsesFillGradient = false)
         {
             var go = NewRect(name, parent);
             Stretch(go.GetComponent<RectTransform>());
@@ -834,8 +1160,6 @@ namespace FigForge
             return new CanonicalShape
             {
                 cornerRadius = regular.cornerRadius,
-                fill = new[] { 0f, 0f, 0f, 0f },
-                fills = new List<Fill> { new Fill { kind = "solid", color = new[] { 0f, 0f, 0f, 0f } } },
                 shadow = rootShadows[0],
                 shadows = rootShadows,
             };
@@ -884,7 +1208,11 @@ namespace FigForge
             if (sh == null) return null;
             return new CanonicalShape
             {
+                asset = sh.asset,
+                vector = sh.vector,
                 cornerRadius = sh.cornerRadius,
+                opacity = sh.opacity,
+                blendMode = sh.blendMode,
                 fill = sh.fill,
                 gradient = sh.gradient,
                 fill2 = sh.fill2,
@@ -897,6 +1225,7 @@ namespace FigForge
                 borderAlign = sh.borderAlign,
                 shadow = sh.shadow,
                 shadows = sh.shadows,
+                effects = sh.effects,
             };
         }
 
@@ -907,11 +1236,10 @@ namespace FigForge
             if (sh.fills != null)
             {
                 for (int i = 0; i < sh.fills.Count; i++)
-                    outFills.Add(FillFromManifest(sh.fills[i]));
+                    if (HasVisibleFill(sh.fills[i]))
+                        outFills.Add(FillFromManifest(sh.fills[i]));
             }
-            if (outFills.Count == 0 && sh.fill == null && sh.gradient == null && sh.fill2 == null)
-                outFills.Add(FigForgeFill.Solid(new Color(0, 0, 0, 0)));
-            else if (outFills.Count == 0)
+            if (outFills.Count == 0 && (HasVisibleColor(sh.fill) || sh.gradient != null || HasVisibleColor(sh.fill2)))
                 outFills.Add(sh.gradient != null && IsSdfGradient(sh.gradient)
                     ? FillFromManifest(sh.gradient)
                     : LegacyGradientFill(sh.fill, sh.fill2, sh.gradientTransform));
@@ -932,6 +1260,7 @@ namespace FigForge
                     weight = sh.borderWidth,
                     align = sh.borderAlign,
                     dashed = false,
+                    dashPattern = null,
                 });
             }
             return strokes;
@@ -941,9 +1270,18 @@ namespace FigForge
         {
             var shadows = new List<ShadowData>();
             if (sh == null) return shadows;
-            if (sh.shadows != null && sh.shadows.Count > 0) shadows.AddRange(sh.shadows);
+            if (sh.effects != null && sh.effects.Count > 0) shadows.AddRange(sh.effects);
+            else if (sh.shadows != null && sh.shadows.Count > 0) shadows.AddRange(sh.shadows);
             else if (sh.shadow != null) shadows.Add(sh.shadow);
             return shadows;
+        }
+
+        static ShadowData FirstDropShadow(CanonicalShape sh)
+        {
+            var effects = ShapeShadows(sh);
+            for (int i = 0; i < effects.Count; i++)
+                if (EffectKind(effects[i]) == "dropShadow") return effects[i];
+            return null;
         }
 
         static void StripRootShadowsFromState(CanonicalShape state, CanonicalShape root)
@@ -964,6 +1302,7 @@ namespace FigForge
             if (!allRootCopies) return;
             state.shadow = null;
             state.shadows = null;
+            state.effects = null;
         }
 
         static bool SameShadow(ShadowData a, ShadowData b)
@@ -980,7 +1319,24 @@ namespace FigForge
         static FigForgeStroke StrokeFromManifest(Stroke stroke, BuildContext ctx)
         {
             if (stroke == null) return FigForgeStroke.None;
-            return FigForgeStroke.Create(ToColor(stroke.color), StrokePx(stroke.weight, ctx.scaleFactor), StrokeAlign(stroke.align));
+            return StrokeFromManifest(stroke, ctx.scaleFactor);
+        }
+
+        static FigForgeStroke StrokeFromManifest(Stroke stroke, float scaleFactor)
+        {
+            if (stroke == null) return FigForgeStroke.None;
+            DashPattern(stroke, scaleFactor, out var dash, out var gap);
+            return FigForgeStroke.Create(ToColor(stroke.color), StrokePx(stroke.weight, scaleFactor), StrokeAlign(stroke.align), stroke.dashed, dash, gap);
+        }
+
+        static void DashPattern(Stroke stroke, float scaleFactor, out float dash, out float gap)
+        {
+            dash = 0f;
+            gap = 0f;
+            if (stroke == null || !stroke.dashed) return;
+            if (stroke.dashPattern == null || stroke.dashPattern.Count == 0) return;
+            dash = Mathf.Max(0f, stroke.dashPattern[0] * scaleFactor);
+            gap = Mathf.Max(0f, (stroke.dashPattern.Count > 1 ? stroke.dashPattern[1] : stroke.dashPattern[0]) * scaleFactor);
         }
 
         static FigForgeFill StrokeFillFromManifest(Stroke stroke, out bool usesGradient)
@@ -991,7 +1347,19 @@ namespace FigForge
                 usesGradient = true;
                 return FillFromManifest(stroke.fill);
             }
-            return FigForgeFill.Solid(new Color(0, 0, 0, 0));
+            return FigForgeFill.None;
+        }
+
+        static bool HasVisibleFill(FigForgeFill fill)
+        {
+            if (fill.disabled) return false;
+            if (fill.kind == FigForgeFillKind.Solid) return fill.color.a > 0.001f;
+            if (fill.gradient == null) return fill.color.a > 0.001f;
+            var alphas = fill.gradient.alphaKeys;
+            if (alphas == null || alphas.Length == 0) return fill.color.a > 0.001f;
+            for (int i = 0; i < alphas.Length; i++)
+                if (alphas[i].alpha > 0.001f) return true;
+            return false;
         }
 
         // Push a CanonicalShape onto a FigForgeRoundedRect (fill/gradient/stroke/
@@ -1009,10 +1377,10 @@ namespace FigForge
                                      out FigForgeStroke stroke, out Vector4 corners)
         {
             var fills = ShapeFills(sh);
-            fill = fills.Count > 0 ? fills[0] : FigForgeFill.Solid(new Color(0, 0, 0, 0));
+            fill = fills.Count > 0 ? fills[0] : FigForgeFill.None;
             var strokes = ShapeStrokes(sh);
             stroke = strokes.Count > 0
-                ? FigForgeStroke.Create(ToColor(strokes[0].color), StrokePx(strokes[0].weight, sf), StrokeAlign(strokes[0].align))
+                ? StrokeFromManifest(strokes[0], sf)
                 : FigForgeStroke.None;
             float br = sh.cornerRadius * sf;
             corners = new Vector4(br, br, br, br);
@@ -1031,12 +1399,13 @@ namespace FigForge
                 shadowBlur = 0f,
                 shadowSpread = 0f,
             };
-            if (sh.shadow != null && sh.shadow.color != null)
+            var firstShadow = FirstDropShadow(sh);
+            if (firstShadow != null && firstShadow.color != null)
             {
-                style.shadowColor = ToColor(sh.shadow.color);
-                style.shadowOffset = new Vector2(sh.shadow.offsetX * ctx.scaleFactor, -sh.shadow.offsetY * ctx.scaleFactor);
-                style.shadowBlur = sh.shadow.blur * ctx.scaleFactor;
-                style.shadowSpread = sh.shadow.spread * ctx.scaleFactor;
+                style.shadowColor = ToColor(firstShadow.color);
+                style.shadowOffset = new Vector2(firstShadow.offsetX * ctx.scaleFactor, firstShadow.offsetY * ctx.scaleFactor);
+                style.shadowBlur = firstShadow.blur * ctx.scaleFactor;
+                style.shadowSpread = firstShadow.spread * ctx.scaleFactor;
             }
             return style;
         }
@@ -1088,32 +1457,59 @@ namespace FigForge
             if (shape == null) return;
             var t = inst.transform.Find(name);
             if (t == null) return;
-            if (t.GetComponent<FigForgeRoundedRect>() != null)
-            {
-                ApplyShapeToRR(t.GetComponent<FigForgeRoundedRect>(), shape, ctx.scaleFactor, out _);
-                return;
-            }
             ClearChildren(t);
-            BuildShapeVisualLayers(t, shape, ctx);
+            BuildShapeVisualLayers(t.gameObject, shape, ctx);
         }
 
         static void ApplyInstanceRootShape(GameObject inst, CanonicalShape shape, BuildContext ctx)
         {
-            var root = inst.transform.Find("Root");
-            if (root == null)
-            {
-                root = AddShapeLayerContainer(inst.transform, "Root", shape, null, ctx, true).transform;
-                root.SetSiblingIndex(0);
-                return;
-            }
-            ClearChildren(root);
-            BuildShapeVisualLayers(root, shape, ctx);
+            BuildButtonRootVisualLayers(inst, shape, ctx);
         }
 
         static void ClearChildren(Transform t)
         {
             for (int i = t.childCount - 1; i >= 0; i--)
                 UnityEngine.Object.DestroyImmediate(t.GetChild(i).gameObject);
+        }
+
+        static void BuildButtonRootVisualLayers(GameObject button, CanonicalShape shape, BuildContext ctx)
+        {
+            RemoveOwnerVisualRenderers(button);
+            ClearButtonRootVisualLayers(button.transform);
+            if (shape == null) return;
+            var fillGo = NewRect("Fill", button.transform);
+            Stretch(fillGo.GetComponent<RectTransform>());
+            BuildShapeVisualLayers(fillGo, shape, ctx);
+            MoveButtonRootVisualLayersToFront(button.transform);
+        }
+
+        static void ClearButtonRootVisualLayers(Transform button)
+        {
+            for (int i = button.childCount - 1; i >= 0; i--)
+            {
+                var child = button.GetChild(i);
+                if (IsRootVisualLayerName(child.name))
+                    UnityEngine.Object.DestroyImmediate(child.gameObject);
+            }
+        }
+
+        static void MoveButtonRootVisualLayersToFront(Transform button)
+        {
+            var layers = new List<Transform>();
+            for (int i = 0; i < button.childCount; i++)
+            {
+                var child = button.GetChild(i);
+                if (IsRootVisualLayerName(child.name)) layers.Add(child);
+            }
+            for (int i = 0; i < layers.Count; i++)
+                layers[i].SetSiblingIndex(i);
+        }
+
+        static bool IsRootVisualLayerName(string name)
+        {
+            return name == "Effect" || name.StartsWith("Effect ")
+                || name == "Fill" || name.StartsWith("Fill ")
+                || name == "Stroke" || name.StartsWith("Stroke ");
         }
 
         // Build the three state fills from a base fill + optional captured hover/press
@@ -1165,7 +1561,16 @@ namespace FigForge
         {
             if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>();
             if (sh == null) { var img = go.AddComponent<Image>(); img.color = new Color(1, 1, 1, 0); return img; }
+            if (TryBuildShapeVector(go, sh, ctx, false))
+                return go.GetComponent<FigForgeVectorGraphic>();
+            if (TryBuildShapeAsset(go, sh, ctx, false))
+                return go.GetComponent<Image>();
             EnsureSdfShaderIncluded();
+            var fills = ShapeFills(sh);
+            var strokes = ShapeStrokes(sh);
+            var shadows = ShapeShadows(sh);
+            if (TryBuildLayeredRect(go, sh, fills, strokes, shadows, ctx))
+                return go.GetComponent<FigForgeLayeredRect>();
             var rr = go.AddComponent<FigForgeRoundedRect>();
             ApplyShapeToRR(rr, sh, ctx.scaleFactor, out _);
             return rr;
@@ -1394,9 +1799,9 @@ namespace FigForge
         static void ApplyDropdownBackgroundStates(Graphic bg, CanonicalRef c, BuildContext ctx)
         {
             if (bg == null || (c.bgRollover == null && c.bgPressed == null)) return;
-            if (bg is FigForgeRoundedRect rr && c.shape != null)
+            if (c.shape != null && (bg is FigForgeRoundedRect || bg is FigForgeLayeredRect))
             {
-                ApplyShapeToRR(rr, c.shape, ctx.scaleFactor, out var fill);
+                var fill = ShapeFills(c.shape).Count > 0 ? ShapeFills(c.shape)[0] : FigForgeFill.None;
                 var states = bg.gameObject.AddComponent<FigForgeButtonStateColors>();
                 SetStates(states, fill, new CanonicalStateColors
                 {
@@ -1457,9 +1862,8 @@ namespace FigForge
             Graphic itemGraphic;
             if (c.optionShape != null)
             {
-                var rr = (FigForgeRoundedRect)AddShapeGraphic(itemBg, c.optionShape, ctx);
-                ApplyDropdownOptionStates(item, rr, itemToggle, c, ctx);
-                itemGraphic = rr;
+                itemGraphic = AddShapeGraphic(itemBg, c.optionShape, ctx);
+                ApplyDropdownOptionStates(item, itemGraphic, itemToggle, c, ctx);
             }
             else
             {
@@ -1488,9 +1892,9 @@ namespace FigForge
             template.SetActive(false);
         }
 
-        static void ApplyDropdownOptionStates(GameObject item, FigForgeRoundedRect rr, Toggle itemToggle, CanonicalRef c, BuildContext ctx)
+        static void ApplyDropdownOptionStates(GameObject item, Graphic graphic, Toggle itemToggle, CanonicalRef c, BuildContext ctx)
         {
-            if (rr == null || c.optionShape == null) return;
+            if (graphic == null || c.optionShape == null) return;
             var normal = ShapeStyle(c.optionShape, ctx);
             var highlighted = c.optionRolloverShape != null
                 ? ShapeStyle(c.optionRolloverShape, ctx)
@@ -1504,7 +1908,8 @@ namespace FigForge
                 : (c.optionSelected != null ? normal.WithFill(FigForgeFill.Solid(ToColor(c.optionSelected))) : normal);
 
             var states = item.AddComponent<FigForgeToggleStateColors>();
-            states.target = rr;
+            states.target = graphic as FigForgeRoundedRect;
+            states.layeredTarget = graphic as FigForgeLayeredRect;
             states.toggle = itemToggle;
             states.useShapeStyles = true;
             states.normalShape = normal;
@@ -1567,12 +1972,13 @@ namespace FigForge
             if (sh == null) return style;
             ApplyShapeValues(sh, sf, out style.fill,
                 out style.stroke, out style.corners);
-            if (sh.shadow != null && sh.shadow.color != null)
+            var firstShadow = FirstDropShadow(sh);
+            if (firstShadow != null && firstShadow.color != null)
             {
-                style.shadowColor = ToColor(sh.shadow.color);
-                style.shadowOffset = new Vector2(sh.shadow.offsetX * sf, -sh.shadow.offsetY * sf);
-                style.shadowBlur = sh.shadow.blur * sf;
-                style.shadowSpread = sh.shadow.spread * sf;
+                style.shadowColor = ToColor(firstShadow.color);
+                style.shadowOffset = new Vector2(firstShadow.offsetX * sf, firstShadow.offsetY * sf);
+                style.shadowBlur = firstShadow.blur * sf;
+                style.shadowSpread = firstShadow.spread * sf;
             }
             return style;
         }
@@ -1595,6 +2001,7 @@ namespace FigForge
             tmp.alignment = TextAlignmentOptions.Center;
             tmp.color = Color.white;
             ApplyFontSize(tmp, e.canonical?.defLabelFontSize ?? 16f, ctx);
+            ConfigureButtonLabelText(tmp);
             return go;
         }
 
@@ -1602,9 +2009,17 @@ namespace FigForge
         {
             if (string.IsNullOrEmpty(label)) return;
             var tmp = inst.GetComponentInChildren<TMP_Text>(true);
-            if (tmp != null) { tmp.text = label; return; }
+            if (tmp != null) { tmp.text = label; ConfigureButtonLabelText(tmp); return; }
             var ui = inst.GetComponentInChildren<Text>(true);
             if (ui != null) ui.text = label;
+        }
+
+        static void ConfigureButtonLabelText(TMP_Text tmp)
+        {
+            if (tmp == null) return;
+            tmp.textWrappingMode = TextWrappingModes.NoWrap;
+            tmp.overflowMode = TextOverflowModes.Overflow;
+            tmp.enableAutoSizing = false;
         }
 
         // Apply a specific canonical label font (family/style) to a TMP label;
@@ -1851,7 +2266,11 @@ namespace FigForge
         static void AppendShapeSig(System.Text.StringBuilder sb, string prefix, CanonicalShape sh)
         {
             if (sh == null) return;
-            sb.Append(';').Append(prefix).Append("cr=").Append(sh.cornerRadius.ToString("0.###"))
+            sb.Append(';').Append(prefix).Append("asset=").Append(sh.asset ?? "")
+              .Append(';').Append(prefix).Append("vec=").Append(SigVector(sh.vector))
+              .Append(';').Append(prefix).Append("op=").Append(sh.opacity.ToString("0.###"))
+              .Append(';').Append(prefix).Append("bm=").Append(sh.blendMode ?? "")
+              .Append(';').Append(prefix).Append("cr=").Append(sh.cornerRadius.ToString("0.###"))
               .Append(';').Append(prefix).Append("f=").Append(SigF(sh.fill))
               .Append(';').Append(prefix).Append("f2=").Append(SigF(sh.fill2))
               .Append(';').Append(prefix).Append("fg=").Append(SigGradient(sh.gradient))
@@ -1863,24 +2282,21 @@ namespace FigForge
             if (sh.strokes != null)
                 for (int i = 0; i < sh.strokes.Count; i++)
                     sb.Append(';').Append(prefix).Append("stroke").Append(i).Append('=').Append(SigStroke(sh.strokes[i], null, 0f, null));
-            if (sh.shadow != null)
-            {
-                sb.Append(';').Append(prefix).Append("sh=").Append(SigF(sh.shadow.color)).Append(',')
-                  .Append(sh.shadow.offsetX.ToString("0.###")).Append(',')
-                  .Append(sh.shadow.offsetY.ToString("0.###")).Append(',')
-                  .Append(sh.shadow.blur.ToString("0.###")).Append(',')
-                  .Append(sh.shadow.spread.ToString("0.###"));
-            }
-            if (sh.shadows != null)
-                for (int i = 0; i < sh.shadows.Count; i++)
+            var effects = ShapeShadows(sh);
+            if (effects != null)
+                for (int i = 0; i < effects.Count; i++)
                 {
-                    var sd = sh.shadows[i];
-                    sb.Append(';').Append(prefix).Append("shadow").Append(i).Append('=')
+                    var sd = effects[i];
+                    sb.Append(';').Append(prefix).Append("effect").Append(i).Append('=')
+                      .Append(EffectKind(sd)).Append(',')
                       .Append(SigF(sd.color)).Append(',')
                       .Append(sd.offsetX.ToString("0.###")).Append(',')
                       .Append(sd.offsetY.ToString("0.###")).Append(',')
                       .Append(sd.blur.ToString("0.###")).Append(',')
-                      .Append(sd.spread.ToString("0.###"));
+                      .Append(sd.spread.ToString("0.###")).Append(',')
+                      .Append(sd.blurMode ?? "").Append(',')
+                      .Append((sd.startBlur ?? 0f).ToString("0.###")).Append(',')
+                      .Append((sd.endBlur ?? 0f).ToString("0.###"));
                 }
         }
 
@@ -1891,6 +2307,28 @@ namespace FigForge
 
         static string SigF(float[] a)
             => a == null ? "_" : string.Join(",", System.Array.ConvertAll(a, x => x.ToString("0.###")));
+
+        // Compact, stable fingerprint of a vector drawing so geometry/colour edits
+        // trigger a prefab regen. Folds counts + a rolling hash of verts/colours.
+        static string SigVector(VectorDrawing v)
+        {
+            if (!HasVector(v)) return "_";
+            unchecked
+            {
+                int h = 17;
+                if (v.bounds != null) for (int i = 0; i < v.bounds.Length; i++) h = h * 31 + v.bounds[i].GetHashCode();
+                int totalV = 0, totalT = 0, totalA = 0;
+                foreach (var m in v.meshes)
+                {
+                    if (m == null) continue;
+                    if (m.color != null) for (int i = 0; i < m.color.Length; i++) h = h * 31 + m.color[i].GetHashCode();
+                    if (m.alpha != null) { totalA += m.alpha.Count; for (int i = 0; i < m.alpha.Count; i++) h = h * 31 + m.alpha[i].GetHashCode(); }
+                    if (m.verts != null) { totalV += m.verts.Count; for (int i = 0; i < m.verts.Count; i++) h = h * 31 + m.verts[i].GetHashCode(); }
+                    if (m.tris != null) { totalT += m.tris.Count; for (int i = 0; i < m.tris.Count; i++) h = h * 31 + m.tris[i]; }
+                }
+                return v.meshes.Count + "/" + totalV + "/" + totalT + "/" + totalA + "/" + h.ToString("x");
+            }
+        }
 
         static string SigGradient(Fill f)
         {
@@ -1906,8 +2344,20 @@ namespace FigForge
         static string SigStroke(Stroke stroke, float[] legacyColor, float legacyWidth, string legacyAlign)
         {
             if (stroke != null)
-                return SigF(stroke.color) + "," + SigFill(stroke.fill) + "," + stroke.weight.ToString("0.###") + "," + (stroke.align ?? "") + "," + (stroke.dashed ? "d" : "s");
+                return SigF(stroke.color) + "," + SigFill(stroke.fill) + "," + stroke.weight.ToString("0.###") + "," + (stroke.align ?? "") + "," + (stroke.dashed ? "d" : "s") + "," + SigDash(stroke.dashPattern);
             return SigF(legacyColor) + "," + legacyWidth.ToString("0.###") + "," + (legacyAlign ?? "");
+        }
+
+        static string SigDash(List<float> dashPattern)
+        {
+            if (dashPattern == null || dashPattern.Count == 0) return "";
+            var sb = new StringBuilder();
+            for (int i = 0; i < dashPattern.Count; i++)
+            {
+                if (i > 0) sb.Append('/');
+                sb.Append(dashPattern[i].ToString("0.###"));
+            }
+            return sb.ToString();
         }
 
         static string SigFill(Fill f)

@@ -119,8 +119,8 @@ namespace FigForge
             if (itemStyle != null && itemStyle.enabled)
             {
                 if (row.GetComponent<CanvasRenderer>() == null) row.AddComponent<CanvasRenderer>();
-                var rr = row.AddComponent<FigForgeRoundedRect>();
-                ApplyStyleToRR(rr, itemStyle);
+                var rr = row.AddComponent<FigForgeLayeredRect>();
+                ApplyStyleToLayeredRect(rr, itemStyle);
                 var states = row.AddComponent<FigForgeButtonStateColors>();
                 states.normal = itemStyle.fill;
                 states.highlighted = hasItemRollover ? FigForgeFill.Solid(itemRollover) : itemStyle.fill;
@@ -161,6 +161,20 @@ namespace FigForge
             rr.Configure(style.fill, style.stroke, style.corners);
             if (style.shadowColor.a > 0.001f)
                 rr.SetShadow(style.shadowColor, style.shadowOffset, style.shadowBlur, style.shadowSpread);
+        }
+
+        static void ApplyStyleToLayeredRect(FigForgeLayeredRect rr, FigForgeListRowStyle style)
+        {
+            rr.SetStyle(new FigForgeShapeStyle
+            {
+                fill = style.fill,
+                stroke = style.stroke,
+                corners = style.corners,
+                shadowColor = style.shadowColor,
+                shadowOffset = style.shadowOffset,
+                shadowBlur = style.shadowBlur,
+                shadowSpread = style.shadowSpread,
+            });
         }
     }
 }

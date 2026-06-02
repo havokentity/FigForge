@@ -12,7 +12,6 @@ using UnityEngine.EventSystems;
 
 namespace FigForge
 {
-    [RequireComponent(typeof(FigForgeRoundedRect))]
     [AddComponentMenu("FigForge/Button State Colors")]
     public class FigForgeButtonStateColors : MonoBehaviour,
         IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler, IPointerUpHandler
@@ -24,10 +23,11 @@ namespace FigForge
         public FigForgeFill pressed = FigForgeFill.Solid(Color.white);
 
         FigForgeRoundedRect _g;
+        FigForgeLayeredRect _layered;
         bool _over, _down;
 
-        void Awake() { _g = GetComponent<FigForgeRoundedRect>(); Apply(); }
-        void OnEnable() { if (_g == null) _g = GetComponent<FigForgeRoundedRect>(); Apply(); }
+        void Awake() { ResolveTarget(); Apply(); }
+        void OnEnable() { ResolveTarget(); Apply(); }
 
         public void OnPointerEnter(PointerEventData e) { _over = true; Apply(); }
         public void OnPointerExit(PointerEventData e) { _over = false; _down = false; Apply(); }
@@ -36,8 +36,15 @@ namespace FigForge
 
         void Apply()
         {
-            if (_g == null) return;
-            _g.SetFill(_down ? pressed : (_over ? highlighted : normal));
+            var fill = _down ? pressed : (_over ? highlighted : normal);
+            if (_layered != null) _layered.SetPrimaryFill(fill);
+            else if (_g != null) _g.SetFill(fill);
+        }
+
+        void ResolveTarget()
+        {
+            if (_g == null) _g = GetComponent<FigForgeRoundedRect>();
+            if (_layered == null) _layered = GetComponent<FigForgeLayeredRect>();
         }
     }
 }

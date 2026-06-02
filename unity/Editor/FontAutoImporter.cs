@@ -30,8 +30,9 @@ namespace FigForge
     public static class FontAutoImporter
     {
         const string FontFolder = "Assets/FigForge/Fonts";
-        const float FigForgeFontFaceDilate = 0.2f;
+        public const float DefaultFontFaceDilate = 0.15f;
         static readonly Dictionary<string, TMP_FontAsset> _cache = new Dictionary<string, TMP_FontAsset>();
+        public static float FaceDilate { get; set; } = DefaultFontFaceDilate;
         static readonly HashSet<string> Weights = new HashSet<string>(new[]
             { "thin", "extralight", "ultralight", "light", "medium", "semibold", "demibold",
               "bold", "extrabold", "black", "heavy", "italic", "oblique" });
@@ -220,7 +221,7 @@ namespace FigForge
 
             var mat = asset.material;
             if (mat == null) return;
-            mat.SetFloat(ShaderUtilities.ID_FaceDilate, FigForgeFontFaceDilate);
+            mat.SetFloat(ShaderUtilities.ID_FaceDilate, Mathf.Clamp(FaceDilate, 0f, 1f));
             EditorUtility.SetDirty(mat);
             EditorUtility.SetDirty(asset);
         }

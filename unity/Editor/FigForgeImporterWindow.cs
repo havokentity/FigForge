@@ -127,6 +127,14 @@ namespace FigForge
                 }
         }
 
+        static void ApplyManifestSettings(Manifest manifest)
+        {
+            var dilate = manifest != null && manifest.settings != null
+                ? manifest.settings.fontFaceDilate
+                : FontAutoImporter.DefaultFontFaceDilate;
+            FontAutoImporter.FaceDilate = Mathf.Clamp(dilate, 0f, 1f);
+        }
+
         // Explicit assignment in the Fonts section wins; otherwise auto-import a
         // matching font (project → OS) and build a TMP asset for it.
         TMP_FontAsset ResolveFontAsset(string family, string style)
@@ -430,6 +438,7 @@ namespace FigForge
             _log.Clear();
             FontAutoImporter.ClearCache();
             if (_manifest?.screen == null) { Log("manifest has no screen", MessageType.Error); return; }
+            ApplyManifestSettings(_manifest);
             if (_backend == UIBackend.UIToolkit) { BuildUITK(); return; }
 
             try
@@ -498,6 +507,7 @@ namespace FigForge
 
         BuildContext MakeContext(Manifest m, Dictionary<string, Sprite> sprites)
         {
+            ApplyManifestSettings(m);
             float fh = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.h : 1080f;
             float sf = fh > 0 ? ReferenceHeight(fh) / fh : 1f;
             return new BuildContext
@@ -733,6 +743,7 @@ namespace FigForge
             for (int i = 0; i < loaded.Count; i++)
             {
                 var m = loaded[i].m;
+                ApplyManifestSettings(m);
                 EditorUtility.DisplayProgressBar("FigForge", $"Generating {m.screen.name}…", (float)i / loaded.Count);
                 var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
                 var ctx = new UITKContext
@@ -760,6 +771,7 @@ namespace FigForge
         {
             try
             {
+                ApplyManifestSettings(_manifest);
                 EditorUtility.DisplayProgressBar("FigForge", "Importing assets…", 0.15f);
                 var sourceDir = Path.GetDirectoryName(_manifestPaths[_selected]);
                 var screenFolder = $"{_spriteFolder}/{SafeName(_manifest.screen.name)}";

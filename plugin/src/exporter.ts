@@ -42,6 +42,7 @@ import {
   isExportable,
 } from './traverser';
 import { mapTransform, rootTransform } from './mapper';
+import { buildVectorDrawing } from './vector';
 
 export interface ExportResult {
   manifest: Manifest;
@@ -51,6 +52,7 @@ export interface ExportResult {
 export type ProgressFn = (current: number, total: number, label: string) => void;
 
 const INTERACTIVE_HINTS = ['button', 'btn', 'input', 'field', 'toggle', 'checkbox', 'switch'];
+const DEFAULT_FONT_FACE_DILATE = 0.15;
 
 // ---------------------------------------------------------------------------
 // Paint → manifest helpers
@@ -148,11 +150,17 @@ function extractStrokes(node: SceneNode, options: ExportOptions): Stroke[] {
       weight: typeof weight === 'number' ? weight : 1,
       align,
       dashed: dashes.length > 0,
+      dashPattern: dashes.map((v) => Number.isFinite(v) ? Math.max(0, v) : 0),
     }));
 }
 
 function extractStroke(node: SceneNode, options: ExportOptions): Stroke | undefined {
   return extractStrokes(node, options)[0];
+}
+
+function nodeBlendMode(node: SceneNode): string {
+  const raw = (node as unknown as { blendMode?: string }).blendMode || 'NORMAL';
+  return raw.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
 function cornerData(node: SceneNode): { radius: number; corners?: [number, number, number, number] } {
@@ -171,52 +179,87 @@ function cornerData(node: SceneNode): { radius: number; corners?: [number, numbe
   return { radius: Math.max(tl, tr, br, bl), corners: [tl, tr, br, bl] };
 }
 
-// Visible Figma DROP_SHADOW effects on a node → Shadow data (first one drives the
-// SDF shader; the array is captured for future multi-shadow / inner-shadow support).
+// Visible Figma effects on a node → procedural effect data. Kept in the manifest
+// field named `shadows` for compatibility with older imports.
 function extractShadows(node: SceneNode): Shadow[] {
   const effects = (node as unknown as { effects?: readonly Effect[] }).effects;
   if (!Array.isArray(effects)) return [];
   const out: Shadow[] = [];
   for (const e of effects) {
-    if (e.visible === false || e.type !== 'DROP_SHADOW') continue;
-    const ds = e as DropShadowEffect & { spread?: number };
-    out.push({
-      color: [ds.color.r, ds.color.g, ds.color.b, ds.color.a],
-      offsetX: ds.offset?.x ?? 0,
-      offsetY: ds.offset?.y ?? 0,
-      blur: ds.radius ?? 0,
-      spread: ds.spread ?? 0,
-      inner: false,
-    });
+    if (e.visible === false) continue;
+    if (e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW') {
+      const ds = e as DropShadowEffect & { spread?: number };
+      out.push({
+        kind: e.type === 'INNER_SHADOW' ? 'innerShadow' : 'dropShadow',
+        color: [ds.color.r, ds.color.g, ds.color.b, ds.color.a],
+        offsetX: ds.offset?.x ?? 0,
+        offsetY: ds.offset?.y ?? 0,
+        blur: ds.radius ?? 0,
+        spread: ds.spread ?? 0,
+        inner: e.type === 'INNER_SHADOW',
+      });
+      continue;
+    }
+    if (e.type === 'LAYER_BLUR') {
+      const lb = e as unknown as {
+        radius?: number;
+        start?: number;
+        end?: number;
+        startRadius?: number;
+        endRadius?: number;
+        blurStart?: number;
+        blurEnd?: number;
+        mode?: string;
+        blurType?: string;
+      };
+      const start = lb.startRadius ?? lb.blurStart ?? lb.start ?? lb.radius ?? 0;
+      const end = lb.endRadius ?? lb.blurEnd ?? lb.end ?? lb.radius ?? start;
+      const mode = `${lb.mode ?? lb.blurType ?? ''}`.toLowerCase();
+      const progressive = mode.includes('progress') || Math.abs(end - start) > 0.001;
+      out.push({
+        kind: 'layerBlur',
+        color: [0, 0, 0, 0],
+        offsetX: 0,
+        offsetY: 0,
+        blur: lb.radius ?? start,
+        spread: 0,
+        inner: false,
+        blurMode: progressive ? 'progressive' : 'uniform',
+        startBlur: start,
+        endBlur: end,
+      });
+    }
   }
   return out;
 }
 
 function buildStyle(node: SceneNode, options: ExportOptions, hasAsset: boolean): Style | undefined {
   const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
+  const blendMode = nodeBlendMode(node);
   const fills = extractFills(node, options);
   const fill = fills[0];
   const strokes = options.rasterizeStrokes ? [] : extractStrokes(node, options);
   const stroke = strokes[0];
   const { radius, corners } = cornerData(node);
-  const shadows = extractShadows(node);
+  const effects = extractShadows(node);
 
   // No real fill → transparent, NOT opaque white. Fabricated white is the cause
   // of stray white boxes on fill-less styled containers. (FigmaTest fix.) A shadow
   // also needs a (transparent) SDF panel to render against.
   const resolvedFill: Fill | undefined =
-    fill || (!hasAsset && (stroke || radius > 0 || shadows.length > 0) ? { kind: 'solid', color: [0, 0, 0, 0] } : fill);
+    fill || (!hasAsset && (stroke || radius > 0 || effects.length > 0) ? { kind: 'solid', color: [0, 0, 0, 0] } : fill);
 
-  if (!resolvedFill && !stroke && radius === 0 && opacity === 1 && shadows.length === 0) return undefined;
+  if (!resolvedFill && !stroke && radius === 0 && opacity === 1 && effects.length === 0) return undefined;
   return {
     opacity,
+    blendMode,
     cornerRadius: radius,
     corners,
     fill: resolvedFill,
     fills: fills.length ? fills : undefined,
     stroke,
     strokes: strokes.length ? strokes : undefined,
-    shadows: shadows.length ? shadows : undefined,
+    effects: effects.length ? effects : undefined,
   };
 }
 
@@ -316,6 +359,43 @@ interface Plan {
   canonicalRef: CanonicalRef | null;
   exportable: boolean;
   children: SceneNode[];
+}
+
+const VECTOR_SHAPE_TYPES = new Set<string>([
+  'VECTOR',
+  'BOOLEAN_OPERATION',
+  'LINE',
+  'ELLIPSE',
+  'POLYGON',
+  'STAR',
+]);
+
+const ICON_CONTAINER_TYPES = new Set<string>(['GROUP', 'FRAME', 'COMPONENT', 'INSTANCE']);
+
+// True when `node` is a container whose subtree is purely vector-ish glyph content
+// (e.g. a multi-path checkmark or two-tone arrow grouped under a FRAME/GROUP): at
+// least one vector leaf, and every leaf is a vector type — no TEXT, no rectangles
+// or other rasterized leaves. Such a container can't be rebuilt as a rounded rect,
+// so it rasterizes to a single PNG. A vector node IS a leaf here (don't descend
+// into a BOOLEAN_OPERATION's operands).
+function isIconOnlyContainer(node: SceneNode): boolean {
+  if (!('children' in node) || !ICON_CONTAINER_TYPES.has(node.type)) return false;
+  let vectorLeaves = 0;
+  let ok = true;
+  const walk = (n: SceneNode): void => {
+    if (!ok) return;
+    if (n.type === 'TEXT') { ok = false; return; }
+    if (VECTOR_SHAPE_TYPES.has(n.type)) { vectorLeaves++; return; }
+    if ('children' in n) {
+      const kids = (n as ChildrenMixin).children as SceneNode[];
+      if (kids.length === 0) { ok = false; return; } // empty non-vector wrapper → not an icon
+      for (const c of kids) walk(c);
+      return;
+    }
+    ok = false; // a non-vector leaf (RECTANGLE, etc.) → not purely vector
+  };
+  for (const c of (node as ChildrenMixin).children as SceneNode[]) walk(c);
+  return ok && vectorLeaves > 0;
 }
 
 function interactive(name: string): boolean {
@@ -482,6 +562,7 @@ export async function exportDesign(
   const frameW = (root as unknown as { width: number }).width;
   const frameH = (root as unknown as { height: number }).height;
   const scaleNum = scaleNumber(scale, frameW, frameH);
+  const fontFaceDilate = clampNumber(options.fontFaceDilate, 0, 1, DEFAULT_FONT_FACE_DILATE);
 
   // ---- 1. Plan the tree (which nodes become elements, which merge/rasterize) -
   const plans: Plan[] = [];
@@ -618,6 +699,12 @@ export async function exportDesign(
 
   async function exportNodeAsset(node: SceneNode, nameHint: string): Promise<string | undefined> {
     if (!('exportAsync' in node)) return undefined;
+    // A hidden node (e.g. a default-off Checkmark, or a vector inside a hidden
+    // Rollover/Pressed state) exports as a blank PNG unless it is made visible
+    // first — same reason exportStates/exportCompositeState toggle visibility.
+    const vis = node as unknown as { visible?: boolean };
+    const prevVisible = vis.visible;
+    if (prevVisible === false) vis.visible = true;
     try {
       const bytes = await (node as unknown as {
         exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
@@ -635,6 +722,8 @@ export async function exportDesign(
       return file;
     } catch {
       return undefined;
+    } finally {
+      if (prevVisible === false) vis.visible = prevVisible;
     }
   }
 
@@ -742,21 +831,49 @@ export async function exportDesign(
   function shapeOf(node: SceneNode): ButtonShape | null {
     const fills = extractFills(node, options);
     const sf = shapeFill(node);
+    const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
+    const blendMode = nodeBlendMode(node);
     const radius = typeof (node as unknown as { cornerRadius?: number }).cornerRadius === 'number'
       ? (node as unknown as { cornerRadius: number }).cornerRadius : 0;
-    const ownShadows = extractShadows(node);
+    const ownEffects = extractShadows(node);
     const strokesAll = options.rasterizeStrokes ? [] : extractStrokes(node, options);
-    if (!sf && fills.length === 0 && strokesAll.length === 0 && ownShadows.length === 0 && radius <= 0) return null;
-    const shape: ButtonShape = { cornerRadius: radius, fill: sf?.fill ?? [0, 0, 0, 0] };
+    if (!sf && fills.length === 0 && strokesAll.length === 0 && ownEffects.length === 0 && radius <= 0) return null;
+    const shape: ButtonShape = { cornerRadius: radius, opacity, blendMode, fill: sf?.fill ?? [0, 0, 0, 0] };
     if (sf?.gradient) shape.gradient = sf.gradient;
     if (fills.length) shape.fills = fills;
     if (strokesAll.length) {
       shape.strokes = strokesAll;
       shape.stroke = strokesAll[0];
     }
-    const shadows = ownShadows;
-    if (ownShadows[0]) shape.shadow = ownShadows[0];
-    if (shadows.length) shape.shadows = shadows;
+    if (ownEffects.length) shape.effects = ownEffects;
+    return shape;
+  }
+
+  async function shapeOfWithAsset(node: SceneNode): Promise<ButtonShape | null> {
+    let shape = shapeOf(node);
+    if (shape && VECTOR_SHAPE_TYPES.has(node.type)) {
+      // Crisp procedural mesh when the path geometry is representable; the PNG is
+      // still exported as the fallback Unity uses if the mesh is absent.
+      const vector = buildVectorDrawing(node);
+      if (vector) shape.vector = vector;
+      const asset = await exportNodeAsset(node, `${node.name}_shape`);
+      if (asset) shape.asset = asset;
+      return shape;
+    }
+    // An icon-only container (multi-path glyph grouped under a FRAME/GROUP) can't be
+    // rebuilt as a rounded rect — rasterize the WHOLE subtree as one sprite instead
+    // of letting stateShape grab only its first vector child. Skip when the container
+    // carries its own paint or corner radius: that's a styled panel, keep it procedural.
+    if (isIconOnlyContainer(node) && !hasVisualPaint(shape) && !((shape?.cornerRadius ?? 0) > 0.001)) {
+      const asset = await exportNodeAsset(node, `${node.name}_icon`);
+      if (asset) {
+        if (!shape) {
+          const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
+          shape = { cornerRadius: 0, opacity, blendMode: nodeBlendMode(node), fill: [0, 0, 0, 0] };
+        }
+        shape.asset = asset;
+      }
+    }
     return shape;
   }
 
@@ -776,13 +893,9 @@ export async function exportDesign(
         }
       }
 
-      if (!shape.shadow) {
-        const s = extractShadows(src)[0];
-        if (s) shape.shadow = s;
-      }
-      if (!shape.shadows) {
-        const shadows = extractShadows(src);
-        if (shadows.length) shape.shadows = shadows;
+      if (!shape.effects) {
+        const effects = extractShadows(src);
+        if (effects.length) shape.effects = effects;
       }
     }
     return shape;
@@ -792,16 +905,16 @@ export async function exportDesign(
     return node.type !== 'TEXT' && node.type !== 'SLICE';
   }
 
-  function stateShape(node: SceneNode): ButtonShape | null {
+  async function stateShape(node: SceneNode): Promise<ButtonShape | null> {
     if (visualShapeCandidate(node)) {
-      const own = shapeOf(node);
+      const own = await shapeOfWithAsset(node);
       if (own) return own;
     }
     if ('children' in node) {
       const kids = (node as ChildrenMixin).children as SceneNode[];
       for (const c of kids) {
         if (c.name.toLowerCase() === 'label' || c.name.toLowerCase() === 'hitarea') continue;
-        const sh = stateShape(c);
+        const sh = await stateShape(c);
         if (sh) return sh;
       }
     }
@@ -815,12 +928,11 @@ export async function exportDesign(
 
   function stripRootShadowFromState(state: ButtonShape | null, root: ButtonShape | null): ButtonShape | null {
     if (!state || !root) return state;
-    const rootShadow = root.shadow ?? root.shadows?.[0];
+    const rootShadow = root.effects?.[0];
     if (!rootShadow) return state;
-    const stateShadow = state.shadow ?? state.shadows?.[0];
+    const stateShadow = state.effects?.[0];
     if (!sameShadow(stateShadow, rootShadow)) return state;
-    delete state.shadow;
-    if (state.shadows && state.shadows.every((s) => sameShadow(s, rootShadow))) delete state.shadows;
+    if (state.effects && state.effects.every((s) => sameShadow(s, rootShadow))) delete state.effects;
     return state;
   }
 
@@ -850,14 +962,14 @@ export async function exportDesign(
 
   function rootShadowShape(root: ButtonShape | null, regular: ButtonShape): ButtonShape | null {
     if (!root) return null;
-    const rootShadows = root.shadows ?? (root.shadow ? [root.shadow] : []);
-    if (!rootShadows.length) return root;
+    const rootEffects = root.effects ?? [];
+    if (!rootEffects.length) return root;
     if (hasVisualPaint(root) || root.cornerRadius > 0.001) return root;
     return {
       cornerRadius: regular.cornerRadius,
-      fill: [0, 0, 0, 0],
-      shadows: rootShadows,
-      shadow: rootShadows[0],
+      opacity: root.opacity,
+      blendMode: root.blendMode,
+      effects: rootEffects,
     };
   }
 
@@ -884,24 +996,24 @@ export async function exportDesign(
 
   // Procedural background shape from a button master's state layers: solid OR
   // linear gradient (SDF shader). Other fills → null → exported-PNG path.
-  function captureButtonShape(master: SceneNode, silent = false) {
+  async function captureButtonShape(master: SceneNode, silent = false) {
     if (!('children' in master)) return null;
     const kids = (master as ChildrenMixin).children as SceneNode[];
     const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
     if (!reg) { if (!silent) shapeDiag.push(`'${master.name}': no layer named 'regular'`); return null; }
     const rawRootShape = shapeOf(master);
-    const shape = stripRootShadowFromState(stateShape(reg), rawRootShape);
+    const shape = stripRootShadowFromState(await stateShape(reg), rawRootShape);
     if (!shape) { if (!silent) shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
     const rootShape = rootShadowShape(rawRootShape, shape);
     const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: shape.fill };
     const stateShapes: CanonicalStateShapes = { normal: shape };
     const ro = kids.find((c) => c.name.toLowerCase() === 'rollover');
-    const roShape = stripRootShadowFromState(ro ? stateShape(ro) : null, rootShape);
+    const roShape = stripRootShadowFromState(ro ? await stateShape(ro) : null, rootShape);
     const rc = roShape?.fill ?? (ro ? stateSolid(ro) : null);
     if (roShape) stateShapes.highlighted = roShape;
     if (rc) stateColors.highlighted = rc;
     const pr = kids.find((c) => c.name.toLowerCase() === 'pressed');
-    const prShape = stripRootShadowFromState(pr ? stateShape(pr) : null, rootShape);
+    const prShape = stripRootShadowFromState(pr ? await stateShape(pr) : null, rootShape);
     const pc = prShape?.fill ?? (pr ? stateSolid(pr) : null);
     if (prShape) stateShapes.pressed = prShape;
     if (pc) stateColors.pressed = pc;
@@ -920,12 +1032,12 @@ export async function exportDesign(
 
   // Capture a toggle/radio: Background box (UGUI Toggle.targetGraphic), the Checkmark
   // shown when on (Toggle.graphic), the initial value, and the label.
-  function captureToggle(master: SceneNode, tagValue?: string) {
+  async function captureToggle(master: SceneNode, tagValue?: string) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg) : null;
+    const shape = bg ? await shapeOfWithAsset(bg) : null;
     if (!shape) return null;
     const ckNode = childByName(master, 'Checkmark');
-    const checkShape = ckNode ? shapeOf(ckNode) : undefined;
+    const checkShape = ckNode ? await shapeOfWithAsset(ckNode) : undefined;
     const ckVisible = ckNode ? (ckNode as unknown as { visible?: boolean }).visible !== false : false;
     const value = tagValue === 'on' || tagValue === 'off' ? tagValue : (ckVisible ? 'on' : 'off');
     return { shape, checkShape: checkShape ?? undefined, value, label: textOf(childByName(master, 'Label')),
@@ -934,9 +1046,9 @@ export async function exportDesign(
 
   // Capture an input field: Background (TMP_InputField.targetGraphic), Placeholder,
   // optional initial Text value, and normalized child layout.
-  function captureInput(master: SceneNode) {
+  async function captureInput(master: SceneNode) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg) : null;
+    const shape = bg ? await shapeOfWithAsset(bg) : null;
     const placeholder = textOf(childByName(master, 'Placeholder')) ?? textOf(childByName(master, 'Label'));
     const rawValue = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value'));
     const value = rawValue !== undefined && rawValue.trim().length === 0 ? '' : rawValue;
@@ -953,7 +1065,7 @@ export async function exportDesign(
   // and the selected value.
   async function captureDropdown(master: SceneNode, tagValue?: string) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg) : null;
+    const shape = bg ? await shapeOfWithAsset(bg) : null;
     const arrow = childByName(master, 'Arrow');
     const arrowReg = arrow ? childByName(arrow, 'Regular') : undefined;
     const arrowRoll = arrow ? childByName(arrow, 'Rollover') : undefined;
@@ -984,7 +1096,7 @@ export async function exportDesign(
     const optReg = optionSource
       ? (childByName(optionSource, 'Regular') ?? (optionMaster ? childByName(optionMaster, 'Regular') : undefined) ?? optionSource)
       : undefined;
-    const optionShape = optReg ? (mergeShapeFallbacks(shapeOf(optReg), optionFallbacks) ?? undefined) : undefined;
+    const optionShape = optReg ? (mergeShapeFallbacks(await shapeOfWithAsset(optReg), optionFallbacks) ?? undefined) : undefined;
     const optRoll = optionSource
       ? (childByName(optionSource, 'Rollover') ?? (optionMaster ? childByName(optionMaster, 'Rollover') : undefined))
       : undefined;
@@ -994,9 +1106,9 @@ export async function exportDesign(
     const optSelected = optionSource
       ? (childByName(optionSource, 'Selected') ?? (optionMaster ? childByName(optionMaster, 'Selected') : undefined))
       : undefined;
-    const optionRolloverShape = optRoll ? (mergeShapeFallbacks(shapeOf(optRoll), optionFallbacks) ?? undefined) : undefined;
-    const optionPressedShape = optPressed ? (mergeShapeFallbacks(shapeOf(optPressed), optionFallbacks) ?? undefined) : undefined;
-    const optionSelectedShape = optSelected ? (mergeShapeFallbacks(shapeOf(optSelected), optionFallbacks) ?? undefined) : undefined;
+    const optionRolloverShape = optRoll ? (mergeShapeFallbacks(await shapeOfWithAsset(optRoll), optionFallbacks) ?? undefined) : undefined;
+    const optionPressedShape = optPressed ? (mergeShapeFallbacks(await shapeOfWithAsset(optPressed), optionFallbacks) ?? undefined) : undefined;
+    const optionSelectedShape = optSelected ? (mergeShapeFallbacks(await shapeOfWithAsset(optSelected), optionFallbacks) ?? undefined) : undefined;
     const optionRollover = optRoll ? (stateSolid(optRoll) ?? undefined) : undefined;
     const optionPressed = optPressed ? (stateSolid(optPressed) ?? undefined) : undefined;
     const optionSelected = optSelected ? (stateSolid(optSelected) ?? undefined) : undefined;
@@ -1017,13 +1129,13 @@ export async function exportDesign(
   // Capture a list: rounded Background + ONE 'Item' template row (Regular fill,
   // Rollover hover colour, Label). Row height comes from the template; the caller
   // derives the row COUNT from the placed list's height ÷ row height.
-  function captureList(master: SceneNode) {
+  async function captureList(master: SceneNode) {
     const bg = childByName(master, 'Background');
-    const shape = bg ? shapeOf(bg) : undefined;
+    const shape = bg ? await shapeOfWithAsset(bg) : undefined;
     const item = childByName(master, 'Item');
     if (!item) return null;
     const reg = childByName(item, 'Regular') ?? item;
-    const itemShape = shapeOf(reg) ?? undefined;
+    const itemShape = await shapeOfWithAsset(reg) ?? undefined;
     const rollNode = childByName(item, 'Rollover');
     const itemRollover = rollNode ? (stateSolid(rollNode) ?? undefined) : undefined;
     const itemHeight = (item as unknown as { height?: number }).height ?? 44;
@@ -1032,7 +1144,7 @@ export async function exportDesign(
   }
 
   const stateByNode = new Map<string, CanonicalStates>();
-  const shapeByNode = new Map<string, ReturnType<typeof captureButtonShape>>();
+  const shapeByNode = new Map<string, Awaited<ReturnType<typeof captureButtonShape>>>();
   const instShapeByNode = new Map<string, ButtonShape>(); // per-instance shape override (differs from component)
   const instRootShapeByNode = new Map<string, ButtonShape>(); // per-instance root visual/effect override
   const instStateColorsByNode = new Map<string, { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }>(); // per-instance rollover/pressed override
@@ -1051,10 +1163,10 @@ export async function exportDesign(
     if (!master) continue;
     const states = await exportStates(master);
     if (states) stateByNode.set(p.node.id, states);
-    const sh = captureButtonShape(master);
+    const sh = await captureButtonShape(master);
     if (sh) shapeByNode.set(p.node.id, sh);
     if (sh) {
-      const shc = sh.shape.shadow;
+      const shc = sh.shape.effects?.find((effect) => effect.kind === 'dropShadow' || (!effect.kind && !effect.inner));
       shadowCapDiag.push(shc
         ? `'${p.canonicalRef.ref}' shadow ${fmtC(shc.color)} off(${shc.offsetX},${shc.offsetY}) blur ${shc.blur} spread ${shc.spread}`
         : `'${p.canonicalRef.ref}' NO shadow found (root/regular/children)`);
@@ -1064,7 +1176,7 @@ export async function exportDesign(
     // an instance-level stroke/fill/corner OR hover/press colour tweak applies to
     // just that button (the canonical prefab keeps the component definition).
     if (sh && p.node.type === 'INSTANCE') {
-      const inst = captureButtonShape(p.node, true);
+      const inst = await captureButtonShape(p.node, true);
       if (inst && JSON.stringify(inst.shape) !== JSON.stringify(sh.shape)) instShapeByNode.set(p.node.id, inst.shape);
       if (inst && JSON.stringify(inst.rootShape) !== JSON.stringify(sh.rootShape) && inst.rootShape) {
         instRootShapeByNode.set(p.node.id, inst.rootShape);
@@ -1096,10 +1208,10 @@ export async function exportDesign(
     const master = p.node.type === 'INSTANCE' ? ((p.node as InstanceNode).mainComponent as SceneNode | null) : p.node;
     if (!master) continue;
     if (ref.kind === 'toggle' || ref.kind === 'radio') {
-      const t = captureToggle(master, ref.value);
+      const t = await captureToggle(master, ref.value);
       if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts });
     } else if (ref.kind === 'input') {
-      const i = captureInput(master);
+      const i = await captureInput(master);
       controlByNode.set(p.node.id, {
         shape: i.shape,
         label: i.label,
@@ -1125,7 +1237,7 @@ export async function exportDesign(
         parts: d.parts,
       });
     } else if (ref.kind === 'list') {
-      const l = captureList(master);
+      const l = await captureList(master);
       if (l) {
         const ih = l.itemHeight || 44;
         const instH = (p.node as unknown as { height?: number }).height || ih;
@@ -1253,6 +1365,10 @@ export async function exportDesign(
       style,
       text,
       asset: asset ? asset.file : null,
+      // Crisp procedural mesh for raw vector nodes; Unity prefers it over the PNG.
+      // Gated on hasAsset so it only replaces a PNG that would have rendered here —
+      // a merged vector (baked into a parent's PNG) must not also draw its own mesh.
+      vector: hasAsset && VECTOR_SHAPE_TYPES.has(node.type) ? (buildVectorDrawing(node) ?? undefined) : undefined,
       assetBounds: asset
         ? {
             x: (node as unknown as { x: number }).x,
@@ -1296,6 +1412,9 @@ export async function exportDesign(
     elements,
     assets: assetEntries,
     fonts,
+    settings: {
+      fontFaceDilate,
+    },
     canonicalRefs: [...canonicalRefs],
   };
 
@@ -1303,6 +1422,12 @@ export async function exportDesign(
 }
 
 // ---------------------------------------------------------------------------
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, value))
+    : fallback;
+}
+
 function isDescendant(node: SceneNode, ancestor: SceneNode): boolean {
   let p = (node as unknown as { parent?: BaseNode | null }).parent;
   while (p) {

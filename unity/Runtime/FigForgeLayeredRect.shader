@@ -458,6 +458,8 @@ Shader "FigForge/LayeredRect4"
                 }
                 shape = compositeInnerShadow(shape, p, size, rad, aa, shapeCov);
                 fixed4 shadow = compositeShadow(p, size, rad, aa);
+                if (_FillCount < 0.5 && _StrokeCount < 0.5)
+                    shadow.a *= 1.0 - fillCov;
                 fixed4 outc = sourceOver(shape, shadow);
                 outc.a *= saturate(_AppearanceOpacity);
                 outc *= i.color;

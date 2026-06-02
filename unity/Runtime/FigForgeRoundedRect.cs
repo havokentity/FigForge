@@ -60,6 +60,16 @@ namespace FigForge
             };
         }
 
+        public static FigForgeFill None => new FigForgeFill
+        {
+            disabled = true,
+            kind = FigForgeFillKind.Solid,
+            color = new Color(0, 0, 0, 0),
+            gradientKind = FigForgeGradientKind.Linear,
+            gradient = null,
+            dir = Vector2.zero,
+        };
+
         public static FigForgeFill GradientFill(Gradient g, FigForgeGradientKind kind, Vector2 d, Color fallback)
             => new FigForgeFill(fallback, g, d, kind);
         public static FigForgeFill LinearGradient(Gradient g, Vector2 d, Color fallback)
@@ -131,28 +141,38 @@ namespace FigForge
     public struct FigForgeStroke
     {
         public bool enabled;
+        public FigForgeStrokeStyle style;
         public Color color;
         public float weight;
         public FigForgeStrokeAlign align;
+        public float dash;
+        public float gap;
 
         public float Outset => !enabled ? 0f : Mathf.Max(0f, weight) * AlignFactor(align);
 
         public static FigForgeStroke None => new FigForgeStroke
         {
             enabled = false,
+            style = FigForgeStrokeStyle.Solid,
             color = new Color(0, 0, 0, 0),
             weight = 0f,
             align = FigForgeStrokeAlign.Inside,
+            dash = 0f,
+            gap = 0f,
         };
 
-        public static FigForgeStroke Create(Color color, float weight, FigForgeStrokeAlign align)
+        public static FigForgeStroke Create(Color color, float weight, FigForgeStrokeAlign align,
+                                            bool dashed = false, float dash = 0f, float gap = 0f)
         {
             var stroke = new FigForgeStroke
             {
                 enabled = weight > 0.001f && color.a > 0.001f,
+                style = dashed ? FigForgeStrokeStyle.Dashed : FigForgeStrokeStyle.Solid,
                 color = color,
                 weight = Mathf.Max(0f, weight),
                 align = align,
+                dash = Mathf.Max(0f, dash),
+                gap = Mathf.Max(0f, gap),
             };
             return stroke;
         }
@@ -160,7 +180,16 @@ namespace FigForge
         public void Normalize()
         {
             weight = Mathf.Max(0f, weight);
-            if (weight <= 0.001f || color.a <= 0.001f) enabled = false;
+            dash = Mathf.Max(0f, dash);
+            gap = Mathf.Max(0f, gap);
+            if (style != FigForgeStrokeStyle.Dashed) style = FigForgeStrokeStyle.Solid;
+            if (!enabled) return;
+            if (weight <= 0.001f) weight = 1f;
+            if (color.a <= 0.001f)
+            {
+                color = color.maxColorComponent <= 0.001f ? Color.black : color;
+                color.a = 1f;
+            }
         }
 
         static float AlignFactor(FigForgeStrokeAlign align)
@@ -200,7 +229,7 @@ namespace FigForge
         [SerializeField] bool strokeUsesFillGradient = false;
         [SerializeField] Vector4 corners = Vector4.zero;     // per-corner radii px: (tl, tr, br, bl)
         [SerializeField] Color shadowColor = new Color(0, 0, 0, 0); // drop shadow (a==0 → off)
-        [SerializeField] Vector2 shadowOffset = Vector2.zero;        // px, Unity space (+y up)
+        [SerializeField] Vector2 shadowOffset = Vector2.zero;        // Figma-style px (+y down)
         [SerializeField] float shadowBlur = 0f;              // px
         [SerializeField] float shadowSpread = 0f;            // px
 
@@ -273,7 +302,7 @@ namespace FigForge
         }
 
         // Drop shadow behind the shape. color.a==0 → no shadow. offset is Unity-space
-        // px (+y up); blur/spread in px. The mesh auto-grows to fit the shadow.
+        // Figma-style px (+y down); blur/spread in px. The mesh auto-grows to fit the shadow.
         public void SetShadow(Color color, Vector2 offset, float blur, float spread)
         {
             SetShadowFields(color, offset, blur, spread);
@@ -348,7 +377,9 @@ namespace FigForge
             var uv1 = new Vector4(gradKind, strokeUsesFillGradient ? 1f : 0f, strokePacked.x, strokePacked.y);
             var uv2 = new Vector4(shadow.x, shadow.y, r.width, r.height);
             var uv3 = new Vector4(grad, corners.x, corners.y, corners.z);
-            var n = new Vector3(corners.w, stroke.enabled ? stroke.weight : 0f, StrokeOutset());
+            float strokeWeight = stroke.enabled ? stroke.weight : 0f;
+            float signedStrokeWeight = stroke.style == FigForgeStrokeStyle.Dashed ? -strokeWeight : strokeWeight;
+            var n = new Vector3(corners.w, signedStrokeWeight, StrokeOutset());
             var t = new Vector4(shadowOffset.x, shadowOffset.y, shadowBlur, shadowSpread);
             vh.Clear();
             AddVert(vh, new Vector3(x0, y0), c, uv0, uv1, uv2, uv3, n, t);

@@ -2,7 +2,7 @@
 // FigForge — UI thread (iframe)
 // =============================================================================
 
-import type { ElementConfig, ExportScale, TreeNode } from './types';
+import type { ElementConfig, ExportOptions, ExportScale, TreeNode } from './types';
 
 declare const JSZip: any;
 declare const __FIGFORGE_VERSION__: string; // injected by esbuild from package.json
@@ -30,12 +30,14 @@ interface UiPrefs {
   chips?: Record<string, boolean>;
   componentsPage?: boolean;
   unityPort?: string;
+  fontFaceDilate?: string;
   windowPreset?: string;
   mcpDesired?: boolean;
   treeFilter?: TreeFilter;
 }
 
 const PREFS_KEY = 'figforge.ui.prefs';
+const DEFAULT_FONT_FACE_DILATE = 0.15;
 const TREE_FILTERS = new Set<TreeFilter>(['all', 'exported', 'hidden', 'merged', 'canonical']);
 const hasTreeFilters = Boolean(document.getElementById('treeFilters'));
 let activeTreeFilter: TreeFilter = hasTreeFilters ? readTreeFilter(readPrefs().treeFilter) : 'all';
@@ -124,6 +126,12 @@ if (unityPortEl) {
   const saved = readPrefs().unityPort;
   if (saved) unityPortEl.value = saved;
   unityPortEl.addEventListener('input', () => savePrefs({ unityPort: unityPortEl.value }));
+}
+const fontDilateEl = document.getElementById('fontFaceDilate') as HTMLInputElement | null;
+if (fontDilateEl) {
+  const saved = readPrefs().fontFaceDilate;
+  if (saved) fontDilateEl.value = saved;
+  fontDilateEl.addEventListener('input', () => savePrefs({ fontFaceDilate: fontDilateEl.value }));
 }
 $('#createBtnBtn').addEventListener('click', () => {
   setStatus('Creating button component…');
@@ -375,12 +383,20 @@ function collectConfigs(): ElementConfig[] {
   }));
 }
 
-function currentOptions() {
+function readFontFaceDilate(): number {
+  const raw = (document.getElementById('fontFaceDilate') as HTMLInputElement | null)?.value;
+  const value = parseFloat(raw || '');
+  if (!Number.isFinite(value)) return DEFAULT_FONT_FACE_DILATE;
+  return Math.min(1, Math.max(0, value));
+}
+
+function currentOptions(): ExportOptions {
   return {
     autoMerge: ($('#optAutoMerge input') as HTMLInputElement).checked,
     rasterizeStrokes: ($('#optRasterStroke input') as HTMLInputElement).checked,
     emitGradients: ($('#optGradients input') as HTMLInputElement).checked,
     emitImageFills: true,
+    fontFaceDilate: readFontFaceDilate(),
   };
 }
 

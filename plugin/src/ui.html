@@ -148,10 +148,11 @@
   .create-settings {
     display: flex; align-items: end; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
   }
-  .port-chip input {
+  .port-chip input, .font-chip input {
     width: 54px; background: transparent; border: none; color: inherit; padding: 0; min-height: 16px;
   }
-  .port-chip input:focus { outline: none; }
+  .font-chip input { width: 42px; }
+  .port-chip input:focus, .font-chip input:focus { outline: none; }
 
   /* ---- split ---- */
   .split { flex: 1; display: flex; overflow: hidden; }
@@ -351,6 +352,7 @@
         </div>
         <div class="create-settings">
           <label class="chip" title="ON: masters live on a dedicated FigForge Components page. OFF: masters are parked on your current page."><input type="checkbox" id="componentsPageChk" checked />Components page</label>
+          <label class="chip font-chip" title="TextMeshPro SDF face dilate used by generated Unity font assets">Dilate <input type="number" id="fontFaceDilate" value="0.15" min="0" max="1" step="0.01" /></label>
           <label class="chip port-chip" title="Unity live-import port (FigForge importer must have live import enabled)">Unity <input type="number" id="unityPort" value="1995" min="1024" max="65535" /></label>
         </div>
       </div>

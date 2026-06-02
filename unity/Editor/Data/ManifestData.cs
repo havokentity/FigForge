@@ -19,7 +19,13 @@ namespace FigForge
         public List<ElementData> elements = new List<ElementData>();
         public List<AssetEntry> assets = new List<AssetEntry>();
         public List<FontEntry> fonts = new List<FontEntry>();
+        public ManifestSettings settings = new ManifestSettings();
         public List<string> canonicalRefs = new List<string>();
+    }
+
+    public class ManifestSettings
+    {
+        public float fontFaceDilate = 0.15f;
     }
 
     public class Size { public float w; public float h; }
@@ -69,27 +75,33 @@ namespace FigForge
         public float weight;
         public string align;             // inside|outside|center
         public bool dashed;
+        public List<float> dashPattern;
     }
 
     public class ShadowData
     {
+        public string kind;               // dropShadow|innerShadow|layerBlur
         public float[] color;            // rgba 0..1
         public float offsetX, offsetY;   // Figma px (+y down)
         public float blur;               // Figma effect radius
         public float spread;
         public bool inner;               // false = drop shadow (rendered)
+        public string blurMode;           // uniform|progressive
+        public float? startBlur;
+        public float? endBlur;
     }
 
     public class StyleData
     {
         public float opacity = 1f;
+        public string blendMode;
         public float cornerRadius;
         public float[] corners;          // tl,tr,br,bl
         public Fill fill;
         public List<Fill> fills;
         public Stroke stroke;
         public List<Stroke> strokes;
-        public List<ShadowData> shadows;
+        public List<ShadowData> effects;
     }
 
     public class OutlineData { public float[] color; public float weight; } // text stroke → TMP outline
@@ -111,9 +123,27 @@ namespace FigForge
 
     public class CanonicalStates { public string normal; public string highlighted; public string pressed; }
     public class CanonicalLabelFont { public string family; public string style; }
+    public class VectorMesh
+    {
+        public float[] color;             // rgba 0..1 — base colour for this region
+        public List<float> verts;         // x0,y0,x1,y1,… node-local px (top-left origin, +y down)
+        public List<int> tris;            // triangle indices into verts
+        public List<float> alpha;         // per-vertex alpha (1 = solid core, 0 = AA fringe)
+    }
+
+    public class VectorDrawing
+    {
+        public float[] bounds;            // [w,h] node px the verts live in
+        public List<VectorMesh> meshes;   // draw order: fills first, strokes on top
+    }
+
     public class CanonicalShape
     {
+        public string asset;              // PNG fallback for vector/icon shapes whose path geometry is not a rounded rect
+        public VectorDrawing vector;      // procedural vector mesh (preferred over `asset` when present)
         public float cornerRadius;
+        public float opacity = 1f;
+        public string blendMode;
         public float[] fill;              // solid colour, or legacy gradient stop 0
         public Fill gradient;             // linear n-stop gradient background
         public float[] fill2;             // legacy gradient stop 1 (null = solid fill)
@@ -127,6 +157,7 @@ namespace FigForge
         public string borderAlign;        // inside|outside|center (null = inside)
         public ShadowData shadow;         // first drop shadow on the regular layer
         public List<ShadowData> shadows;  // all visible drop shadows
+        public List<ShadowData> effects;  // all visible Figma effects
     }
     public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }
     public class CanonicalStateShapes { public CanonicalShape normal; public CanonicalShape highlighted; public CanonicalShape pressed; }
@@ -216,6 +247,7 @@ namespace FigForge
         public StyleData style;
         public TextData text;
         public string asset;
+        public VectorDrawing vector;      // procedural vector mesh (preferred over `asset` when present)
         public AssetBounds assetBounds;
         public NineSlice nineSlice;
         public CanonicalRef canonical;

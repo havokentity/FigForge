@@ -15,6 +15,7 @@ namespace FigForge
         IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler, IPointerUpHandler
     {
         public FigForgeRoundedRect target;
+        public FigForgeLayeredRect layeredTarget;
         public Toggle toggle;
         public FigForgeFill normal = FigForgeFill.Solid(Color.white);
         public FigForgeFill highlighted = FigForgeFill.Solid(Color.white);
@@ -33,6 +34,8 @@ namespace FigForge
         {
             if (target == null) target = GetComponent<FigForgeRoundedRect>();
             if (target == null) target = GetComponentInChildren<FigForgeRoundedRect>(true);
+            if (layeredTarget == null) layeredTarget = GetComponent<FigForgeLayeredRect>();
+            if (layeredTarget == null) layeredTarget = GetComponentInChildren<FigForgeLayeredRect>(true);
             Apply();
         }
 
@@ -40,6 +43,8 @@ namespace FigForge
         {
             if (target == null) target = GetComponent<FigForgeRoundedRect>();
             if (target == null) target = GetComponentInChildren<FigForgeRoundedRect>(true);
+            if (layeredTarget == null) layeredTarget = GetComponent<FigForgeLayeredRect>();
+            if (layeredTarget == null) layeredTarget = GetComponentInChildren<FigForgeLayeredRect>(true);
             if (toggle != null) toggle.onValueChanged.AddListener(OnToggleValueChanged);
             Apply();
         }
@@ -80,18 +85,25 @@ namespace FigForge
 
         void Apply()
         {
-            if (target == null) return;
+            if (target == null && layeredTarget == null) return;
             if (useShapeStyles)
             {
-                if (_down) target.SetStyle(pressedShape);
-                else if (_over) target.SetStyle(highlightedShape);
-                else if (hasSelected && toggle != null && toggle.isOn) target.SetStyle(selectedShape);
-                else target.SetStyle(normalShape);
+                var style = _down ? pressedShape
+                    : _over ? highlightedShape
+                    : (hasSelected && toggle != null && toggle.isOn) ? selectedShape
+                    : normalShape;
+                if (layeredTarget != null) layeredTarget.SetStyle(style);
+                else target.SetStyle(style);
             }
-            else if (_down) target.SetFill(pressed);
-            else if (_over) target.SetFill(highlighted);
-            else if (hasSelected && toggle != null && toggle.isOn) target.SetFill(selected);
-            else target.SetFill(normal);
+            else
+            {
+                var fill = _down ? pressed
+                    : _over ? highlighted
+                    : (hasSelected && toggle != null && toggle.isOn) ? selected
+                    : normal;
+                if (layeredTarget != null) layeredTarget.SetPrimaryFill(fill);
+                else target.SetFill(fill);
+            }
         }
     }
 }
