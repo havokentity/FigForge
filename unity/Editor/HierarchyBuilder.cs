@@ -538,6 +538,7 @@ namespace FigForge
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/RoundedRect"));
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/LayeredRect4"));
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/CachedQuad"));
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/CachedBlend"));
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/LayerBlur"));
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/Composite"));
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/VectorBake"));

@@ -383,10 +383,15 @@ namespace FigForge
 
         Material EnsureCachedMaterial()
         {
-            if (_cachedMaterial != null) return _cachedMaterial;
-            var shader = Shader.Find("FigForge/CachedQuad");
-            if (shader != null)
-                _cachedMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+            // Tier-2 (destination-reading) modes present through the GrabPass shader so
+            // they blend correctly against the backdrop; tier-1 stays on the cheap
+            // fixed-function quad. Recreate if the blend tier changed.
+            string shaderName = BlendTier(blendMode) == 2 ? "FigForge/CachedBlend" : "FigForge/CachedQuad";
+            if (_cachedMaterial != null && _cachedMaterial.shader != null && _cachedMaterial.shader.name == shaderName)
+                return _cachedMaterial;
+            if (_cachedMaterial != null) DestroyRuntimeMaterial(_cachedMaterial);
+            var shader = Shader.Find(shaderName);
+            _cachedMaterial = shader != null ? new Material(shader) { hideFlags = HideFlags.HideAndDontSave } : null;
             return _cachedMaterial;
         }
 
@@ -878,17 +883,11 @@ namespace FigForge
         bool ShouldUseCachedSource()
         {
             if (compositorMode == FigForgeCompositorMode.Direct) return false;
-            // Darken/Lighten blend directly against the framebuffer (BlendOp Min/Max)
-            // and MUST render direct: the direct shader outputs straight colour and
-            // composites any shadow internally, so one clean min/max hits the backdrop.
-            // (The cached surface roundtrip premultiplies + changes colour space, which
-            // breaks min/max.) Forced direct even with a shadow — they're rare together.
-            if (blendMode == FigForgeBlendMode.Darken || blendMode == FigForgeBlendMode.Lighten)
-                return false;
             if (WouldCacheHitTextureLimit()) return false;
             if (compositorMode == FigForgeCompositorMode.CachedSource) return true;
-            if (BlendTier(blendMode) == 2)
-                return true;
+            // Tier-2 (destination-reading) modes present through the GrabPass blend
+            // shader, which needs the flattened cached surface.
+            if (BlendTier(blendMode) == 2) return true;
             if (BlendTier(blendMode) == 1 && blendMode != FigForgeBlendMode.PassThrough && blendMode != FigForgeBlendMode.Normal)
                 return true;
             return VisibleDropShadowCount() > 0
@@ -1167,18 +1166,6 @@ namespace FigForge
         void ApplyBlendState(Material target, bool alphaBlend)
         {
             target.SetFloat("_BlendMode", (float)blendMode);
-            // Darken/Lighten are separable min/max ops — the GPU does them directly
-            // against the framebuffer (the overlay already holds the backdrop), so
-            // they render correctly without the destination-read page compositor.
-            // The direct path outputs straight (un-premultiplied) colour and clips
-            // transparent pixels, so min/max stays clean (no dark/black fringe).
-            if (blendMode == FigForgeBlendMode.Darken || blendMode == FigForgeBlendMode.Lighten)
-            {
-                target.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-                target.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.One);
-                target.SetInt("_BlendOp", (int)(blendMode == FigForgeBlendMode.Darken ? BlendOp.Min : BlendOp.Max));
-                return;
-            }
             target.SetInt("_SrcBlend", alphaBlend ? (int)UnityEngine.Rendering.BlendMode.SrcAlpha : (int)UnityEngine.Rendering.BlendMode.One);
             target.SetInt("_DstBlend", alphaBlend ? (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha : (int)UnityEngine.Rendering.BlendMode.Zero);
             target.SetInt("_BlendOp", (int)BlendOp.Add);
