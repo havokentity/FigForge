@@ -878,14 +878,16 @@ namespace FigForge
         bool ShouldUseCachedSource()
         {
             if (compositorMode == FigForgeCompositorMode.Direct) return false;
+            // Darken/Lighten blend directly against the framebuffer (BlendOp Min/Max)
+            // and MUST render direct: the direct shader outputs straight colour and
+            // composites any shadow internally, so one clean min/max hits the backdrop.
+            // (The cached surface roundtrip premultiplies + changes colour space, which
+            // breaks min/max.) Forced direct even with a shadow — they're rare together.
+            if (blendMode == FigForgeBlendMode.Darken || blendMode == FigForgeBlendMode.Lighten)
+                return false;
             if (WouldCacheHitTextureLimit()) return false;
             if (compositorMode == FigForgeCompositorMode.CachedSource) return true;
-            // Darken/Lighten blend directly against the framebuffer (BlendOp Min/Max),
-            // so they render direct — no cached surface needed. Other tier-2 modes
-            // still cache (they need destination-read compositing, currently disabled).
-            if (BlendTier(blendMode) == 2
-                && blendMode != FigForgeBlendMode.Darken
-                && blendMode != FigForgeBlendMode.Lighten)
+            if (BlendTier(blendMode) == 2)
                 return true;
             if (BlendTier(blendMode) == 1 && blendMode != FigForgeBlendMode.PassThrough && blendMode != FigForgeBlendMode.Normal)
                 return true;
