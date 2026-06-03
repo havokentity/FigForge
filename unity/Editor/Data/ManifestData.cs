@@ -209,6 +209,10 @@ namespace FigForge
         public float[] bgRollover;         // dropdown: closed background Rollover fill
         public float[] bgPressed;          // dropdown: closed background Pressed fill
         public Dictionary<string, float[]> parts; // normalized anchors [minX,minY,maxX,maxY] of named sub-layers
+        // Full render-only Figma subtree per named part. When present, Unity renders
+        // the part as its complete nested subtree (all fills/strokes/shadows/vectors/
+        // masks/text) instead of the flat `shape`/`asset` fallback.
+        public Dictionary<string, ElementSubtree> partTrees;
     }
 
     public class NavLink
@@ -257,6 +261,16 @@ namespace FigForge
         public bool merged;
         public AutoLayout autoLayout;
         public List<string> children = new List<string>();
+    }
+
+    /// <summary>A self-contained, render-only element tree for one canonical control
+    /// part (e.g. a toggle Checkmark or dropdown Arrow). `elements` is a flat list with
+    /// ids local to this subtree; `root` is the top element, which Unity stretches to
+    /// fill the part's anchored container.</summary>
+    public class ElementSubtree
+    {
+        public string root;
+        public List<ElementData> elements = new List<ElementData>();
     }
 
     public class AssetEntry { public string file; public string nodeId; public float scale = 1f; }

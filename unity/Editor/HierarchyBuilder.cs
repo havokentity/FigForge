@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Newtonsoft.Json;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
@@ -1589,6 +1590,32 @@ namespace FigForge
             return rr;
         }
 
+        static bool HasPartTree(CanonicalRef c, string name)
+            => c != null && c.partTrees != null && c.partTrees.TryGetValue(name, out var t)
+               && t != null && t.elements != null && t.elements.Count > 0 && !string.IsNullOrEmpty(t.root);
+
+        // Render a canonical control PART as its FULL Figma subtree (render-only) by
+        // reusing the main element renderer: build a local id→element index and run
+        // BuildElement on the subtree root under `container`. Forces raycasts off so the
+        // whole subtree passes clicks through to the control. The subtree root carries a
+        // full-bleed stretch transform (from the exporter) so it fills the anchored
+        // container exactly. Returns a representative Graphic for wiring (or null).
+        static Graphic BuildPartSubtree(GameObject container, ElementSubtree tree, BuildContext ctx)
+        {
+            if (tree == null || tree.elements == null || tree.elements.Count == 0) return null;
+            var localIndex = new Dictionary<string, ElementData>();
+            foreach (var el in tree.elements)
+                if (el != null && el.id != null) localIndex[el.id] = el;
+            if (string.IsNullOrEmpty(tree.root) || !localIndex.TryGetValue(tree.root, out var rootEl)) return null;
+
+            bool prevDisable = ctx.disableRaycasts;
+            ctx.disableRaycasts = true; // a part subtree is render-only; clicks reach the control
+            GameObject built;
+            try { built = BuildElement(rootEl, localIndex, container.transform, ctx); }
+            finally { ctx.disableRaycasts = prevDisable; }
+            return built != null ? built.GetComponentInChildren<Graphic>(true) : null;
+        }
+
         static void MatchTextWeight(TMP_Text tmp)
         {
             if (tmp == null) return;
@@ -1620,11 +1647,28 @@ namespace FigForge
             var toggle = go.AddComponent<Toggle>();
             toggle.transition = Selectable.Transition.None;
 
+            // Background — full render-only Figma subtree when captured, else the flat
+            // shape. Decorative either way (the HitArea below is the click surface).
             var bgGo = NewRect("Background", go.transform);
             AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
-            var bg = AddShapeGraphic(bgGo, c.shape, ctx);
+            Graphic bg = HasPartTree(c, "Background")
+                ? BuildPartSubtree(bgGo, c.partTrees["Background"], ctx)
+                : AddShapeGraphic(bgGo, c.shape, ctx);
 
-            if (c.checkShape != null)
+            // Checkmark — the "on" indicator. With a subtree it's a full composite shown/
+            // hidden by FigForgeToggleGraphicObject (Toggle.graphic can only cross-fade a
+            // single Graphic). Without one, fall back to the flat checkShape as Toggle.graphic.
+            if (HasPartTree(c, "Checkmark"))
+            {
+                var ckGo = NewRect("Checkmark", go.transform);
+                AnchorPart(ckGo.GetComponent<RectTransform>(), c.parts, "Checkmark");
+                BuildPartSubtree(ckGo, c.partTrees["Checkmark"], ctx);
+                toggle.graphic = null;
+                ckGo.SetActive(false); // initial off; the reveal syncs the real isOn
+                var reveal = go.AddComponent<FigForgeToggleGraphicObject>();
+                reveal.toggle = toggle; reveal.graphicRoot = ckGo;
+            }
+            else if (c.checkShape != null)
             {
                 var ckGo = NewRect("Checkmark", go.transform);
                 AnchorPart(ckGo.GetComponent<RectTransform>(), c.parts, "Checkmark");
@@ -2194,10 +2238,20 @@ namespace FigForge
         //      which defaults on and was suppressing clicks on toggle/radio/dropdown/input).
         // v22: toggle/radio get a full-component HitArea (or captured "HitArea" layer) so
         //      the whole Figma component frame is clickable, not just the small box.
+        // v23: canonical part visuals render as full Figma subtrees (render-only) when
+        //      partTrees present — nested children/fills/strokes/shadows/vectors/masks/text.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 22;
+        internal const int CanonicalSchema = 23;
+
+        // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
+        static string SigHash(string s)
+        {
+            ulong h = 14695981039346656037UL;
+            if (s != null) foreach (char ch in s) { h ^= ch; h *= 1099511628211UL; }
+            return h.ToString("x");
+        }
 
         static string CanonicalSignature(ElementData e, string kind, float sf)
         {
@@ -2284,6 +2338,20 @@ namespace FigForge
                 {
                     var a = c.parts[key];
                     sb.Append(";part=").Append(key).Append(':').Append(SigF(a));
+                }
+            }
+            // Full part subtrees: hash each (sorted by part) so a Figma edit to a part's
+            // nested visuals regenerates the prefab. Deterministic because the exporter
+            // emits stable Figma ids + rounded transforms.
+            if (c.partTrees != null && c.partTrees.Count > 0)
+            {
+                var pkeys = new List<string>(c.partTrees.Keys);
+                pkeys.Sort(StringComparer.Ordinal);
+                foreach (var key in pkeys)
+                {
+                    var tree = c.partTrees[key];
+                    sb.Append(";ptree=").Append(key).Append(':')
+                      .Append(tree != null ? SigHash(JsonConvert.SerializeObject(tree)) : "0");
                 }
             }
             bool hasStates = c.states != null && (c.states.normal != null || c.states.highlighted != null || c.states.pressed != null);

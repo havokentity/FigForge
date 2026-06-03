@@ -236,6 +236,11 @@ export interface CanonicalRef {
   // Normalized Unity anchors [minX,minY,maxX,maxY] of named sub-layers (Background,
   // Checkmark, Label, Arrow, Item) so composite controls lay out precisely at any size.
   parts?: Record<string, number[]>;
+  // Full render-only Figma subtree per named part (Background, Checkmark, Arrow…).
+  // When present, Unity renders the part as its complete nested subtree (all fills,
+  // strokes, shadows, vectors, masks, text) instead of the flat `shape`/`asset`
+  // fallback. Each subtree is positioned inside the part's `parts[name]` container.
+  partTrees?: Record<string, ElementSubtree>;
 }
 
 /** Prototype navigation captured as data (no behaviour wired). */
@@ -295,6 +300,20 @@ export interface ManifestElement {
   merged: boolean;
   autoLayout?: AutoLayout;
   children: string[];
+}
+
+/**
+ * A self-contained, render-only element tree for one canonical control PART
+ * (e.g. a toggle's Checkmark, a dropdown's Arrow). Lets a control part render
+ * its full Figma subtree — nested children, text, vectors, masks, layered
+ * fills/strokes/shadows — through the main element renderer, instead of being
+ * flattened to a single shape or PNG. `elements` is a flat list (same shape as
+ * the main manifest) with ids local to this subtree; `root` is the top element,
+ * which Unity stretches to fill the part's anchored container.
+ */
+export interface ElementSubtree {
+  root: string;
+  elements: ManifestElement[];
 }
 
 export interface ManifestAsset {

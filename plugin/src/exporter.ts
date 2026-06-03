@@ -22,11 +22,13 @@ import {
   type ExportScale,
   type Fill,
   type GradientKind,
+  type ElementSubtree,
   type Manifest,
   type Shadow,
   type ManifestAsset,
   type ManifestElement,
   type ManifestFont,
+  type UnityTransform,
   type NavLink,
   type RGBA,
   type Stroke,
@@ -1030,6 +1032,140 @@ export async function exportDesign(
     return undefined;
   }
 
+  // A render-only Unity transform that stretches a subtree root to fill its parent
+  // (the anchored part container), so the part's offset isn't double-applied.
+  function stretchTransform(): UnityTransform {
+    return { anchorMin: [0, 0], anchorMax: [1, 1], pivot: [0.5, 0.5], offsetMin: [0, 0], offsetMax: [0, 0], rotationZ: 0 };
+  }
+
+  // Rasterize ONE node to a shared PNG asset (dedup by content hash). Hides the
+  // given exportable descendants so the PNG doesn't double-bake them. Appends to the
+  // shared assets/assetEntries/hashToFile so Unity can resolve the sprite by file.
+  async function rasterizeSubtreeNode(
+    node: SceneNode,
+    hide: SceneNode[]
+  ): Promise<{ file: string; w: number; h: number } | undefined> {
+    const restore = hide.map((n) => {
+      const before = (n as unknown as { visible: boolean }).visible;
+      (n as unknown as { visible: boolean }).visible = false;
+      return { n, before };
+    });
+    try {
+      const bytes = await (node as unknown as {
+        exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
+      }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
+      const hash = fnv1a(bytes);
+      const dims = pngSize(bytes);
+      let file = hashToFile.get(hash);
+      if (!file) {
+        file = generateFileName(root.name, node.name, scaleNum);
+        let n = 1;
+        while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
+        hashToFile.set(hash, file);
+        assets.push({ name: file, data: Array.from(bytes) });
+        assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
+      }
+      return { file, w: dims.w, h: dims.h };
+    } catch {
+      return undefined; // empty render → fall back to style fill in Unity
+    } finally {
+      for (const r of restore) (r.n as unknown as { visible: boolean }).visible = r.before;
+    }
+  }
+
+  // Capture a control PART (Background, Checkmark, Arrow…) as a FULL render-only
+  // subtree: the part node plus all its descendants, serialized exactly like regular
+  // manifest elements (style/text/vector + nested children), with each unrepresentable
+  // node rasterized to a shared PNG. The subtree root is stretched to fill the part's
+  // anchored container; descendants keep their Figma-relative transforms. Reuses the
+  // same per-node builders (buildStyle/buildText/buildVectorDrawing/mapTransform) as the
+  // main pipeline, so fidelity matches a normal element exactly.
+  async function captureSubtree(rootNode: SceneNode | undefined): Promise<ElementSubtree | undefined> {
+    if (!rootNode || (rootNode as unknown as { visible?: boolean }).visible === false) return undefined;
+
+    type Sub = { node: SceneNode; parentId: string | null; exportable: boolean; children: SceneNode[] };
+    const subs: Sub[] = [];
+    const walk = (node: SceneNode, parentId: string | null) => {
+      if ((node as unknown as { visible?: boolean }).visible === false) return;
+      if (excludedIds.has(node.id)) return;
+      // A part is plain visuals; never recurse into a nested canonical control.
+      const isCanon = node.id !== rootNode.id && !!detectCanonical(node);
+      const exportable = !isCanon && (forcedPngIds.has(node.id) || isExportable(node));
+      const children: SceneNode[] = !isCanon && 'children' in node
+        ? ((node as ChildrenMixin).children.slice() as SceneNode[]).filter(
+            (c) => (c as unknown as { visible?: boolean }).visible !== false)
+        : [];
+      subs.push({ node, parentId, exportable, children });
+      for (const c of children) walk(c, node.id);
+    };
+    walk(rootNode, null);
+
+    // Rasterize exportable nodes (hide exportable descendants to isolate each PNG).
+    const assetBySub = new Map<string, { file: string; w: number; h: number }>();
+    for (const s of subs) {
+      if (!s.exportable) continue;
+      const hide = subs.filter((o) => o !== s && o.exportable && isDescendant(o.node, s.node)).map((o) => o.node);
+      const a = await rasterizeSubtreeNode(s.node, hide);
+      if (a) assetBySub.set(s.node.id, a);
+    }
+
+    const elements: ManifestElement[] = [];
+    for (const s of subs) {
+      const node = s.node;
+      const isRoot = node.id === rootNode.id;
+      const asset = assetBySub.get(node.id);
+      const hasAsset = !!asset;
+      const nx = (node as unknown as { x: number }).x, ny = (node as unknown as { y: number }).y;
+      const nw = (node as unknown as { width: number }).width, nh = (node as unknown as { height: number }).height;
+      const transform: UnityTransform = isRoot
+        ? stretchTransform()
+        : mapTransform({
+            rect: { x: nx, y: ny, w: nw, h: nh },
+            parent: parentDims(node, planById),
+            horizontal: (node as unknown as { constraints?: Constraints }).constraints?.horizontal,
+            vertical: (node as unknown as { constraints?: Constraints }).constraints?.vertical,
+            rotation: (node as unknown as { rotation?: number }).rotation ?? 0,
+          });
+
+      const components: string[] = [];
+      let text: TextProps | undefined;
+      let style: Style | undefined;
+      if (node.type === 'TEXT' && !hasAsset) {
+        text = buildText(node as TextNode);
+        components.push('TextMeshProUGUI');
+      } else {
+        style = buildStyle(node, options, hasAsset);
+        if (hasAsset || style?.fill || style?.stroke) components.push('Image');
+      }
+
+      elements.push({
+        id: node.id,
+        name: sanitize(node.name),
+        displayName: node.name,
+        type: node.type,
+        parentId: s.parentId,
+        rect: { x: nx, y: ny, w: nw, h: nh },
+        rotation: (node as unknown as { rotation?: number }).rotation ?? 0,
+        transform,
+        components,
+        style,
+        text,
+        asset: asset ? asset.file : null,
+        vector: hasAsset && VECTOR_SHAPE_TYPES.has(node.type) ? (buildVectorDrawing(node) ?? undefined) : undefined,
+        assetBounds: asset
+          ? { x: nx, y: ny, w: nw, h: nh, pixelWidth: asset.w, pixelHeight: asset.h, exportScale: scaleNum }
+          : undefined,
+        canonical: undefined,
+        nav: undefined,
+        interactive: false, // render-only: never wire a Button onto a part subtree
+        clipsContent: (node as unknown as { clipsContent?: boolean }).clipsContent === true,
+        merged: false,
+        children: s.children.map((c) => c.id),
+      });
+    }
+    return { root: rootNode.id, elements };
+  }
+
   // Capture a toggle/radio: Background box (UGUI Toggle.targetGraphic), the Checkmark
   // shown when on (Toggle.graphic), the initial value, and the label.
   async function captureToggle(master: SceneNode, tagValue?: string) {
@@ -1040,7 +1176,16 @@ export async function exportDesign(
     const checkShape = ckNode ? await shapeOfWithAsset(ckNode) : undefined;
     const ckVisible = ckNode ? (ckNode as unknown as { visible?: boolean }).visible !== false : false;
     const value = tagValue === 'on' || tagValue === 'off' ? tagValue : (ckVisible ? 'on' : 'off');
+    // Full render-only subtrees for the visual parts. Background + Checkmark only:
+    // the Label stays a bound TMP (FigForgeBindings.label rewrites it per-instance),
+    // so it must remain a real text component, not a flattened subtree.
+    const partTrees: Record<string, ElementSubtree> = {};
+    const bgTree = await captureSubtree(bg);
+    if (bgTree) partTrees.Background = bgTree;
+    const ckTree = await captureSubtree(ckNode);
+    if (ckTree) partTrees.Checkmark = ckTree;
     return { shape, checkShape: checkShape ?? undefined, value, label: textOf(childByName(master, 'Label')),
+      partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       // 'HitArea' (optional): if the component defines a HitArea layer, Unity uses it
       // as the clickable region; otherwise the whole component frame is clickable.
       parts: partsOf(master, ['Background', 'Checkmark', 'Label', 'HitArea']) };
@@ -1211,7 +1356,7 @@ export async function exportDesign(
     if (!master) continue;
     if (ref.kind === 'toggle' || ref.kind === 'radio') {
       const t = await captureToggle(master, ref.value);
-      if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts });
+      if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts, partTrees: t.partTrees });
     } else if (ref.kind === 'input') {
       const i = await captureInput(master);
       controlByNode.set(p.node.id, {
@@ -1393,6 +1538,21 @@ export async function exportDesign(
   }
 
   onProgress?.(exportPlans.length, exportPlans.length, 'done');
+
+  // Register fonts used inside canonical part subtrees so Unity imports them too
+  // (subtree TEXT elements are assembled outside the main fontMap pass above).
+  for (const el of elements) {
+    const trees = el.canonical?.partTrees;
+    if (!trees) continue;
+    for (const tree of Object.values(trees)) {
+      for (const sub of tree.elements) {
+        if (!sub.text) continue;
+        const styles = fontMap.get(sub.text.fontFamily) || new Set<string>();
+        styles.add(sub.text.fontStyle);
+        fontMap.set(sub.text.fontFamily, styles);
+      }
+    }
+  }
 
   const fonts: ManifestFont[] = [...fontMap.entries()].map(([family, styles]) => ({
     family,
