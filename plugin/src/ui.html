@@ -228,11 +228,11 @@
   /* ---- footer ---- */
   footer { border-top: 1px solid var(--border); padding: 8px 10px; background: var(--bg-secondary); }
   .status-wrap {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: stretch;
+    display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 8px; align-items: start;
   }
   .status-card {
     min-width: 0; border: 1px solid var(--border); border-radius: var(--radius);
-    background: var(--bg); padding: 7px 8px; min-height: 86px;
+    background: var(--bg); padding: 7px 8px;
     display: flex; flex-direction: column;
   }
   .status-meta {
@@ -240,13 +240,29 @@
     color: var(--text-tertiary); font-size: 9px; text-transform: uppercase; letter-spacing: .6px;
     margin-bottom: 5px; font-weight: 700;
   }
-  .statusline {
-    font-size: 10px; color: var(--text-secondary); min-height: 13px;
-    font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    margin-top: auto;
+  .status-meta .clear-log {
+    cursor: pointer; font-size: 9px; color: var(--text-tertiary); text-transform: none;
+    letter-spacing: 0; font-weight: 600; opacity: .7; user-select: none;
   }
+  .status-meta .clear-log:hover { opacity: 1; color: var(--text-secondary); }
+  /* scrollable, wrapping log — no more truncation */
+  .statusline {
+    min-height: 60px; max-height: 104px; overflow-y: auto; overflow-x: hidden;
+    font-size: 10px; line-height: 1.5; color: var(--text-secondary);
+    font-family: ui-monospace, Menlo, monospace;
+    white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+  }
+  .statusline::-webkit-scrollbar { width: 8px; height: 8px; }
+  .statusline::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .statusline::-webkit-scrollbar-track { background: transparent; }
   .statusline:empty::before { content: "Ready"; color: var(--text-tertiary); }
-  .statusline.err { color: var(--danger); }
+  .statusline .log-line { padding: 1px 0; display: flex; gap: 6px; align-items: baseline; }
+  .statusline .log-line .ts { color: var(--text-tertiary); opacity: .75; flex: none; font-variant-numeric: tabular-nums; }
+  .statusline .log-line .msg { min-width: 0; overflow-wrap: anywhere; }
+  .statusline .log-line.err .msg { color: var(--danger); }
+  .statusline .log-line.dim .msg { color: var(--text-tertiary); }
+  .statusline .log-line.ok .msg { color: var(--brand); }
   .progress { height: 4px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; margin-top: 7px; display: none; }
   .progress.show { display: block; }
   .progress > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--brand), var(--accent)); transition: width .15s; }
@@ -394,8 +410,8 @@
         <div class="status-wrap">
           <div class="status-card">
             <div class="status-meta">
-              <span>Status</span>
-              <span>Bundle / Unity</span>
+              <span>Status · Bundle / Unity</span>
+              <span class="clear-log" id="clearLog" title="Clear log">Clear</span>
             </div>
             <div class="statusline" id="status"></div>
             <div class="progress" id="progress"><div></div></div>

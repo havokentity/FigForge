@@ -101,6 +101,7 @@ minBtn.addEventListener('click', () => {
 });
 
 $('#reloadBtn').addEventListener('click', () => post({ type: 'reload' }));
+$('#clearLog').addEventListener('click', clearLog);
 const savedScale = readPrefs().scale;
 if (savedScale) {
   const scaleEl = $('#scale') as HTMLSelectElement;
@@ -517,11 +518,34 @@ async function downloadProjectBundle(project: { name: string; initial: string },
 // ---------------------------------------------------------------------------
 // Status / progress helpers
 // ---------------------------------------------------------------------------
-function setStatus(text: string, err = false) {
-  const el = $('#status');
-  el.textContent = text;
-  el.classList.toggle('err', err);
+function clockTime(): string {
+  const d = new Date();
+  const p = (n: number) => n.toString().padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+
+let lastLogReplaceable = false;
+// Append a line to the scrollable status / bundle / Unity log. `replace` rewrites
+// the previous line in place (used for rapid progress ticks so they don't flood).
+// Auto-scrolls only when the user is already at the bottom, so reading history isn't
+// yanked away. Full text wraps — nothing is truncated.
+function appendLog(text: string, opts: { err?: boolean; dim?: boolean; ok?: boolean; replace?: boolean } = {}) {
+  const el = $('#status');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  let line = opts.replace && lastLogReplaceable && el.lastElementChild ? (el.lastElementChild as HTMLElement) : null;
+  if (line) line.textContent = '';
+  else { line = document.createElement('div'); el.appendChild(line); }
+  line.className = 'log-line' + (opts.err ? ' err' : opts.ok ? ' ok' : opts.dim ? ' dim' : '');
+  const ts = document.createElement('span'); ts.className = 'ts'; ts.textContent = clockTime();
+  const msg = document.createElement('span'); msg.className = 'msg'; msg.textContent = text;
+  line.appendChild(ts); line.appendChild(msg);
+  lastLogReplaceable = !!opts.replace;
+  while (el.childElementCount > 300) el.removeChild(el.firstElementChild as Node);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(text: string, err = false, replace = false) { appendLog(text, { err, replace }); }
+function clearLog() { $('#status').textContent = ''; lastLogReplaceable = false; }
 function showProgress(show: boolean) { $('#progress').classList.toggle('show', show); }
 function setProgress(pct: number) { ($('#progress > div') as HTMLElement).style.width = `${pct}%`; }
 
@@ -535,7 +559,7 @@ let socket: WebSocket | null = null;
 let wantConnected = false;
 let reconnectTimer: number | null = null;
 
-function bridgeLog(line: string) { console.log('[FigForge MCP]', line); }
+function bridgeLog(line: string) { console.log('[FigForge MCP]', line); appendLog(line, { dim: true }); }
 
 type McpState = 'off' | 'connecting' | 'connected';
 function setMcp(state: McpState) {
@@ -648,7 +672,7 @@ window.onmessage = (event: MessageEvent) => {
 
     case 'progress':
       setProgress(msg.total ? Math.round((msg.current / msg.total) * 100) : 0);
-      setStatus(`Exporting ${msg.label} (${msg.current}/${msg.total})`);
+      setStatus(`Exporting ${msg.label} (${msg.current}/${msg.total})`, false, true); // replace in place
       break;
 
     case 'export-complete':
