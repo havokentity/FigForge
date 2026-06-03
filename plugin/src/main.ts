@@ -858,38 +858,88 @@ async function createDropdown(): Promise<ComponentNode> {
   return comp;
 }
 
-// The reusable row used by List — its own component (Regular/Rollover/HitArea/Label)
-// so every row in the composited list preview stays in sync when you skin it once.
-async function ensureListItem(font: FontName, W: number, ROW: number): Promise<ComponentNode> {
+// Load a bold/medium weight of the same family for titles; fall back to the base font.
+async function loadBoldFont(base: FontName): Promise<FontName> {
+  for (const style of ['Semi Bold', 'SemiBold', 'Bold', 'Medium']) {
+    const f: FontName = { family: base.family, style };
+    try { await figma.loadFontAsync(f); return f; } catch { /* try next */ }
+  }
+  return base;
+}
+
+// The reusable row used by List — its own component so every row in the composited
+// preview stays in sync when you skin it once. Rich form: full-bleed state layers
+// (Regular/Rollover/Pressed/Selected), a leading Icon, two-line Title + Subtitle, a
+// trailing Accessory chevron, a bottom Divider, and a transparent HitArea on top.
+async function ensureListItem(font: FontName, titleFont: FontName, W: number, ROW: number): Promise<ComponentNode> {
   const found = findMaster('ListItem');
   if (found) return found;
   const item = figma.createComponent();
   item.name = 'ListItem'; item.resize(W, ROW); item.fills = []; item.clipsContent = true;
+
+  // Pointer/selection state backgrounds (full-bleed). Only Regular shows by default;
+  // Unity swaps these on hover/press and keeps Selected on the chosen row.
   const reg = solidRect('Regular', W, ROW, 0, { r: 1, g: 1, b: 1 });
-  reg.visible = true; reg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(reg);
-  const roll = solidRect('Rollover', W, ROW, 0, { r: 0.93, g: 0.92, b: 1 });
+  reg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(reg);
+  const roll = solidRect('Rollover', W, ROW, 0, { r: 0.96, g: 0.96, b: 1 });
   roll.visible = false; roll.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(roll);
+  const press = solidRect('Pressed', W, ROW, 0, { r: 0.92, g: 0.92, b: 1 });
+  press.visible = false; press.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(press);
+  const sel = solidRect('Selected', W, ROW, 0, { r: 0.90, g: 0.91, b: 1 });
+  sel.visible = false; sel.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(sel);
+
+  const PAD = 14, ICON = 40;
+  // Leading icon slot — a rounded accent square placeholder; swap/skin freely.
+  const icon = solidRect('Icon', ICON, ICON, 10, { r: 0.49, g: 0.36, b: 1 });
+  icon.x = PAD; icon.y = Math.round((ROW - ICON) / 2);
+  icon.constraints = { horizontal: 'MIN', vertical: 'CENTER' }; item.appendChild(icon);
+
+  // Two-line Title + Subtitle.
+  const tx = PAD + ICON + 12;
+  const title = figma.createText();
+  title.fontName = titleFont; title.name = 'Title'; title.characters = 'Title'; title.fontSize = 15;
+  title.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]; title.textAlignVertical = 'CENTER';
+  item.appendChild(title); title.x = tx; title.y = Math.round(ROW / 2 - title.height - 1);
+  title.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+  const sub = figma.createText();
+  sub.fontName = font; sub.name = 'Subtitle'; sub.characters = 'Subtitle'; sub.fontSize = 12;
+  sub.fills = [{ type: 'SOLID', color: { r: 0.5, g: 0.5, b: 0.55 } }]; sub.textAlignVertical = 'CENTER';
+  item.appendChild(sub); sub.x = tx; sub.y = Math.round(ROW / 2 + 1);
+  sub.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+
+  // Trailing accessory — a chevron-right vector (skin/replace freely).
+  const svg = figma.createNodeFromSvg(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="7" height="12" viewBox="0 0 7 12"><path d="M0 0 L7 6 L0 12 Z" fill="#000000"/></svg>');
+  const acc = figma.flatten([svg], item);
+  acc.name = 'Accessory'; acc.fills = [{ type: 'SOLID', color: { r: 0.6, g: 0.6, b: 0.65 } }]; acc.strokes = [];
+  acc.x = W - PAD - acc.width; acc.y = Math.round((ROW - acc.height) / 2);
+  acc.constraints = { horizontal: 'MAX', vertical: 'CENTER' };
+
+  // Bottom divider separator between rows.
+  const div = solidRect('Divider', W - PAD * 2, 1, 0, { r: 0.9, g: 0.9, b: 0.93 });
+  div.x = PAD; div.y = ROW - 1; div.constraints = { horizontal: 'STRETCH', vertical: 'MAX' }; item.appendChild(div);
+
+  // Transparent full-bleed hit target — last so it sits on top.
   const hit = solidRect('HitArea', W, ROW, 0, { r: 0, g: 0, b: 0 }, 0);
   hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(hit);
-  const t = figma.createText();
-  t.fontName = font; t.name = 'Label'; t.characters = 'Item'; t.fontSize = 14;
-  t.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]; t.textAlignVertical = 'CENTER';
-  item.appendChild(t); t.x = 16; t.y = (ROW - t.height) / 2; t.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+
   parkMaster(item); // loose on the current page, off-canvas
   return item;
 }
 
-// List: a rounded, clipped Background + a COMPOSITED stack of ListItem instances (so
-// you see a real multi-row list in Figma and copy it onto your page). Skin the one
-// ListItem master (Regular/Rollover states) and every row updates. In Unity the row
-// is repeated `count` times (count = list height ÷ row height) with the rollover swap.
+// List: a rounded, clipped Background + a Header (section title) + a COMPOSITED stack of
+// ListItem instances (so you see a real multi-row list in Figma and copy it onto your
+// page). Skin the one ListItem master (Regular/Rollover/Pressed/Selected states, Icon,
+// Title, Subtitle, Accessory, Divider) and every row updates. In Unity the row is
+// repeated `count` times (count = (list height − header) ÷ row height) with state swaps.
 async function createList(): Promise<ComponentNode> {
   const reuse = findMaster('List');
   if (reuse) { placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
-  const W = 260, ROW = 48, ROWS = 5, H = ROW * ROWS, R = 14;
-  const itemComp = await ensureListItem(font, W, ROW);
+  const titleFont = await loadBoldFont(font);
+  const W = 320, ROW = 64, HEADER = 44, ROWS = 4, H = HEADER + ROW * ROWS, R = 14;
+  const itemComp = await ensureListItem(font, titleFont, W, ROW);
 
   const comp = figma.createComponent();
   comp.name = 'List'; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
@@ -899,13 +949,37 @@ async function createList(): Promise<ComponentNode> {
   bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   comp.appendChild(bg);
 
+  // Header — a section title row pinned to the top (above the scrollable rows in Unity).
+  const header = figma.createFrame();
+  header.name = 'Header'; header.resize(W, HEADER); header.fills = []; header.x = 0; header.y = 0;
+  header.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+  comp.appendChild(header);
+  const ht = figma.createText();
+  ht.fontName = titleFont; ht.name = 'Title'; ht.characters = 'Section'; ht.fontSize = 13;
+  ht.fills = [{ type: 'SOLID', color: { r: 0.45, g: 0.45, b: 0.5 } }]; ht.textAlignVertical = 'CENTER';
+  header.appendChild(ht); ht.x = 14; ht.y = Math.round((HEADER - ht.height) / 2);
+  ht.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+  const hdiv = solidRect('Divider', W, 1, 0, { r: 0.88, g: 0.88, b: 0.92 });
+  hdiv.x = 0; hdiv.y = HEADER - 1; hdiv.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
+  header.appendChild(hdiv);
+
   // Composited preview: ROWS instances of the single ListItem master (the first is the
-  // 'Item' the importer reads; all stay in sync when you skin the master).
+  // 'Item' the importer reads; all stay in sync when you skin the master). Row text is
+  // a per-instance override; the first row previews the Selected state.
+  const subtitles = ['Details', 'Subtitle', 'More info', 'Description'];
   for (let i = 0; i < ROWS; i++) {
     const ins = itemComp.createInstance();
-    ins.name = 'Item'; ins.resize(W, ROW); ins.x = 0; ins.y = i * ROW;
+    ins.name = 'Item'; ins.resize(W, ROW); ins.x = 0; ins.y = HEADER + i * ROW;
     ins.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
     comp.appendChild(ins);
+    const title = ins.findOne((n) => n.type === 'TEXT' && n.name === 'Title') as TextNode | null;
+    if (title) title.characters = `Item ${i + 1}`;
+    const sub = ins.findOne((n) => n.type === 'TEXT' && n.name === 'Subtitle') as TextNode | null;
+    if (sub) sub.characters = subtitles[i % subtitles.length];
+    if (i === 0) {
+      const selected = ins.findOne((n) => n.name === 'Selected');
+      if (selected) (selected as unknown as { visible: boolean }).visible = true;
+    }
   }
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: 'List' }));

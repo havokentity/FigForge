@@ -1303,7 +1303,9 @@ export async function exportDesign(
     // Container Background as a full render-only subtree. Item ROWS stay on the flat
     // itemShape path (FigForgeList clones a styled row, not a subtree).
     const bgTree = await captureSubtree(bg);
-    return { shape: shape ?? undefined, itemShape, itemRollover, itemHeight, label: textOf(childByName(item, 'Label')),
+    // Rich row template renames Label→Title; keep Label as a fallback for older forms.
+    const rowLabel = textOf(childByName(item, 'Title')) ?? textOf(childByName(item, 'Label'));
+    return { shape: shape ?? undefined, itemShape, itemRollover, itemHeight, label: rowLabel,
       partTrees: bgTree ? { Background: bgTree } : undefined,
       parts: partsOf(master, ['Background']) };
   }
