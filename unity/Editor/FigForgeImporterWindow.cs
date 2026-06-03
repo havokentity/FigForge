@@ -560,7 +560,12 @@ namespace FigForge
             {
                 string role = string.IsNullOrEmpty(ps.role) ? "screen" : ps.role;
                 string section = ps.section ?? "";
-                return StableHash(JsonConvert.SerializeObject(m) + "\nrole=" + role + "\nsection=" + section);
+                // Fold the importer's canonical build version into the hash so a
+                // Unity-side generation change (e.g. raycastable control backgrounds)
+                // busts the screen-level reuse cache and forces a rebuild even when
+                // the Figma design itself is unchanged.
+                return StableHash(JsonConvert.SerializeObject(m) + "\nrole=" + role + "\nsection=" + section
+                    + "\nbuild=" + HierarchyBuilder.CanonicalSchema);
             }
             finally
             {

@@ -1558,9 +1558,13 @@ namespace FigForge
         // A control's targetGraphic must receive raycasts to be clickable, but SDF /
         // asset / vector backgrounds default raycastTarget=false (they're decorative).
         // Re-enable it on the control background so toggle/radio/dropdown/input click.
+        // This is UNCONDITIONAL — unlike decorative graphics, an interactive control's
+        // click surface must stay raycastable even when the project opts to strip
+        // raycasts from non-interactive graphics (disableRaycasts). Mirrors the way
+        // button hit areas force raycastTarget=true (AddHitArea).
         static void MakeClickTarget(Graphic g, BuildContext ctx)
         {
-            if (g != null) g.raycastTarget = !ctx.disableRaycasts;
+            if (g != null) g.raycastTarget = true;
         }
 
         // Background Graphic from a CanonicalShape (crisp SDF) or a transparent Image.
@@ -2180,7 +2184,12 @@ namespace FigForge
         // v18: generated buttons use Regular/RollOver/Pressed/HitArea child objects.
         // v19: button root/state shapes preserve layered fills, strokes, and effects.
         // v20: control backgrounds are raycastable (clickable toggle/radio/dropdown/input).
-        const int CanonicalSchema = 20;
+        // v21: control backgrounds raycast UNCONDITIONALLY (not gated by disableRaycasts,
+        //      which defaults on and was suppressing clicks on toggle/radio/dropdown/input).
+        // NOTE: bumping this also busts the importer's screen-level reuse cache
+        // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
+        // forces unchanged screens to rebuild and pick up the new generation.
+        internal const int CanonicalSchema = 21;
 
         static string CanonicalSignature(ElementData e, string kind, float sf)
         {
