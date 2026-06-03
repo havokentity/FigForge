@@ -1623,8 +1623,6 @@ namespace FigForge
             var bgGo = NewRect("Background", go.transform);
             AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
             var bg = AddShapeGraphic(bgGo, c.shape, ctx);
-            toggle.targetGraphic = bg;
-            MakeClickTarget(bg, ctx); // SDF/asset backgrounds default raycastTarget=false
 
             if (c.checkShape != null)
             {
@@ -1643,6 +1641,14 @@ namespace FigForge
                 lrt.anchorMax = new Vector2(1f, lrt.anchorMax.y);
                 lrt.offsetMax = new Vector2(-6f * ctx.scaleFactor, lrt.offsetMax.y);
             }
+
+            // Whole-component click surface: a transparent HitArea spanning the control
+            // (or the captured "HitArea" layer if the Figma component defines one) so
+            // clicking the box OR the label toggles — the Figma component frame is the
+            // hit area, matching standard checkbox/radio UX and button hit areas. Added
+            // last so it sits on top of the visuals; the Background stays decorative.
+            var hit = AddHitArea(go.transform, c.parts);
+            toggle.targetGraphic = hit;
 
             // Leave isOn at the default (off): the per-instance value is applied by
             // FigForgeBindings.Apply AFTER the ToggleGroup is wired, so a radio prefab
@@ -2186,10 +2192,12 @@ namespace FigForge
         // v20: control backgrounds are raycastable (clickable toggle/radio/dropdown/input).
         // v21: control backgrounds raycast UNCONDITIONALLY (not gated by disableRaycasts,
         //      which defaults on and was suppressing clicks on toggle/radio/dropdown/input).
+        // v22: toggle/radio get a full-component HitArea (or captured "HitArea" layer) so
+        //      the whole Figma component frame is clickable, not just the small box.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 21;
+        internal const int CanonicalSchema = 22;
 
         static string CanonicalSignature(ElementData e, string kind, float sf)
         {

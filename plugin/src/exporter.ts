@@ -1041,7 +1041,9 @@ export async function exportDesign(
     const ckVisible = ckNode ? (ckNode as unknown as { visible?: boolean }).visible !== false : false;
     const value = tagValue === 'on' || tagValue === 'off' ? tagValue : (ckVisible ? 'on' : 'off');
     return { shape, checkShape: checkShape ?? undefined, value, label: textOf(childByName(master, 'Label')),
-      parts: partsOf(master, ['Background', 'Checkmark', 'Label']) };
+      // 'HitArea' (optional): if the component defines a HitArea layer, Unity uses it
+      // as the clickable region; otherwise the whole component frame is clickable.
+      parts: partsOf(master, ['Background', 'Checkmark', 'Label', 'HitArea']) };
   }
 
   // Capture an input field: Background (TMP_InputField.targetGraphic), Placeholder,
