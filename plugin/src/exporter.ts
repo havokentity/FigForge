@@ -1300,7 +1300,11 @@ export async function exportDesign(
     const rollNode = childByName(item, 'Rollover');
     const itemRollover = rollNode ? (stateSolid(rollNode) ?? undefined) : undefined;
     const itemHeight = (item as unknown as { height?: number }).height ?? 44;
+    // Container Background as a full render-only subtree. Item ROWS stay on the flat
+    // itemShape path (FigForgeList clones a styled row, not a subtree).
+    const bgTree = await captureSubtree(bg);
     return { shape: shape ?? undefined, itemShape, itemRollover, itemHeight, label: textOf(childByName(item, 'Label')),
+      partTrees: bgTree ? { Background: bgTree } : undefined,
       parts: partsOf(master, ['Background']) };
   }
 
@@ -1405,7 +1409,7 @@ export async function exportDesign(
         const ih = l.itemHeight || 44;
         const instH = (p.node as unknown as { height?: number }).height || ih;
         const count = Math.max(1, Math.round(instH / ih)); // resize the list = set its length
-        controlByNode.set(p.node.id, { shape: l.shape, itemShape: l.itemShape, itemRollover: l.itemRollover, itemHeight: ih, count, label: l.label, parts: l.parts });
+        controlByNode.set(p.node.id, { shape: l.shape, itemShape: l.itemShape, itemRollover: l.itemRollover, itemHeight: ih, count, label: l.label, partTrees: l.partTrees, parts: l.parts });
       }
     }
   }

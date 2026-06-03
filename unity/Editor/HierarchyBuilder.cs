@@ -2025,7 +2025,16 @@ namespace FigForge
             var c = e.canonical;
             float sf = ctx.scaleFactor;
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "List" : e.name, parent);
-            var bg = AddShapeGraphic(go, c.shape, ctx); // rounded container background
+            // Rounded container background — full render-only subtree when present (added
+            // first so it sits behind the scrollable viewport/content), else the flat shape.
+            Graphic bg;
+            if (HasPartTree(c, "Background"))
+            {
+                var bgGo = NewRect("Background", go.transform);
+                Stretch(bgGo.GetComponent<RectTransform>());
+                bg = BuildPartSubtree(bgGo, c.partTrees["Background"], ctx);
+            }
+            else bg = AddShapeGraphic(go, c.shape, ctx);
 
             var scroll = go.AddComponent<ScrollRect>();
             scroll.horizontal = false; scroll.vertical = true;
@@ -2267,10 +2276,11 @@ namespace FigForge
         // v23: canonical part visuals render as full Figma subtrees (render-only) when
         //      partTrees present — nested children/fills/strokes/shadows/vectors/masks/text.
         // v24: subtree parity extended to dropdown Background+Arrow and input Background.
+        // v25: subtree parity extended to the list container Background.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 24;
+        internal const int CanonicalSchema = 25;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
