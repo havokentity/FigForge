@@ -2179,7 +2179,8 @@ namespace FigForge
         // v17: canonical procedural gradients carry full n-stop Gradient data.
         // v18: generated buttons use Regular/RollOver/Pressed/HitArea child objects.
         // v19: button root/state shapes preserve layered fills, strokes, and effects.
-        const int CanonicalSchema = 19;
+        // v20: control backgrounds are raycastable (clickable toggle/radio/dropdown/input).
+        const int CanonicalSchema = 20;
 
         static string CanonicalSignature(ElementData e, string kind, float sf)
         {
