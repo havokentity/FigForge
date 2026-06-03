@@ -1199,11 +1199,15 @@ export async function exportDesign(
     const placeholder = textOf(childByName(master, 'Placeholder')) ?? textOf(childByName(master, 'Label'));
     const rawValue = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value'));
     const value = rawValue !== undefined && rawValue.trim().length === 0 ? '' : rawValue;
+    // Background as a full render-only subtree (the targetGraphic stays clickable in
+    // Unity). Placeholder/Text remain bound TMP components, not subtrees.
+    const bgTree = await captureSubtree(bg);
     return {
       shape: shape ?? undefined,
       label: placeholder,
       placeholder,
       value,
+      partTrees: bgTree ? { Background: bgTree } : undefined,
       parts: partsOf(master, ['Background', 'Placeholder', 'Text', 'Value']),
     };
   }
@@ -1263,6 +1267,15 @@ export async function exportDesign(
       ((optionInst ?? optionNodes[0]) as unknown as { height?: number } | undefined)?.height
       ?? (optionMaster ? ((optionMaster as unknown as { height?: number }).height ?? undefined) : undefined);
     const value = tagValue || textOf(childByName(master, 'Label')) || options[0];
+    // Full render-only subtrees: the closed-box Background and the Arrow (its Regular
+    // state — hidden Rollover/Pressed layers are skipped). The arrowAsset/arrowColor
+    // fallbacks stay for older importers and hover/press state recolouring. The Label
+    // stays a bound TMP (caption text). Options/popup handled in a later phase.
+    const partTrees: Record<string, ElementSubtree> = {};
+    const bgTree = await captureSubtree(bg);
+    if (bgTree) partTrees.Background = bgTree;
+    const arrowTree = await captureSubtree(arrow);
+    if (arrowTree) partTrees.Arrow = arrowTree;
     return { shape: shape ?? undefined, options, value, label: textOf(childByName(master, 'Label')),
       optionShape, popupShape, optionRolloverShape, optionPressedShape, optionSelectedShape,
       optionRollover, optionPressed, optionHeight,
@@ -1270,6 +1283,7 @@ export async function exportDesign(
       arrowAsset, arrowRolloverAsset, arrowPressedAsset,
       arrowColor, arrowRollover, arrowPressed,
       bgRollover, bgPressed,
+      partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       parts: partsOf(master, ['Background', 'Label', 'Arrow']) };
   }
 
@@ -1364,6 +1378,7 @@ export async function exportDesign(
         label: i.label,
         placeholder: i.placeholder,
         value: i.value,
+        partTrees: i.partTrees,
         parts: i.parts,
       });
     } else if (ref.kind === 'dropdown') {
@@ -1381,6 +1396,7 @@ export async function exportDesign(
         arrowAsset: d.arrowAsset, arrowRolloverAsset: d.arrowRolloverAsset, arrowPressedAsset: d.arrowPressedAsset,
         arrowColor: d.arrowColor, arrowRollover: d.arrowRollover, arrowPressed: d.arrowPressed,
         bgRollover: d.bgRollover, bgPressed: d.bgPressed,
+        partTrees: d.partTrees,
         parts: d.parts,
       });
     } else if (ref.kind === 'list') {

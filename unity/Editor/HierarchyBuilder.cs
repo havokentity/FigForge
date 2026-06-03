@@ -1616,6 +1616,23 @@ namespace FigForge
             return built != null ? built.GetComponentInChildren<Graphic>(true) : null;
         }
 
+        // A control Background that doubles as the click target (input/dropdown): render
+        // its visuals (full subtree when present, else the flat shape) and return a
+        // raycastable graphic spanning the whole background. With a subtree, the visuals
+        // are render-only and a transparent full-bleed Image on the container catches
+        // clicks — so the entire background is clickable regardless of subtree shape.
+        static Graphic BuildClickableBackground(GameObject bgGo, CanonicalRef c, BuildContext ctx)
+        {
+            if (HasPartTree(c, "Background"))
+            {
+                BuildPartSubtree(bgGo, c.partTrees["Background"], ctx);
+                var img = bgGo.AddComponent<Image>();
+                img.color = new Color(0, 0, 0, 0);
+                return img;
+            }
+            return AddShapeGraphic(bgGo, c.shape, ctx);
+        }
+
         static void MatchTextWeight(TMP_Text tmp)
         {
             if (tmp == null) return;
@@ -1720,9 +1737,9 @@ namespace FigForge
 
             var bgGo = NewRect("Background", go.transform);
             AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
-            var bg = AddShapeGraphic(bgGo, c.shape, ctx);
+            var bg = BuildClickableBackground(bgGo, c, ctx);
             input.targetGraphic = bg;
-            MakeClickTarget(bg, ctx);
+            MakeClickTarget(bg, ctx); // the background IS the click target here
 
             var area = NewRect("Text Area", go.transform);
             var art = area.GetComponent<RectTransform>();
@@ -1784,14 +1801,23 @@ namespace FigForge
 
             var bgGo = NewRect("Background", go.transform);
             AnchorPart(bgGo.GetComponent<RectTransform>(), c.parts, "Background");
-            var bg = AddShapeGraphic(bgGo, c.shape, ctx);
+            var bg = BuildClickableBackground(bgGo, c, ctx);
             dd.targetGraphic = bg;
             MakeClickTarget(bg, ctx);
             ApplyDropdownBackgroundStates(bg, c, ctx);
 
             var caption = AddControlLabel(go, "Label", c.value, c.parts, "Label", ctx, TextAlignmentOptions.MidlineLeft);
             dd.captionText = caption;
-            if (c.parts != null && c.parts.ContainsKey("Arrow"))
+            if (HasPartTree(c, "Arrow"))
+            {
+                // Full render-only arrow subtree (the Regular state, with its nested
+                // vectors/shapes). Hover/press recolouring is best-effort and skipped
+                // for a composite arrow (the flat arrowColor path handles the simple case).
+                var arrowGo = NewRect("Arrow", go.transform);
+                AnchorPart(arrowGo.GetComponent<RectTransform>(), c.parts, "Arrow");
+                BuildPartSubtree(arrowGo, c.partTrees["Arrow"], ctx);
+            }
+            else if (c.parts != null && c.parts.ContainsKey("Arrow"))
             {
                 if (!string.IsNullOrEmpty(c.arrowAsset))
                 {
@@ -2240,10 +2266,11 @@ namespace FigForge
         //      the whole Figma component frame is clickable, not just the small box.
         // v23: canonical part visuals render as full Figma subtrees (render-only) when
         //      partTrees present — nested children/fills/strokes/shadows/vectors/masks/text.
+        // v24: subtree parity extended to dropdown Background+Arrow and input Background.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 23;
+        internal const int CanonicalSchema = 24;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
