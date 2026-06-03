@@ -36,6 +36,15 @@ namespace FigForge
         public Color itemRollover = Color.white;
         public bool hasItemRollover;
 
+        // Rich-row mode: a cloned template (the captured Item subtree) + per-state row fills.
+        public GameObject rowTemplate;
+        public FigForgeFill rowRegular = FigForgeFill.Solid(Color.white);
+        public FigForgeFill rowRollover = FigForgeFill.Solid(Color.white);
+        public FigForgeFill rowPressed = FigForgeFill.Solid(Color.white);
+        public FigForgeFill rowSelected = FigForgeFill.Solid(Color.white);
+        public bool rowHasRollover, rowHasPressed, rowHasSelected;
+        int _selected = -1;
+
         readonly List<string> _items = new List<string>();
 
         public IReadOnlyList<string> Items => _items;
@@ -105,7 +114,59 @@ namespace FigForge
                 CreateRow(i, labelPrefix + " " + (i + 1));
         }
 
+        // Single-select: mark `index` selected, clear the rest.
+        public void Select(int index)
+        {
+            _selected = index;
+            if (content == null) return;
+            for (int i = 0; i < content.childCount; i++)
+            {
+                var r = content.GetChild(i).GetComponent<FigForgeListRow>();
+                if (r != null) r.SetSelected(r.index == index);
+            }
+        }
+
+        public int SelectedIndex => _selected;
+
         void CreateRow(int index, string label)
+        {
+            if (rowTemplate != null) { CreateTemplateRow(index, label); return; }
+            CreateStyledRow(index, label);
+        }
+
+        // Rich row: clone the captured Item subtree, bind the Title, wire state colours +
+        // single-select via FigForgeListRow, and re-enable the HitArea as the click target.
+        void CreateTemplateRow(int index, string label)
+        {
+            var row = Instantiate(rowTemplate, content);
+            row.name = "Item " + (index + 1);
+            row.SetActive(true);
+            var le = row.GetComponent<LayoutElement>() ?? row.AddComponent<LayoutElement>();
+            le.minHeight = rowHeight; le.preferredHeight = rowHeight;
+
+            var titleT = FindByName(row.transform, "Title");
+            if (titleT != null) { var tmp = titleT.GetComponent<TMP_Text>(); if (tmp != null) tmp.text = label ?? ""; }
+
+            var hitT = FindByName(row.transform, "HitArea");
+            if (hitT != null) { var hg = hitT.GetComponent<Graphic>(); if (hg != null) hg.raycastTarget = true; }
+
+            var bgT = FindByName(row.transform, "Regular");
+            var bg = bgT != null ? bgT.GetComponent<Graphic>() : null;
+
+            var fr = row.AddComponent<FigForgeListRow>();
+            fr.owner = this; fr.index = index;
+            fr.regular = rowRegular; fr.rollover = rowRollover; fr.pressed = rowPressed; fr.selected = rowSelected;
+            fr.hasRollover = rowHasRollover; fr.hasPressed = rowHasPressed; fr.hasSelected = rowHasSelected;
+            if (bg != null) fr.Bind(bg);
+        }
+
+        static Transform FindByName(Transform t, string name)
+        {
+            foreach (var rt in t.GetComponentsInChildren<Transform>(true)) if (rt.name == name) return rt;
+            return null;
+        }
+
+        void CreateStyledRow(int index, string label)
         {
             var row = NewRect("Item " + (index + 1), content);
             var le = row.AddComponent<LayoutElement>();

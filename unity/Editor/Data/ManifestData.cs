@@ -189,7 +189,10 @@ namespace FigForge
         public List<string> items;        // list: the text of each row (first row is the template)
         public CanonicalShape itemShape;  // list: the row background shape (from the 'Item' template's Regular)
         public float[] itemRollover;      // list: the row hover colour (from the 'Item' template's Rollover)
+        public float[] itemPressed;       // list: the row pressed colour (from the 'Item' template's Pressed)
+        public float[] itemSelected;      // list: the selected-row colour (from the 'Item' template's Selected)
         public float itemHeight;          // list: row height in Figma px (drives Unity row sizing)
+        public float headerHeight;        // list: header height in Figma px (0 = no header)
         public int count;                 // list: number of rows to generate
         public CanonicalShape optionShape; // dropdown: option row Regular shape
         public CanonicalShape popupShape;  // dropdown popup shell/background (Options frame)

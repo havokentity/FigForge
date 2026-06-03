@@ -2036,16 +2036,30 @@ namespace FigForge
             }
             else bg = AddShapeGraphic(go, c.shape, ctx);
 
+            // Optional Header — a full render-only subtree pinned to the top; the scroll
+            // viewport is inset below it so rows don't slide under the header.
+            float headerH = c.headerHeight > 0.01f ? c.headerHeight * sf : 0f;
+            if (headerH > 0f && HasPartTree(c, "Header"))
+            {
+                var headerGo = NewRect("Header", go.transform);
+                var hrt = headerGo.GetComponent<RectTransform>();
+                hrt.anchorMin = new Vector2(0, 1); hrt.anchorMax = new Vector2(1, 1); hrt.pivot = new Vector2(0.5f, 1);
+                hrt.anchoredPosition = Vector2.zero; hrt.sizeDelta = new Vector2(0, headerH);
+                BuildPartSubtree(headerGo, c.partTrees["Header"], ctx);
+            }
+
             var scroll = go.AddComponent<ScrollRect>();
             scroll.horizontal = false; scroll.vertical = true;
             scroll.movementType = ScrollRect.MovementType.Elastic; scroll.scrollSensitivity = 20f;
 
             var viewport = NewRect("Viewport", go.transform);
-            Stretch(viewport.GetComponent<RectTransform>());
+            var vrt = viewport.GetComponent<RectTransform>();
+            vrt.anchorMin = Vector2.zero; vrt.anchorMax = Vector2.one;
+            vrt.offsetMin = Vector2.zero; vrt.offsetMax = new Vector2(0, -headerH); // inset below the header
             if (viewport.GetComponent<CanvasRenderer>() == null) viewport.AddComponent<CanvasRenderer>();
             viewport.AddComponent<Image>().color = new Color(1, 1, 1, 0.004f); // near-invisible drag/clip target
             viewport.AddComponent<RectMask2D>();
-            scroll.viewport = viewport.GetComponent<RectTransform>();
+            scroll.viewport = vrt;
 
             var content = NewRect("Content", viewport.transform);
             var crt = content.GetComponent<RectTransform>();
@@ -2062,6 +2076,22 @@ namespace FigForge
             string labelTmpl = string.IsNullOrEmpty(c.label) ? "Item" : c.label;
             var list = go.AddComponent<FigForgeList>();
             list.Configure(crt, rowH, labelTmpl, ToListRowStyle(c.itemShape, sf), hover, hasHover);
+
+            // Rich rows: build the captured Item subtree once as a hidden template that
+            // FigForgeList clones per row (icon/title/subtitle/accessory/divider), with
+            // per-state row fills (Regular/Rollover/Pressed/Selected) + single-select.
+            if (HasPartTree(c, "Item"))
+            {
+                var tpl = NewRect("RowTemplate", go.transform);
+                Stretch(tpl.GetComponent<RectTransform>());
+                BuildPartSubtree(tpl, c.partTrees["Item"], ctx);
+                tpl.SetActive(false); // never shown directly; cloned per row at build/runtime
+                list.rowTemplate = tpl;
+                list.rowRegular = ToListRowStyle(c.itemShape, sf).fill;
+                list.rowRollover = FigForgeFill.Solid(hover); list.rowHasRollover = hasHover;
+                list.rowPressed = FigForgeFill.Solid(c.itemPressed != null ? ToColor(c.itemPressed) : hover); list.rowHasPressed = c.itemPressed != null;
+                list.rowSelected = FigForgeFill.Solid(c.itemSelected != null ? ToColor(c.itemSelected) : hover); list.rowHasSelected = c.itemSelected != null;
+            }
             list.CreatePreviewRows(count);
 
             var bind = go.AddComponent<FigForgeBindings>(); bind.background = bg;
@@ -2277,10 +2307,12 @@ namespace FigForge
         //      partTrees present — nested children/fills/strokes/shadows/vectors/masks/text.
         // v24: subtree parity extended to dropdown Background+Arrow and input Background.
         // v25: subtree parity extended to the list container Background.
+        // v26: list rows clone the rich Item subtree (icon/title/subtitle/accessory) with
+        //      Regular/Rollover/Pressed/Selected states + single-select, and a pinned Header.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 25;
+        internal const int CanonicalSchema = 26;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

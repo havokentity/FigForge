@@ -207,7 +207,10 @@ export interface CanonicalRef {
   items?: string[];         // list: the text of each row (first row is the template)
   itemShape?: ButtonShape;  // list: the row background shape (from the 'Item' template's Regular)
   itemRollover?: RGBA;      // list: the row hover colour (from the 'Item' template's Rollover)
+  itemPressed?: RGBA;       // list: the row pressed colour (from the 'Item' template's Pressed)
+  itemSelected?: RGBA;      // list: the selected-row colour (from the 'Item' template's Selected)
   itemHeight?: number;      // list: row height in Figma px (drives Unity row sizing)
+  headerHeight?: number;    // list: header height in Figma px (0/absent = no header)
   count?: number;           // list: number of rows to generate (derived from list height ÷ row height)
   // dropdown: the option row is its own component (DropdownOption) with states; these
   // drive the TMP_Dropdown item template (options[] above are the option texts)

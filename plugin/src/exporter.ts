@@ -1293,20 +1293,38 @@ export async function exportDesign(
   async function captureList(master: SceneNode) {
     const bg = childByName(master, 'Background');
     const shape = bg ? await shapeOfWithAsset(bg) : undefined;
-    const item = childByName(master, 'Item');
-    if (!item) return null;
-    const reg = childByName(item, 'Regular') ?? item;
+    const itemNode = childByName(master, 'Item');
+    if (!itemNode) return null;
+    // Capture the ROW from its master (generic Title/Subtitle), not a placed instance.
+    const itemMaster = itemNode.type === 'INSTANCE'
+      ? (((itemNode as InstanceNode).mainComponent as SceneNode | null) ?? itemNode)
+      : itemNode;
+    const reg = childByName(itemMaster, 'Regular') ?? itemMaster;
     const itemShape = await shapeOfWithAsset(reg) ?? undefined;
-    const rollNode = childByName(item, 'Rollover');
+    const rollNode = childByName(itemMaster, 'Rollover');
     const itemRollover = rollNode ? (stateSolid(rollNode) ?? undefined) : undefined;
-    const itemHeight = (item as unknown as { height?: number }).height ?? 44;
-    // Container Background as a full render-only subtree. Item ROWS stay on the flat
-    // itemShape path (FigForgeList clones a styled row, not a subtree).
+    const pressNode = childByName(itemMaster, 'Pressed');
+    const itemPressed = pressNode ? (stateSolid(pressNode) ?? undefined) : undefined;
+    const selNode = childByName(itemMaster, 'Selected');
+    const itemSelected = selNode ? (stateSolid(selNode) ?? undefined) : undefined;
+    const itemHeight = (itemNode as unknown as { height?: number }).height ?? 44;
+    const rowLabel = textOf(childByName(itemMaster, 'Title')) ?? textOf(childByName(itemMaster, 'Label'));
+
+    // Full render-only subtrees: the container Background, the rich row TEMPLATE (Icon/
+    // Title/Subtitle/Accessory/Divider — hidden state layers are skipped), and the Header.
+    const headerNode = childByName(master, 'Header');
+    const headerHeight = headerNode ? ((headerNode as unknown as { height?: number }).height ?? 0) : 0;
+    const partTrees: Record<string, ElementSubtree> = {};
     const bgTree = await captureSubtree(bg);
-    // Rich row template renames Label→Title; keep Label as a fallback for older forms.
-    const rowLabel = textOf(childByName(item, 'Title')) ?? textOf(childByName(item, 'Label'));
-    return { shape: shape ?? undefined, itemShape, itemRollover, itemHeight, label: rowLabel,
-      partTrees: bgTree ? { Background: bgTree } : undefined,
+    if (bgTree) partTrees.Background = bgTree;
+    const itemTree = await captureSubtree(itemMaster);
+    if (itemTree) partTrees.Item = itemTree;
+    const headerTree = await captureSubtree(headerNode);
+    if (headerTree) partTrees.Header = headerTree;
+
+    return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
+      itemHeight, headerHeight, label: rowLabel,
+      partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       parts: partsOf(master, ['Background']) };
   }
 
@@ -1410,8 +1428,11 @@ export async function exportDesign(
       if (l) {
         const ih = l.itemHeight || 44;
         const instH = (p.node as unknown as { height?: number }).height || ih;
-        const count = Math.max(1, Math.round(instH / ih)); // resize the list = set its length
-        controlByNode.set(p.node.id, { shape: l.shape, itemShape: l.itemShape, itemRollover: l.itemRollover, itemHeight: ih, count, label: l.label, partTrees: l.partTrees, parts: l.parts });
+        // rows fill the height below the header → resize the list = set its length
+        const count = Math.max(1, Math.round((instH - (l.headerHeight || 0)) / ih));
+        controlByNode.set(p.node.id, { shape: l.shape, itemShape: l.itemShape, itemRollover: l.itemRollover,
+          itemPressed: l.itemPressed, itemSelected: l.itemSelected, itemHeight: ih, headerHeight: l.headerHeight,
+          count, label: l.label, partTrees: l.partTrees, parts: l.parts });
       }
     }
   }
