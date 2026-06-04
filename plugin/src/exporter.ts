@@ -400,6 +400,24 @@ function isIconOnlyContainer(node: SceneNode): boolean {
   return ok && vectorLeaves > 0;
 }
 
+// A paint Unity can't reconstruct as a solid SDF panel (image/gradient/video) —
+// such a node must stay rasterized to a PNG. Solid (or no) paint is SDF-safe.
+function paintNeedsRaster(p: Paint): boolean {
+  if (!p || (p as { visible?: boolean }).visible === false) return false;
+  return p.type === 'IMAGE' || p.type === 'VIDEO' || p.type.startsWith('GRADIENT_');
+}
+
+// True when a node's fills+strokes are all solid (no image/gradient): Unity can
+// rebuild it as a crisp SDF FigForgeRoundedRect (or a tintable flat Image) instead
+// of baking a PNG. Used to keep canonical control part layers procedural.
+function isSdfSafe(node: SceneNode): boolean {
+  const fills = 'fills' in node && Array.isArray((node as GeometryMixin).fills)
+    ? ((node as GeometryMixin).fills as Paint[]) : [];
+  const strokes = 'strokes' in node && Array.isArray((node as GeometryMixin).strokes)
+    ? ((node as GeometryMixin).strokes as Paint[]) : [];
+  return !fills.some(paintNeedsRaster) && !strokes.some(paintNeedsRaster);
+}
+
 function interactive(name: string): boolean {
   const n = name.toLowerCase();
   return INTERACTIVE_HINTS.some((h) => n.includes(h));
@@ -1080,7 +1098,10 @@ export async function exportDesign(
   // anchored container; descendants keep their Figma-relative transforms. Reuses the
   // same per-node builders (buildStyle/buildText/buildVectorDrawing/mapTransform) as the
   // main pipeline, so fidelity matches a normal element exactly.
-  async function captureSubtree(rootNode: SceneNode | undefined): Promise<ElementSubtree | undefined> {
+  // `structuralIds`: node ids to keep procedural (carry full style for Unity to
+  // rebuild as SDF / a tintable flat Image) instead of rasterizing to a PNG —
+  // e.g. a canonical control's solid state layers, icon, and rounded background.
+  async function captureSubtree(rootNode: SceneNode | undefined, structuralIds?: Set<string>): Promise<ElementSubtree | undefined> {
     if (!rootNode || (rootNode as unknown as { visible?: boolean }).visible === false) return undefined;
 
     type Sub = { node: SceneNode; parentId: string | null; exportable: boolean; children: SceneNode[] };
@@ -1090,7 +1111,8 @@ export async function exportDesign(
       if (excludedIds.has(node.id)) return;
       // A part is plain visuals; never recurse into a nested canonical control.
       const isCanon = node.id !== rootNode.id && !!detectCanonical(node);
-      const exportable = !isCanon && (forcedPngIds.has(node.id) || isExportable(node));
+      const keepStructural = !!structuralIds && structuralIds.has(node.id);
+      const exportable = !isCanon && !keepStructural && (forcedPngIds.has(node.id) || isExportable(node));
       const children: SceneNode[] = !isCanon && 'children' in node
         ? ((node as ChildrenMixin).children.slice() as SceneNode[]).filter(
             (c) => (c as unknown as { visible?: boolean }).visible !== false)
@@ -1325,12 +1347,30 @@ export async function exportDesign(
     // Title/Subtitle/Accessory/Divider — hidden state layers are skipped), and the Header.
     const headerNode = childByName(master, 'Header');
     const headerHeight = headerNode ? ((headerNode as unknown as { height?: number }).height ?? 0) : 0;
+
+    // Keep the solid canonical part layers procedural (not baked to PNG): the row's
+    // state backgrounds + Icon + Divider, the Header divider, and the container
+    // Background. Then Unity rebuilds them via the SDF FigForgeRoundedRect path —
+    // crisp at any size — and the flat row Regular stays a tintable Image so
+    // FigForgeListRow's per-state recolour works.
+    const STRUCTURAL_NAMES = new Set(['Regular', 'Rollover', 'Pressed', 'Selected', 'Icon', 'Divider']);
+    const collectStructural = (root: SceneNode): Set<string> => {
+      const ids = new Set<string>();
+      const walk = (n: SceneNode): void => {
+        if (STRUCTURAL_NAMES.has(n.name) && isSdfSafe(n)) ids.add(n.id);
+        if ('children' in n) for (const c of (n as ChildrenMixin).children as SceneNode[]) walk(c);
+      };
+      walk(root);
+      return ids;
+    };
+    const bgStructuralIds = bg && isSdfSafe(bg) ? new Set([bg.id]) : undefined;
+
     const partTrees: Record<string, ElementSubtree> = {};
-    const bgTree = await captureSubtree(bg);
+    const bgTree = await captureSubtree(bg, bgStructuralIds);
     if (bgTree) partTrees.Background = bgTree;
-    const itemTree = await captureSubtree(itemMaster);
+    const itemTree = await captureSubtree(itemMaster, collectStructural(itemMaster));
     if (itemTree) partTrees.Item = itemTree;
-    const headerTree = await captureSubtree(headerNode);
+    const headerTree = await captureSubtree(headerNode, headerNode ? collectStructural(headerNode) : undefined);
     if (headerTree) partTrees.Header = headerTree;
 
     return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,

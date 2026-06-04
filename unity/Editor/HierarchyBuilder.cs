@@ -2320,10 +2320,14 @@ namespace FigForge
         // v26: list rows clone the rich Item subtree (icon/title/subtitle/accessory) with
         //      Regular/Rollover/Pressed/Selected states + single-select, and a pinned Header.
         // v27: list rows come from captured per-row items (title+subtitle), bound per row.
+        // v28: canonical list part layers (row state backgrounds, Icon, container
+        //      Background) stay procedural instead of baking to PNG — Unity rebuilds
+        //      them via the SDF FigForgeRoundedRect path; the flat row Regular is a
+        //      tintable Image so FigForgeListRow's per-state recolour applies.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 27;
+        internal const int CanonicalSchema = 28;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
