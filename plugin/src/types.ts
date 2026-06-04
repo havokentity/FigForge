@@ -179,6 +179,13 @@ export interface CanonicalStateShapes {
   pressed?: ButtonShape;
 }
 
+/** One row's data in a canonical List — the analogue of a dropdown's option string,
+ *  but two-line (the rich row template has a Title + Subtitle). */
+export interface ListItemData {
+  title: string;
+  subtitle?: string;
+}
+
 export interface CanonicalRef {
   kind: CanonicalKind;
   ref: string; // canonical definition name to instantiate in Unity
@@ -204,7 +211,8 @@ export interface CanonicalRef {
   instanceStateShapes?: CanonicalStateShapes; // THIS instance's full state styles when they differ
   // --- control-specific (toggle/radio/dropdown/list) ---
   checkShape?: ButtonShape; // toggle/radio: the "on" indicator (UGUI Toggle.graphic), shown when value=on
-  items?: string[];         // list: the text of each row (first row is the template)
+  items?: string[];         // list: legacy row texts (kept for back-compat; prefer listItems)
+  listItems?: ListItemData[]; // list: per-row data (title + optional subtitle), the rows to render
   itemShape?: ButtonShape;  // list: the row background shape (from the 'Item' template's Regular)
   itemRollover?: RGBA;      // list: the row hover colour (from the 'Item' template's Rollover)
   itemPressed?: RGBA;       // list: the row pressed colour (from the 'Item' template's Pressed)

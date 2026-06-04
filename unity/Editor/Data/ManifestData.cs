@@ -186,7 +186,8 @@ namespace FigForge
         public CanonicalStateShapes instanceStateShapes; // THIS instance's full state styles when they differ
         // --- control-specific (toggle/radio/dropdown/list) ---
         public CanonicalShape checkShape; // toggle/radio: the "on" indicator (Toggle.graphic), shown when value=on
-        public List<string> items;        // list: the text of each row (first row is the template)
+        public List<string> items;        // list: legacy row texts (back-compat; prefer listItems)
+        public List<ListItemData> listItems; // list: per-row data (title + optional subtitle)
         public CanonicalShape itemShape;  // list: the row background shape (from the 'Item' template's Regular)
         public float[] itemRollover;      // list: the row hover colour (from the 'Item' template's Rollover)
         public float[] itemPressed;       // list: the row pressed colour (from the 'Item' template's Pressed)
@@ -222,6 +223,13 @@ namespace FigForge
     {
         public string target;            // destination screen name (sanitized)
         public string trigger;           // e.g. "click"
+    }
+
+    /// <summary>One row's data in a canonical List (two-line: title + optional subtitle).</summary>
+    public class ListItemData
+    {
+        public string title;
+        public string subtitle;
     }
 
     public class AssetBounds

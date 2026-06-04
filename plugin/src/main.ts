@@ -889,31 +889,52 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
   sel.visible = false; sel.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(sel);
 
   const PAD = 14, ICON = 40;
-  // Leading icon slot — a rounded accent square placeholder; swap/skin freely.
-  const icon = solidRect('Icon', ICON, ICON, 10, { r: 0.49, g: 0.36, b: 1 });
-  icon.x = PAD; icon.y = Math.round((ROW - ICON) / 2);
-  icon.constraints = { horizontal: 'MIN', vertical: 'CENTER' }; item.appendChild(icon);
+  // Row content in a horizontal AUTO-LAYOUT frame: Icon | TextCol(grows) | Accessory.
+  // Because it's auto-layout, deleting the Icon reflows the Title/Subtitle to the left
+  // automatically — the icon-less version "just works" with no manual repositioning.
+  const content = figma.createFrame();
+  content.name = 'Content'; content.fills = []; content.clipsContent = false;
+  content.x = 0; content.y = 0; content.resize(W, ROW);
+  content.layoutMode = 'HORIZONTAL';
+  content.primaryAxisSizingMode = 'FIXED';
+  content.counterAxisSizingMode = 'FIXED';
+  content.primaryAxisAlignItems = 'MIN';
+  content.counterAxisAlignItems = 'CENTER';
+  content.itemSpacing = 12;
+  content.paddingLeft = PAD; content.paddingRight = PAD;
+  content.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  item.appendChild(content);
 
-  // Two-line Title + Subtitle.
-  const tx = PAD + ICON + 12;
+  // Leading icon slot — fixed size; delete it and the text reflows left.
+  const icon = solidRect('Icon', ICON, ICON, 10, { r: 0.49, g: 0.36, b: 1 });
+  content.appendChild(icon); icon.layoutGrow = 0;
+
+  // Title + Subtitle in a vertical column that grows to fill the remaining width.
+  const textCol = figma.createFrame();
+  textCol.name = 'TextCol'; textCol.fills = [];
+  textCol.layoutMode = 'VERTICAL';
+  textCol.primaryAxisSizingMode = 'FIXED';
+  textCol.counterAxisSizingMode = 'FIXED';
+  textCol.primaryAxisAlignItems = 'CENTER';
+  textCol.counterAxisAlignItems = 'MIN';
+  textCol.itemSpacing = 2;
+  content.appendChild(textCol); textCol.layoutGrow = 1; textCol.layoutAlign = 'STRETCH';
+
   const title = figma.createText();
   title.fontName = titleFont; title.name = 'Title'; title.characters = 'Title'; title.fontSize = 15;
-  title.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }]; title.textAlignVertical = 'CENTER';
-  item.appendChild(title); title.x = tx; title.y = Math.round(ROW / 2 - title.height - 1);
-  title.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+  title.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+  textCol.appendChild(title); title.textAutoResize = 'HEIGHT'; title.layoutAlign = 'STRETCH';
   const sub = figma.createText();
   sub.fontName = font; sub.name = 'Subtitle'; sub.characters = 'Subtitle'; sub.fontSize = 12;
-  sub.fills = [{ type: 'SOLID', color: { r: 0.5, g: 0.5, b: 0.55 } }]; sub.textAlignVertical = 'CENTER';
-  item.appendChild(sub); sub.x = tx; sub.y = Math.round(ROW / 2 + 1);
-  sub.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+  sub.fills = [{ type: 'SOLID', color: { r: 0.5, g: 0.5, b: 0.55 } }];
+  textCol.appendChild(sub); sub.textAutoResize = 'HEIGHT'; sub.layoutAlign = 'STRETCH';
 
-  // Trailing accessory — a chevron-right vector (skin/replace freely).
+  // Trailing accessory — a chevron-right vector (skin/replace freely); fixed size.
   const svg = figma.createNodeFromSvg(
     '<svg xmlns="http://www.w3.org/2000/svg" width="7" height="12" viewBox="0 0 7 12"><path d="M0 0 L7 6 L0 12 Z" fill="#000000"/></svg>');
-  const acc = figma.flatten([svg], item);
+  const acc = figma.flatten([svg], content);
   acc.name = 'Accessory'; acc.fills = [{ type: 'SOLID', color: { r: 0.6, g: 0.6, b: 0.65 } }]; acc.strokes = [];
-  acc.x = W - PAD - acc.width; acc.y = Math.round((ROW - acc.height) / 2);
-  acc.constraints = { horizontal: 'MAX', vertical: 'CENTER' };
+  acc.layoutGrow = 0;
 
   // Bottom divider separator between rows.
   const div = solidRect('Divider', W - PAD * 2, 1, 0, { r: 0.9, g: 0.9, b: 0.93 });

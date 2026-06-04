@@ -1310,6 +1310,17 @@ export async function exportDesign(
     const itemHeight = (itemNode as unknown as { height?: number }).height ?? 44;
     const rowLabel = textOf(childByName(itemMaster, 'Title')) ?? textOf(childByName(itemMaster, 'Label'));
 
+    // Per-row data from the placed 'Item' instances (their Title/Subtitle overrides) —
+    // the list's analogue of a dropdown's options. Drives the rows Unity renders.
+    const itemInstances = ('children' in master ? ((master as ChildrenMixin).children as SceneNode[]) : [])
+      .filter((n) => n.name === 'Item');
+    const listItems = itemInstances
+      .map((it) => ({
+        title: textOf(childByName(it, 'Title')) ?? textOf(childByName(it, 'Label')) ?? '',
+        subtitle: textOf(childByName(it, 'Subtitle')) ?? undefined,
+      }))
+      .filter((r) => r.title !== '' || r.subtitle);
+
     // Full render-only subtrees: the container Background, the rich row TEMPLATE (Icon/
     // Title/Subtitle/Accessory/Divider — hidden state layers are skipped), and the Header.
     const headerNode = childByName(master, 'Header');
@@ -1324,6 +1335,7 @@ export async function exportDesign(
 
     return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
       itemHeight, headerHeight, label: rowLabel,
+      listItems: listItems.length ? listItems : undefined,
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       parts: partsOf(master, ['Background']) };
   }
@@ -1428,11 +1440,14 @@ export async function exportDesign(
       if (l) {
         const ih = l.itemHeight || 44;
         const instH = (p.node as unknown as { height?: number }).height || ih;
-        // rows fill the height below the header → resize the list = set its length
-        const count = Math.max(1, Math.round((instH - (l.headerHeight || 0)) / ih));
+        // rows fill the height below the header → resize the list = set its length.
+        // When the form lists explicit items, that count wins.
+        const count = l.listItems && l.listItems.length
+          ? l.listItems.length
+          : Math.max(1, Math.round((instH - (l.headerHeight || 0)) / ih));
         controlByNode.set(p.node.id, { shape: l.shape, itemShape: l.itemShape, itemRollover: l.itemRollover,
           itemPressed: l.itemPressed, itemSelected: l.itemSelected, itemHeight: ih, headerHeight: l.headerHeight,
-          count, label: l.label, partTrees: l.partTrees, parts: l.parts });
+          count, label: l.label, listItems: l.listItems, partTrees: l.partTrees, parts: l.parts });
       }
     }
   }

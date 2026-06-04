@@ -2092,7 +2092,17 @@ namespace FigForge
                 list.rowPressed = FigForgeFill.Solid(c.itemPressed != null ? ToColor(c.itemPressed) : hover); list.rowHasPressed = c.itemPressed != null;
                 list.rowSelected = FigForgeFill.Solid(c.itemSelected != null ? ToColor(c.itemSelected) : hover); list.rowHasSelected = c.itemSelected != null;
             }
-            list.CreatePreviewRows(count);
+
+            // Populate rows from the captured per-row data when present; else generate
+            // `count` placeholder rows. Runtime code can replace them via list.SetItems.
+            if (c.listItems != null && c.listItems.Count > 0)
+            {
+                var rows = new List<FigForgeListItem>(c.listItems.Count);
+                foreach (var li in c.listItems)
+                    if (li != null) rows.Add(new FigForgeListItem(li.title, li.subtitle));
+                list.SetItems(rows);
+            }
+            else list.CreatePreviewRows(count);
 
             var bind = go.AddComponent<FigForgeBindings>(); bind.background = bg;
             return go;
@@ -2309,10 +2319,11 @@ namespace FigForge
         // v25: subtree parity extended to the list container Background.
         // v26: list rows clone the rich Item subtree (icon/title/subtitle/accessory) with
         //      Regular/Rollover/Pressed/Selected states + single-select, and a pinned Header.
+        // v27: list rows come from captured per-row items (title+subtitle), bound per row.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 26;
+        internal const int CanonicalSchema = 27;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

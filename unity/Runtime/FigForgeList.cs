@@ -12,6 +12,17 @@ using UnityEngine.UI;
 
 namespace FigForge
 {
+    /// <summary>One row's data in a FigForgeList — a two-line row (Title + optional
+    /// Subtitle). The list's analogue of a dropdown option string.</summary>
+    [System.Serializable]
+    public struct FigForgeListItem
+    {
+        public string title;
+        public string subtitle;
+        public FigForgeListItem(string title, string subtitle = null) { this.title = title; this.subtitle = subtitle; }
+        public override string ToString() => title;
+    }
+
     [System.Serializable]
     public class FigForgeListRowStyle
     {
@@ -45,34 +56,50 @@ namespace FigForge
         public bool rowHasRollover, rowHasPressed, rowHasSelected;
         int _selected = -1;
 
-        readonly List<string> _items = new List<string>();
+        readonly List<FigForgeListItem> _items = new List<FigForgeListItem>();
 
-        public IReadOnlyList<string> Items => _items;
+        public IReadOnlyList<FigForgeListItem> Items => _items;
 
-        public void SetItems(IList<string> items)
+        // Set the rows from structured items (title + subtitle).
+        public void SetItems(IList<FigForgeListItem> items)
         {
             _items.Clear();
-            if (items != null)
-                for (int i = 0; i < items.Count; i++)
-                    _items.Add(items[i] ?? "");
+            if (items != null) _items.AddRange(items);
             Rebuild();
         }
 
-        public void SetItems(IEnumerable<string> items)
+        public void SetItems(IEnumerable<FigForgeListItem> items)
         {
             _items.Clear();
-            if (items != null)
-                foreach (var item in items)
-                    _items.Add(item ?? "");
+            if (items != null) _items.AddRange(items);
             Rebuild();
         }
 
-        public void SetItems(IEnumerable items)
+        // Title-only convenience overloads (subtitle blank).
+        public void SetItems(IList<string> titles)
         {
             _items.Clear();
-            if (items != null)
-                foreach (var item in items)
-                    _items.Add(item != null ? item.ToString() : "");
+            if (titles != null)
+                for (int i = 0; i < titles.Count; i++)
+                    _items.Add(new FigForgeListItem(titles[i] ?? ""));
+            Rebuild();
+        }
+
+        public void SetItems(IEnumerable<string> titles)
+        {
+            _items.Clear();
+            if (titles != null)
+                foreach (var t in titles)
+                    _items.Add(new FigForgeListItem(t ?? ""));
+            Rebuild();
+        }
+
+        public void SetItems(IEnumerable titles)
+        {
+            _items.Clear();
+            if (titles != null)
+                foreach (var t in titles)
+                    _items.Add(new FigForgeListItem(t != null ? t.ToString() : ""));
             Rebuild();
         }
 
@@ -111,7 +138,7 @@ namespace FigForge
             ClearRows();
             count = Mathf.Max(0, count);
             for (int i = 0; i < count; i++)
-                CreateRow(i, labelPrefix + " " + (i + 1));
+                CreateRow(i, new FigForgeListItem(labelPrefix + " " + (i + 1)));
         }
 
         // Single-select: mark `index` selected, clear the rest.
@@ -128,15 +155,15 @@ namespace FigForge
 
         public int SelectedIndex => _selected;
 
-        void CreateRow(int index, string label)
+        void CreateRow(int index, FigForgeListItem item)
         {
-            if (rowTemplate != null) { CreateTemplateRow(index, label); return; }
-            CreateStyledRow(index, label);
+            if (rowTemplate != null) { CreateTemplateRow(index, item); return; }
+            CreateStyledRow(index, item);
         }
 
-        // Rich row: clone the captured Item subtree, bind the Title, wire state colours +
-        // single-select via FigForgeListRow, and re-enable the HitArea as the click target.
-        void CreateTemplateRow(int index, string label)
+        // Rich row: clone the captured Item subtree, bind Title + Subtitle, wire state
+        // colours + single-select via FigForgeListRow, re-enable the HitArea click target.
+        void CreateTemplateRow(int index, FigForgeListItem item)
         {
             var row = Instantiate(rowTemplate, content);
             row.name = "Item " + (index + 1);
@@ -145,7 +172,9 @@ namespace FigForge
             le.minHeight = rowHeight; le.preferredHeight = rowHeight;
 
             var titleT = FindByName(row.transform, "Title");
-            if (titleT != null) { var tmp = titleT.GetComponent<TMP_Text>(); if (tmp != null) tmp.text = label ?? ""; }
+            if (titleT != null) { var tmp = titleT.GetComponent<TMP_Text>(); if (tmp != null) tmp.text = item.title ?? ""; }
+            var subT = FindByName(row.transform, "Subtitle");
+            if (subT != null) { var tmp = subT.GetComponent<TMP_Text>(); if (tmp != null) tmp.text = item.subtitle ?? ""; }
 
             var hitT = FindByName(row.transform, "HitArea");
             if (hitT != null) { var hg = hitT.GetComponent<Graphic>(); if (hg != null) hg.raycastTarget = true; }
@@ -166,7 +195,7 @@ namespace FigForge
             return null;
         }
 
-        void CreateStyledRow(int index, string label)
+        void CreateStyledRow(int index, FigForgeListItem item)
         {
             var row = NewRect("Item " + (index + 1), content);
             var le = row.AddComponent<LayoutElement>();
@@ -203,7 +232,7 @@ namespace FigForge
             lrt.offsetMin = new Vector2(16f, 0);
             lrt.offsetMax = new Vector2(-12f, 0);
             var tmp = lblGo.AddComponent<TextMeshProUGUI>();
-            tmp.text = label ?? "";
+            tmp.text = item.title ?? "";
             tmp.alignment = TextAlignmentOptions.MidlineLeft;
             tmp.color = new Color(0.1f, 0.1f, 0.12f);
             tmp.fontSize = 14f;
