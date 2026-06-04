@@ -108,6 +108,13 @@ namespace FigForge
             return string.Join("/", parts.ToArray());
         }
 
+        // Warm the generated SDF graphics so the SceneView shows them crisp right after
+        // import. Done ASYNC: a big page would stall the editor if we built every
+        // gradient texture + dirtied every mesh + forced a canvas rebuild in one tick.
+        // The SDF shaders are SINGLE-VARIANT, so we compile each shader ONCE (not per
+        // rect), then spread the per-rect texture/dirty work across editor frames.
+        const int WarmUpBatchPerTick = 64;
+
         static void WarmUpGeneratedGraphics(GameObject pageRoot)
         {
             if (pageRoot == null) return;
@@ -116,36 +123,50 @@ namespace FigForge
             {
                 if (pageRoot == null) return;
                 var rects = pageRoot.GetComponentsInChildren<FigForgeRoundedRect>(true);
-                for (int i = 0; i < rects.Length; i++)
-                {
-                    var rr = rects[i];
-                    if (rr == null) continue;
-                    _ = rr.mainTexture; // builds/caches gradient textures.
-                    var mat = rr.materialForRendering;
-                    if (mat != null)
-                    {
-                        try { mat.SetPass(0); } catch { /* shader may compile lazily in SceneView */ }
-                    }
-                    rr.SetVerticesDirty();
-                    rr.SetMaterialDirty();
-                }
                 var layered = pageRoot.GetComponentsInChildren<FigForgeLayeredRect>(true);
-                for (int i = 0; i < layered.Length; i++)
+
+                var all = new List<Graphic>(rects.Length + layered.Length);
+                for (int i = 0; i < rects.Length; i++) if (rects[i] != null) all.Add(rects[i]);
+                for (int i = 0; i < layered.Length; i++) if (layered[i] != null) all.Add(layered[i]);
+                if (all.Count == 0) return;
+
+                // One-time shader compile per shader (single variant → first SetPass compiles,
+                // the rest were redundant). Warming the first instance of each type is enough.
+                WarmShaderOnce(rects.Length > 0 ? rects[0] : null);
+                WarmShaderOnce(layered.Length > 0 ? layered[0] : null);
+
+                // Build gradient textures (deduped/cached) + dirty meshes in small batches,
+                // re-scheduling onto the next editor tick — Unity's per-tick canvas update
+                // then rebuilds each batch, so the cost is amortized instead of one stall.
+                int idx = 0;
+                void Step()
                 {
-                    var rr = layered[i];
-                    if (rr == null) continue;
-                    _ = rr.mainTexture;
-                    var mat = rr.materialForRendering;
-                    if (mat != null)
+                    if (pageRoot == null) return;
+                    int end = Mathf.Min(idx + WarmUpBatchPerTick, all.Count);
+                    for (; idx < end; idx++)
                     {
-                        try { mat.SetPass(0); } catch { /* shader may compile lazily in SceneView */ }
+                        var g = all[idx];
+                        if (g == null) continue;
+                        _ = g.mainTexture; // builds/caches the gradient texture (deduped)
+                        g.SetVerticesDirty();
+                        g.SetMaterialDirty();
                     }
-                    rr.SetVerticesDirty();
-                    rr.SetMaterialDirty();
+                    if (idx < all.Count) { EditorApplication.delayCall += Step; return; }
+                    Canvas.ForceUpdateCanvases();
+                    SceneView.RepaintAll();
                 }
-                Canvas.ForceUpdateCanvases();
-                SceneView.RepaintAll();
+                Step();
             };
+        }
+
+        static void WarmShaderOnce(Graphic g)
+        {
+            if (g == null) return;
+            var mat = g.materialForRendering;
+            if (mat != null)
+            {
+                try { mat.SetPass(0); } catch { /* shader may compile lazily in SceneView */ }
+            }
         }
 
         static GameObject BuildElement(ElementData e, Dictionary<string, ElementData> index, Transform parent, BuildContext ctx)
@@ -155,7 +176,7 @@ namespace FigForge
             if (e.canonical != null)
             {
                 string canonicalKind = string.IsNullOrEmpty(e.canonical.kind) ? "button" : e.canonical.kind;
-                var prefab = canonicalKind == "list" ? null : ResolveOrGenerateCanonicalPrefab(e, ctx);
+                var prefab = ResolveOrGenerateCanonicalPrefab(e, ctx);
                 GameObject inst;
                 if (prefab != null)
                 {
@@ -760,7 +781,7 @@ namespace FigForge
             var pressGo = AddSpriteStateChild(go.transform, "Pressed", pr, false);
             var hit = AddHitArea(go.transform, e.canonical.parts);
 
-            var btn = go.AddComponent<Button>();
+            var btn = go.AddComponent<FigForgeButton>();
             btn.targetGraphic = hit;
             btn.transition = Selectable.Transition.None;
 
@@ -781,6 +802,7 @@ namespace FigForge
             // The prefab/definition mirrors the canonical COMPONENT's label font.
             ApplyFont(tmp, e.canonical != null ? e.canonical.defLabelFont : null, ctx);
             MatchTextWeight(tmp);
+            btn.label = tmp;
             return go;
         }
 
@@ -810,7 +832,7 @@ namespace FigForge
             var pressGo = AddShapeStateChild(go.transform, "Pressed", pressShape, e.canonical.parts, ctx, false);
             var hit = AddHitArea(go.transform, e.canonical.parts);
 
-            var btn = go.AddComponent<Button>();
+            var btn = go.AddComponent<FigForgeButton>();
             btn.targetGraphic = hit;
             btn.transition = Selectable.Transition.None;
 
@@ -830,6 +852,7 @@ namespace FigForge
             ConfigureButtonLabelText(tmp);
             ApplyFont(tmp, e.canonical.defLabelFont, ctx);
             MatchTextWeight(tmp);
+            btn.label = tmp;
             return go;
         }
 
@@ -1661,7 +1684,7 @@ namespace FigForge
         {
             var c = e.canonical;
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "Toggle" : e.name, parent);
-            var toggle = go.AddComponent<Toggle>();
+            var toggle = go.AddComponent<FigForgeToggle>();
             toggle.transition = Selectable.Transition.None;
 
             // Background — full render-only Figma subtree when captured, else the flat
@@ -1716,6 +1739,9 @@ namespace FigForge
             // doesn't bake one instance's "on" and clobber its group-mates.
             toggle.isOn = false;
 
+            toggle.label = label;
+            toggle.checkmark = toggle.graphic; // null for a composite checkmark (driven by FigForgeToggleGraphicObject)
+
             var bind = go.AddComponent<FigForgeBindings>();
             bind.control = toggle; bind.label = label; bind.background = bg;
             return go;
@@ -1727,7 +1753,7 @@ namespace FigForge
             var c = e.canonical;
             float sf = ctx.scaleFactor;
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "InputField" : e.name, parent);
-            var input = go.AddComponent<TMP_InputField>();
+            var input = go.AddComponent<FigForgeInputField>();
             input.transition = Selectable.Transition.None;
             input.lineType = TMP_InputField.LineType.SingleLine;
             input.contentType = TMP_InputField.ContentType.Standard;
@@ -1796,7 +1822,7 @@ namespace FigForge
         {
             var c = e.canonical;
             var go = NewRect(string.IsNullOrEmpty(e.name) ? "Dropdown" : e.name, parent);
-            var dd = go.AddComponent<TMP_Dropdown>();
+            var dd = go.AddComponent<FigForgeDropdown>();
             dd.transition = Selectable.Transition.None;
 
             var bgGo = NewRect("Background", go.transform);
@@ -2135,7 +2161,7 @@ namespace FigForge
             var go = NewRect(e.name, parent);
             var img = go.AddComponent<Image>();
             img.color = new Color(0.45f, 0.36f, 1f, 1f);
-            go.AddComponent<Button>();
+            var btn = go.AddComponent<FigForgeButton>();
             var label = NewRect("Label", go.transform);
             Stretch(label.GetComponent<RectTransform>());
             var tmp = label.AddComponent<TextMeshProUGUI>();
@@ -2144,6 +2170,7 @@ namespace FigForge
             tmp.color = Color.white;
             ApplyFontSize(tmp, e.canonical?.defLabelFontSize ?? 16f, ctx);
             ConfigureButtonLabelText(tmp);
+            btn.label = tmp;
             return go;
         }
 
@@ -2207,7 +2234,6 @@ namespace FigForge
         {
             string kind = string.IsNullOrEmpty(e.canonical.kind) ? "button" : e.canonical.kind;
             string refName = e.canonical.Ref;
-            if (kind == "list") return null;
             if (string.IsNullOrEmpty(refName)) return null;
             string sig = CanonicalSignature(e, kind, ctx.scaleFactor);
             bool signatureShare = CanShareCanonicalBySignature(e, kind);
@@ -2262,14 +2288,18 @@ namespace FigForge
                 : ((kind == "toggle" || kind == "radio") && e.canonical.shape != null) ? BuildToggle(e, null, ctx)
                 : (kind == "input") ? BuildInputField(e, null, ctx)
                 : (kind == "dropdown") ? BuildDropdown(e, null, ctx)
+                : (kind == "list") ? BuildList(e, null, ctx)
                 : BuildPlaceholderButton(e, null, ctx);
             if (temp == null) return candidate; // generation failed — keep whatever we had
             temp.name = SafeAsset(refName);
 
             // Wire binding slots so per-instance label/value apply onto the prefab.
             var bind = temp.GetComponent<FigForgeBindings>() ?? temp.AddComponent<FigForgeBindings>();
-            bind.label = temp.GetComponentInChildren<TMP_Text>(true);
-            bind.control = temp.GetComponent<Selectable>();
+            if (kind != "list") // a list has no single label/Selectable — its rows are data-driven via FigForgeList.SetItems
+            {
+                bind.label = temp.GetComponentInChildren<TMP_Text>(true);
+                bind.control = temp.GetComponent<Selectable>();
+            }
             bind.signature = sig; // stamp so a later definition change triggers regen
 
             TextureImportHelper.EnsureFolder(CanonicalFolder);
@@ -2324,10 +2354,16 @@ namespace FigForge
         //      Background) stay procedural instead of baking to PNG — Unity rebuilds
         //      them via the SDF FigForgeRoundedRect path; the flat row Regular is a
         //      tintable Image so FigForgeListRow's per-state recolour applies.
+        // v29: canonical controls are FigForge-owned types (FigForgeButton/Toggle/
+        //      Dropdown/InputField) with typed part refs (label/checkmark) wired here,
+        //      so generated frame accessors can return them strongly-typed.
+        // v30: the List is now prefab-backed like the other controls (shared prefab per
+        //      ref → edit-one-propagate); signature drops preview row count and folds
+        //      itemPressed/itemSelected/headerHeight as the visual fingerprint.
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 28;
+        internal const int CanonicalSchema = 30;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
@@ -2406,14 +2442,18 @@ namespace FigForge
             if (c.itemShape != null)
             {
                 var ish = c.itemShape;
-                sb.Append(";ih=").Append(c.itemHeight.ToString("0.###")).Append(";icount=").Append(c.count)
+                sb.Append(";ih=").Append(c.itemHeight.ToString("0.###"))
                   .Append(";icr=").Append(ish.cornerRadius.ToString("0.###"))
                   .Append(";if=").Append(SigF(ish.fill)).Append(";if2=").Append(SigF(ish.fill2))
                   .Append(";ifg=").Append(SigGradient(ish.gradient))
                   .Append(";igt=").Append(SigF(ish.gradientTransform))
                   .Append(";ist=").Append(SigStroke(ish.stroke, ish.borderColor, ish.borderWidth, ish.borderAlign));
             }
-            sb.Append(";iro=").Append(SigF(c.itemRollover));
+            // Per-instance preview row count is NOT folded in (it's design-time placeholder
+            // data; real rows come from FigForgeList.SetItems at runtime) so distinct list
+            // instances share one visual prefab instead of thrash-regenerating it.
+            sb.Append(";iro=").Append(SigF(c.itemRollover)).Append(";ipr=").Append(SigF(c.itemPressed)).Append(";isel=").Append(SigF(c.itemSelected));
+            sb.Append(";hh=").Append(c.headerHeight.ToString("0.###"));
             if (c.parts != null && c.parts.Count > 0)
             {
                 var keys = new List<string>(c.parts.Keys);

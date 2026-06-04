@@ -5,6 +5,7 @@
     "FigForge.Runtime",
     "Unity.TextMeshPro",
     "UnityEngine.UI",
+    "UnityEditor.UI",
     "Newtonsoft.Json"
   ],
   "includePlatforms": ["Editor"],
