@@ -26,7 +26,10 @@ Shader "FigForge/CachedBlend"
         ZTest [unity_GUIZTestMode]
         ColorMask [_ColorMask]
 
-        // Capture everything drawn behind this graphic.
+        // Capture everything drawn behind this graphic. Unnamed = per-draw grab, which
+        // correctly composites a blend rect stacked behind another blend rect. The proper
+        // fix for the per-draw fillrate cost is the page compositor (single offscreen
+        // composite), not a named/shared GrabPass (which would drop that stacking).
         GrabPass { }
 
         Pass

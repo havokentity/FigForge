@@ -39,7 +39,7 @@ namespace FigForge
         float _customRefHeight = 1080f;
         bool _newCanvas = false;   // default: reuse the scene's canvas
         Canvas _existingCanvas;
-        bool _connectedScene = true;       // build under a shared ScreenManager
+        bool _connectedScene = true;       // build under a shared FrameManager
         bool _disableRaycasts = true;
         string _spriteFolder = "Assets/FigForge/Sprites";
         string _prefabFolder = "Assets/FigForge/Prefabs";
@@ -322,7 +322,7 @@ namespace FigForge
                 else
                 {
                     _output = (OutputMode)EditorGUILayout.EnumPopup("Output", _output);
-                    _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (ScreenManager toggles pages)", _connectedScene);
+                    _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (FrameManager toggles pages)", _connectedScene);
                     _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas (off = add to existing)", _newCanvas);
                     if (!_newCanvas)
                     {
@@ -454,10 +454,10 @@ namespace FigForge
                 EditorUtility.DisplayProgressBar("FigForge", "Building hierarchy…", 0.55f);
                 var canvas = ResolveCanvas();
                 Transform parent = canvas.transform;
-                ScreenManager mgr = null;
+                FrameManager mgr = null;
                 if (_connectedScene)
                 {
-                    mgr = canvas.GetComponent<ScreenManager>() ?? canvas.gameObject.AddComponent<ScreenManager>();
+                    mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
                 }
 
                 float refH = ReferenceHeight(_manifest.screen.figmaSize.h);
@@ -476,9 +476,9 @@ namespace FigForge
                 var page = HierarchyBuilder.BuildPage(_manifest, parent, ctx);
                 if (page == null) { Log("build produced no page", MessageType.Error); return; }
 
-                var screen = page.GetComponent<BaseScreen>() ?? page.AddComponent<BaseScreen>();
+                var screen = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
                 screen.screenName = _manifest.screen.name;
-                if (mgr != null) { mgr.Register(screen); Log($"registered page '{screen.screenName}' on ScreenManager", MessageType.Info); }
+                if (mgr != null) { mgr.Register(screen); Log($"registered page '{screen.screenName}' on FrameManager", MessageType.Info); }
 
                 if (_output != OutputMode.Scene) SavePrefab(page);
                 if (_output == OutputMode.Prefab) DestroyImmediate(page);
@@ -675,7 +675,7 @@ namespace FigForge
                 if (_backend == UIBackend.UIToolkit) { BuildPageUITK(proj, loaded); return; }
 
                 var canvas = ResolveCanvas();
-                var mgr = canvas.GetComponent<ScreenManager>() ?? canvas.gameObject.AddComponent<ScreenManager>();
+                var mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
                 mgr.screens.Clear();
                 mgr.shell = null;
                 RemoveStaleImported(canvas.transform, proj.name, new HashSet<string>(loaded.Select(s => s.importKey)));
@@ -711,7 +711,7 @@ namespace FigForge
                     var parent = usesShell ? shellContent : canvas.transform;
                     var page = ReuseOrBuildScreen(loaded[i], proj.name, parent, sprites, usesShell);
                     if (page == null) continue;
-                    var bs = page.GetComponent<BaseScreen>() ?? page.AddComponent<BaseScreen>();
+                    var bs = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
                     bs.screenName = m.screen.name;
                     bs.usesShell = usesShell;
                     mgr.Register(bs);
@@ -904,7 +904,7 @@ namespace FigForge
             var existing = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
                 .FirstOrDefault(c => c.transform.parent == null && c.renderMode == RenderMode.ScreenSpaceOverlay);
             if (!_newCanvas && existing != null) return existing;
-            if (_connectedScene && existing != null && existing.GetComponent<ScreenManager>() != null) return existing;
+            if (_connectedScene && existing != null && existing.GetComponent<FrameManager>() != null) return existing;
 
             var go = new GameObject("FigForge Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             var canvas = go.GetComponent<Canvas>();

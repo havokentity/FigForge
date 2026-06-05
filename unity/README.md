@@ -31,4 +31,4 @@ Pick one with the **UI backend** dropdown:
 - `TextMeshProUGUI` text with per-family/style font mapping.
 - Bundled Inter static faces auto-generate project-local TMP font assets when an import requests Inter and the project does not already provide that weight.
 - **Canonical UI elements**: layers like `Btn_<instance>_<ref>` and `Inp_<instance>_<ref>` become generated or library-backed uGUI controls through your **Canonical Library** (Create ▸ FigForge ▸ Canonical Library).
-- **Connected scenes**: each imported frame becomes a `BaseScreen` under a shared `Canvas` + `ScreenManager`, so several pages live in one navigable scene.
+- **Connected scenes**: each imported frame becomes a `FigForgeFrame` under a shared `Canvas` + `FrameManager`, so several pages live in one navigable scene.

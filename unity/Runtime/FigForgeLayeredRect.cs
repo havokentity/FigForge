@@ -199,6 +199,11 @@ namespace FigForge
         int _cachedSurfaceWidth;
         int _cachedSurfaceHeight;
         readonly Vector3[] _worldCorners = new Vector3[4];
+        // Cached surface scale keyed by the projection camera — recomputed only when the
+        // camera actually moves, so an idle SceneView doesn't thrash the quantized scale
+        // across a 0.25 boundary and re-bake the cached surface every canvas update.
+        float _cachedScaleFactor = -1f;
+        Matrix4x4 _scaleCamKey;
         FigForgePageCompositor _pageCompositor;
 
         public IReadOnlyList<FigForgeFill> Fills => fills;
@@ -1004,8 +1009,19 @@ namespace FigForge
 
         float SurfaceScaleFactor()
         {
+            // The only per-frame-varying input is the camera projection (used by
+            // RawSurfaceScaleFactor via WorldToScreenPoint). Reuse the cached quantized
+            // scale unless the camera actually moved; rect-size changes invalidate it via
+            // OnRectTransformDimensionsChange. This stops the every-canvas-update re-bake
+            // loop where float jitter flipped the 0.25-quantized scale on an idle SceneView.
+            Camera cam = ProjectionCamera();
+            Matrix4x4 camKey = cam != null ? cam.projectionMatrix * cam.worldToCameraMatrix : Matrix4x4.identity;
+            if (_cachedScaleFactor > 0f && camKey == _scaleCamKey)
+                return _cachedScaleFactor;
+            _scaleCamKey = camKey;
             float scale = Mathf.Clamp(RawSurfaceScaleFactor(), 1f, MaxCachedSurfaceScale);
-            return Mathf.Ceil(scale * 4f) * 0.25f;
+            _cachedScaleFactor = Mathf.Ceil(scale * 4f) * 0.25f;
+            return _cachedScaleFactor;
         }
 
         float RawSurfaceScaleFactor()
@@ -1229,7 +1245,10 @@ namespace FigForge
         protected override void OnRectTransformDimensionsChange()
         {
             base.OnRectTransformDimensionsChange();
-            ReleaseCachedSurface();
+            _cachedScaleFactor = -1f; // rect size feeds the surface scale — re-evaluate it
+            // Don't release the cached surface here: CheckCachedSurfaceValidity releases it
+            // only if the quantized surface size actually changed, so sub-pixel layout
+            // settling (list rows, ContentSizeFitter) no longer thrashes a re-bake.
             MarkPageCompositorDirty();
             SetVerticesDirty();
             SetMaterialDirty();

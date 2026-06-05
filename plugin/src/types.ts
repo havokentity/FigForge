@@ -345,6 +345,7 @@ export interface ManifestSettings {
 export interface ScreenInfo {
   id: string;
   name: string;
+  displayName: string; // original frame name (casing preserved) — source for the codegen class name
   figmaSize: Size;
   referenceResolution: Size; // figmaSize * exportScale
   exportScale: number;

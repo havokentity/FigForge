@@ -1,6 +1,6 @@
 // =============================================================================
-// FigForge — BaseScreen. Each imported Figma page becomes one BaseScreen under
-// a shared Canvas; the ScreenManager toggles them. Subclass to add per-screen
+// FigForge — FigForgeFrame. Each imported Figma page becomes one FigForgeFrame under
+// a shared Canvas; the FrameManager toggles them. Subclass to add per-screen
 // behaviour, or use as-is for a plain page.
 // =============================================================================
 
@@ -9,9 +9,9 @@ using UnityEngine;
 namespace FigForge
 {
     [DisallowMultipleComponent]
-    public class BaseScreen : MonoBehaviour
+    public class FigForgeFrame : MonoBehaviour
     {
-        [Tooltip("Unique key used by ScreenManager.Show(name).")]
+        [Tooltip("Unique key used by FrameManager.Show(name).")]
         public string screenName;
 
         [Tooltip("If true this screen mounts inside the persistent Shell's content slot; the Shell stays visible. If false it's full-screen and the Shell hides.")]

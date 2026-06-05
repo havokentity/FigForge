@@ -34,6 +34,7 @@ namespace FigForge
     {
         public string id;
         public string name;
+        public string displayName; // original frame name (casing preserved) — codegen class name source
         public Size figmaSize;
         public Size referenceResolution;
         public float exportScale = 1f;

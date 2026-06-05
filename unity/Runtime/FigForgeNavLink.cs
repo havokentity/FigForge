@@ -1,7 +1,7 @@
 // =============================================================================
 // FigForge — passive navigation link captured from a Figma prototype reaction.
 // Holds WHERE this control navigates, but wires no behaviour. A later
-// FigForgeNavBinder can turn every link into ScreenManager.Show(targetScreen).
+// FigForgeNavBinder can turn every link into FrameManager.Show(targetScreen).
 // =============================================================================
 
 using UnityEngine;

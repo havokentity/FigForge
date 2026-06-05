@@ -1665,6 +1665,7 @@ export async function exportDesign(
     screen: {
       id: root.id,
       name: sanitize(root.name),
+      displayName: root.name, // original casing — the frame codegen derives the class name from this
       figmaSize: { w: frameW, h: frameH },
       referenceResolution: { w: frameW * scaleNum, h: frameH * scaleNum },
       exportScale: scaleNum,
