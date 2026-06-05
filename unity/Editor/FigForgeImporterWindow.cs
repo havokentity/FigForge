@@ -480,6 +480,13 @@ namespace FigForge
                 screen.screenName = _manifest.screen.name;
                 if (mgr != null) { mgr.Register(screen); Log($"registered page '{screen.screenName}' on FrameManager", MessageType.Info); }
 
+                // Generate the strongly-typed accessor layer for this frame (FrameManager.<Frame>
+                // + the FigForgeFrame subclass). Writes .g.cs; the compile is deferred a tick so
+                // it doesn't reload the domain mid-import. (Prefab-YAML wiring of the [SerializeField]
+                // refs is the next step — the accessors exist + compile but resolve null until then.)
+                var frameModel = FrameCodeGenDriver.Generate(_manifest);
+                Log($"generated accessors for frame '{frameModel.className}' ({frameModel.members.Count} member(s))", MessageType.Info);
+
                 if (_output != OutputMode.Scene) SavePrefab(page);
                 if (_output == OutputMode.Prefab) DestroyImmediate(page);
 
