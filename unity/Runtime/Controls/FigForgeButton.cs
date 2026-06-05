@@ -5,11 +5,12 @@
 // the family with controls Unity doesn't ship (see FigForgeList).
 //
 // Extend behaviour by subclassing or via extension methods — generated frame
-// classes expose this directly: FrameManager.LaunchPage.save.label.text = "Go".
+// classes expose this directly: Frames.LaunchPage.save.label.text = "Go".
 // =============================================================================
 
 using TMPro;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
 namespace FigForge
@@ -19,13 +20,14 @@ namespace FigForge
     public class FigForgeButton : Button
     {
         [Tooltip("The button's text label (wired by the importer).")]
-        public TMP_Text label;
+        [FormerlySerializedAs("label")] public TMP_Text tmpTxt_label;
 
-        /// <summary>Convenience get/set for the label's text (no-op if no label).</summary>
-        public string text
+        /// <summary>The label's text — `button.Label = "Go"`. No-op if there's no label.
+        /// (Use the `tmpTxt_label` TMP_Text for font/colour/advanced styling.)</summary>
+        public string Label
         {
-            get => label != null ? label.text : null;
-            set { if (label != null) label.text = value; }
+            get => tmpTxt_label != null ? tmpTxt_label.text : null;
+            set { if (tmpTxt_label != null) tmpTxt_label.text = value; }
         }
     }
 }

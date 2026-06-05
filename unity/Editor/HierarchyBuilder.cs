@@ -29,6 +29,8 @@ namespace FigForge
         public Action<string> log = _ => { };
         // name → GameObject collected during a build, applied to the page's FigForgeScreen.
         public readonly List<KeyValuePair<string, GameObject>> registered = new List<KeyValuePair<string, GameObject>>();
+        // element id → built GameObject, so the codegen can register members for typed wiring.
+        public readonly Dictionary<string, GameObject> byElementId = new Dictionary<string, GameObject>();
     }
 
     public static class HierarchyBuilder
@@ -263,10 +265,12 @@ namespace FigForge
                 AttachNav(inst, e, ctx);
                 if (!string.IsNullOrEmpty(e.canonical.instanceName))
                     ctx.registered.Add(new KeyValuePair<string, GameObject>(e.canonical.instanceName, inst));
+                if (!string.IsNullOrEmpty(e.id)) ctx.byElementId[e.id] = inst;
                 return inst;
             }
 
             var go = NewRect(string.IsNullOrEmpty(e.name) ? e.type : e.name, parent);
+            if (!string.IsNullOrEmpty(e.id)) ctx.byElementId[e.id] = go;
             var rt = go.GetComponent<RectTransform>();
             ApplyTransform(rt, e, ctx);
 
@@ -802,7 +806,7 @@ namespace FigForge
             // The prefab/definition mirrors the canonical COMPONENT's label font.
             ApplyFont(tmp, e.canonical != null ? e.canonical.defLabelFont : null, ctx);
             MatchTextWeight(tmp);
-            btn.label = tmp;
+            btn.tmpTxt_label = tmp;
             return go;
         }
 
@@ -852,7 +856,7 @@ namespace FigForge
             ConfigureButtonLabelText(tmp);
             ApplyFont(tmp, e.canonical.defLabelFont, ctx);
             MatchTextWeight(tmp);
-            btn.label = tmp;
+            btn.tmpTxt_label = tmp;
             return go;
         }
 
@@ -1739,7 +1743,7 @@ namespace FigForge
             // doesn't bake one instance's "on" and clobber its group-mates.
             toggle.isOn = false;
 
-            toggle.label = label;
+            toggle.tmpTxt_label = label;
             toggle.checkmark = toggle.graphic; // null for a composite checkmark (driven by FigForgeToggleGraphicObject)
 
             var bind = go.AddComponent<FigForgeBindings>();
@@ -2170,7 +2174,7 @@ namespace FigForge
             tmp.color = Color.white;
             ApplyFontSize(tmp, e.canonical?.defLabelFontSize ?? 16f, ctx);
             ConfigureButtonLabelText(tmp);
-            btn.label = tmp;
+            btn.tmpTxt_label = tmp;
             return go;
         }
 

@@ -5,14 +5,20 @@
 // =============================================================================
 
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
+
+// FrameManager is internal — the generated `Frames` class (project assembly) and the
+// importer/editor reach its members; consumer code goes through `Frames`, not this.
+[assembly: InternalsVisibleTo("FigForge.Editor")]
+[assembly: InternalsVisibleTo("FigForge.Generated")]
 
 namespace FigForge
 {
-    // `partial` so the importer-generated companion (FrameManager.g.cs) can add
-    // strongly-typed static frame accessors, e.g. FrameManager.LaunchPage.
+    // Internal engine: shows exactly one FigForgeFrame at a time. NOT the public API —
+    // the generated `Frames` class is the entry point and proxies into this.
     [DisallowMultipleComponent]
-    public partial class FrameManager : MonoBehaviour
+    internal class FrameManager : MonoBehaviour
     {
         [Tooltip("All pages this manager controls (children with a FigForgeFrame).")]
         public List<FigForgeFrame> screens = new List<FigForgeFrame>();
@@ -25,9 +31,9 @@ namespace FigForge
 
         public FigForgeFrame Current { get; private set; }
 
-        // The active manager — the generated typed accessors (FrameManager.LaunchPage)
-        // resolve through this. Set in play mode; null in the editor.
-        public static FrameManager Active { get; private set; }
+        // The active manager — the generated `Frames` accessors resolve through this.
+        // Set in play mode; null in the editor.
+        internal static FrameManager Active { get; private set; }
 
         protected void Awake() { Active = this; }
         protected void OnDestroy() { if (Active == this) Active = null; }

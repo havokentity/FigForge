@@ -15,6 +15,14 @@ namespace FigForge
     public class FigForgeInputField : TMP_InputField
     {
         /// <summary>The placeholder as a TMP_Text (TMP_InputField.placeholder typed). Null if not a TMP_Text.</summary>
-        public TMP_Text placeholderText => placeholder as TMP_Text;
+        public TMP_Text tmpTxt_placeholder => placeholder as TMP_Text;
+
+        /// <summary>The placeholder text — `input.Placeholder = "Email"`. The field's value is the
+        /// inherited `text`. No-op if the placeholder isn't a TMP_Text.</summary>
+        public string Placeholder
+        {
+            get => tmpTxt_placeholder != null ? tmpTxt_placeholder.text : null;
+            set { var t = tmpTxt_placeholder; if (t != null) t.text = value; }
+        }
     }
 }

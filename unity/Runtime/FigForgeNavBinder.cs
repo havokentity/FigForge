@@ -14,7 +14,7 @@ namespace FigForge
     public class FigForgeNavBinder : MonoBehaviour
     {
         [Tooltip("Target manager. If empty, found in parents / scene at Start.")]
-        public FrameManager screenManager;
+        [SerializeField] FrameManager screenManager;
 
         void Start()
         {

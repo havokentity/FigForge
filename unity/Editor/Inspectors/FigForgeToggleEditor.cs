@@ -18,7 +18,7 @@ namespace FigForge
             base.OnInspectorGUI(); // the normal Toggle inspector (isOn/graphic/group/etc.)
             EditorGUILayout.Space();
             serializedObject.Update();
-            EditorGUILayout.PropertyField(serializedObject.FindProperty("label"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("tmpTxt_label"));
             EditorGUILayout.PropertyField(serializedObject.FindProperty("checkmark"));
             serializedObject.ApplyModifiedProperties();
         }

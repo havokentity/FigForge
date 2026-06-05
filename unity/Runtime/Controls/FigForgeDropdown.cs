@@ -15,6 +15,13 @@ namespace FigForge
     public class FigForgeDropdown : TMP_Dropdown
     {
         /// <summary>The closed-state caption label (TMP_Dropdown.captionText).</summary>
-        public TMP_Text label => captionText;
+        public TMP_Text tmpTxt_label => captionText;
+
+        /// <summary>The closed-state caption text — `dropdown.Label = "Choose…"`. No-op if none.</summary>
+        public string Label
+        {
+            get => captionText != null ? captionText.text : null;
+            set { if (captionText != null) captionText.text = value; }
+        }
     }
 }

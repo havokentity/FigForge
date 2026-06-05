@@ -95,6 +95,7 @@ namespace FigForge
             WriteIfChanged(frameCs + ".meta", FrameCodeGen.EmitScriptMeta(f.scriptGuid));
 
             WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f));
+            WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
 
             // Compile on the next tick — never mid-import (a domain reload would abort it).
             EditorApplication.delayCall += () => AssetDatabase.Refresh();

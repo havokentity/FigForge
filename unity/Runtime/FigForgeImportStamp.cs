@@ -13,11 +13,11 @@ namespace FigForge
     [DisallowMultipleComponent]
     public class FigForgeImportStamp : MonoBehaviour
     {
-        public string projectName;
-        public string screenName;
-        public string role;
-        public string section;
-        public string importKey;
-        public string manifestHash;
+        [ReadOnly] public string projectName;
+        [ReadOnly] public string screenName;
+        [ReadOnly] public string role;
+        [ReadOnly] public string section;
+        [ReadOnly] public string importKey;
+        [ReadOnly] public string manifestHash;
     }
 }

@@ -7,6 +7,7 @@
 
 using TMPro;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
 namespace FigForge
@@ -16,16 +17,17 @@ namespace FigForge
     public class FigForgeToggle : Toggle
     {
         [Tooltip("The toggle's text label (wired by the importer).")]
-        public TMP_Text label;
+        [FormerlySerializedAs("label")] public TMP_Text tmpTxt_label;
 
         [Tooltip("The checkmark graphic shown when on. May be null for composite checkmarks.")]
         public Graphic checkmark;
 
-        /// <summary>Convenience get/set for the label's text (no-op if no label).</summary>
-        public string text
+        /// <summary>The label's text — `toggle.Label = "Enabled"`. No-op if there's no label.
+        /// (Use the `tmpTxt_label` TMP_Text for font/colour/advanced styling.)</summary>
+        public string Label
         {
-            get => label != null ? label.text : null;
-            set { if (label != null) label.text = value; }
+            get => tmpTxt_label != null ? tmpTxt_label.text : null;
+            set { if (tmpTxt_label != null) tmpTxt_label.text = value; }
         }
     }
 }

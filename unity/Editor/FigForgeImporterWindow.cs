@@ -480,12 +480,10 @@ namespace FigForge
                 screen.screenName = _manifest.screen.name;
                 if (mgr != null) { mgr.Register(screen); Log($"registered page '{screen.screenName}' on FrameManager", MessageType.Info); }
 
-                // Generate the strongly-typed accessor layer for this frame (FrameManager.<Frame>
-                // + the FigForgeFrame subclass). Writes .g.cs; the compile is deferred a tick so
-                // it doesn't reload the domain mid-import. (Prefab-YAML wiring of the [SerializeField]
-                // refs is the next step — the accessors exist + compile but resolve null until then.)
-                var frameModel = FrameCodeGenDriver.Generate(_manifest);
-                Log($"generated accessors for frame '{frameModel.className}' ({frameModel.members.Count} member(s))", MessageType.Info);
+                // Generate + wire the strongly-typed accessor layer (Frames.<Frame> + the
+                // FigForgeFrame subclass). Compile is deferred a tick (a mid-import reload would
+                // abort the build); the post-compile hook swaps in the subclass + wires its refs.
+                GenerateAndWireFrame(page, _manifest, ctx, screen, "");
 
                 if (_output != OutputMode.Scene) SavePrefab(page);
                 if (_output == OutputMode.Prefab) DestroyImmediate(page);
@@ -620,15 +618,16 @@ namespace FigForge
             }
         }
 
-        GameObject ReuseOrBuildScreen(LoadedScreen screen, string projectName, Transform parent, Dictionary<string, Sprite> sprites, bool stretch)
+        GameObject ReuseOrBuildScreen(LoadedScreen screen, string projectName, Transform parent, Dictionary<string, Sprite> sprites, bool stretch, out BuildContext builtCtx)
         {
+            builtCtx = null;
             var existing = FindImported(ImportScope(parent), projectName, screen.importKey);
             if (existing != null && existing.manifestHash == screen.manifestHash)
             {
                 existing.transform.SetParent(parent, false);
                 if (stretch) StretchToParent(existing.gameObject);
                 Log($"reused unchanged '{screen.m.screen.name}'", MessageType.Info);
-                return existing.gameObject;
+                return existing.gameObject; // reused → its generated accessors already exist
             }
             if (existing != null)
             {
@@ -636,11 +635,29 @@ namespace FigForge
                 DestroyImmediate(existing.gameObject);
             }
 
-            var page = HierarchyBuilder.BuildPage(screen.m, parent, MakeContext(screen.m, sprites));
+            var ctx = MakeContext(screen.m, sprites);
+            var page = HierarchyBuilder.BuildPage(screen.m, parent, ctx);
             if (page == null) return null;
+            builtCtx = ctx; // expose the build context so the caller can generate + wire accessors
             if (stretch) StretchToParent(page);
             StampImported(page, projectName, screen);
             return page;
+        }
+
+        // Generate the strongly-typed accessor layer for a freshly-built frame and register
+        // each member by its identifier so the post-compile hook can wire the subclass.
+        // Skipped for reused/null-context frames (their accessors already exist).
+        void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section)
+        {
+            if (page == null || m == null || ctx == null) return;
+            var model = FrameCodeGenDriver.Generate(m, section ?? "");
+            if (frame != null) frame.generatedType = FrameCodeGen.GeneratedNamespace + "." + model.className;
+            var reg = page.GetComponent<FigForgeScreen>();
+            if (reg != null)
+                foreach (var mem in model.members)
+                    if (ctx.byElementId.TryGetValue(mem.sourceName, out var memGo) && memGo != null)
+                        reg.Register(mem.Key, memGo);
+            Log($"generated accessors for frame '{model.className}' ({model.members.Count} member(s))", MessageType.Info);
         }
 
         static void StretchToParent(GameObject go)
@@ -690,13 +707,13 @@ namespace FigForge
                 // 1. Persistent Shell (optional) — built once; screens mount into its Content slot.
                 Transform shellContent = null;
                 string shellSection = null;
-                int idx = loaded.FindIndex(ls => ls.ps.role == "shell");
+                int idx = loaded.FindIndex(ls => FrameRoles.IsShell(ls.ps.role));
                 if (idx >= 0)
                 {
                     var sh = loaded[idx];
                     EditorUtility.DisplayProgressBar("FigForge", $"Building shell {sh.m.screen.name}…", 0.1f);
                     var shSprites = TextureImportHelper.Import(sh.m, sh.srcDir, $"{_spriteFolder}/{SafeName(sh.m.screen.name)}", _tex);
-                    var shellGo = ReuseOrBuildScreen(sh, proj.name, canvas.transform, shSprites, false);
+                    var shellGo = ReuseOrBuildScreen(sh, proj.name, canvas.transform, shSprites, false, out _);
                     if (shellGo != null)
                     {
                         mgr.shell = shellGo;
@@ -710,17 +727,18 @@ namespace FigForge
                 int built = 0;
                 for (int i = 0; i < loaded.Count; i++)
                 {
-                    if (loaded[i].ps.role == "shell") continue;
+                    if (FrameRoles.IsShell(loaded[i].ps.role)) continue;
                     var m = loaded[i].m;
                     EditorUtility.DisplayProgressBar("FigForge", $"Building {m.screen.name}…", (float)i / loaded.Count);
                     var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
                     bool usesShell = shellContent != null && !string.IsNullOrEmpty(shellSection) && loaded[i].ps.section == shellSection;
                     var parent = usesShell ? shellContent : canvas.transform;
-                    var page = ReuseOrBuildScreen(loaded[i], proj.name, parent, sprites, usesShell);
+                    var page = ReuseOrBuildScreen(loaded[i], proj.name, parent, sprites, usesShell, out var frameCtx);
                     if (page == null) continue;
                     var bs = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
                     bs.screenName = m.screen.name;
                     bs.usesShell = usesShell;
+                    GenerateAndWireFrame(page, m, frameCtx, bs, loaded[i].ps.section);
                     mgr.Register(bs);
                     built++;
                 }

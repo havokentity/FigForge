@@ -19,7 +19,7 @@ namespace FigForge
             base.OnInspectorGUI(); // the normal Button inspector (interactable/transition/nav/onClick)
             EditorGUILayout.Space();
             serializedObject.Update();
-            EditorGUILayout.PropertyField(serializedObject.FindProperty("label"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("tmpTxt_label"));
             serializedObject.ApplyModifiedProperties();
         }
     }
