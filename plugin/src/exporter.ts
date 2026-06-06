@@ -1228,9 +1228,12 @@ export async function exportDesign(
     const placeholder = textOf(childByName(master, 'Placeholder')) ?? textOf(childByName(master, 'Label'));
     const rawValue = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value'));
     const value = rawValue !== undefined && rawValue.trim().length === 0 ? '' : rawValue;
-    // Background as a full render-only subtree (the targetGraphic stays clickable in
-    // Unity). Placeholder/Text remain bound TMP components, not subtrees.
-    const bgTree = await captureSubtree(bg);
+    // Background: keep procedural (SDF) when the `shape` already covers it (SDF-able,
+    // no baked asset) — see captureToggle. A rasterized subtree re-bakes a drop shadow
+    // into a PNG larger than the node geometry, shifting the box. Only fall back to the
+    // subtree for backgrounds the SDF path can't draw. Placeholder/Text stay bound TMP.
+    const bgIsSdf = !!shape && !shape.asset;
+    const bgTree = bgIsSdf ? undefined : await captureSubtree(bg);
     return {
       shape: shape ?? undefined,
       label: placeholder,
@@ -1301,7 +1304,11 @@ export async function exportDesign(
     // fallbacks stay for older importers and hover/press state recolouring. The Label
     // stays a bound TMP (caption text). Options/popup handled in a later phase.
     const partTrees: Record<string, ElementSubtree> = {};
-    const bgTree = await captureSubtree(bg);
+    // Background: keep procedural (SDF) when `shape` already covers it — see captureToggle
+    // (a rasterized subtree re-bakes a drop shadow into an oversized PNG that shifts the
+    // box). The Arrow stays a subtree (nested vectors the SDF rect path can't represent).
+    const bgIsSdf = !!shape && !shape.asset;
+    const bgTree = bgIsSdf ? undefined : await captureSubtree(bg);
     if (bgTree) partTrees.Background = bgTree;
     const arrowTree = await captureSubtree(arrow);
     if (arrowTree) partTrees.Arrow = arrowTree;

@@ -1795,7 +1795,7 @@ namespace FigForge
             Stretch(placeholderGo.GetComponent<RectTransform>());
             var placeholder = placeholderGo.AddComponent<TextMeshProUGUI>();
             placeholder.text = c.placeholder ?? c.label ?? "";
-            placeholder.alignment = TextAlignmentOptions.MidlineLeft;
+            placeholder.alignment = TextAlignmentOptions.Left; // vertical-middle (Midline sat high)
             placeholder.color = new Color(0.55f, 0.56f, 0.62f, 1f);
             placeholder.fontSize = 14f * sf;
             placeholder.raycastTarget = false;
@@ -1808,7 +1808,7 @@ namespace FigForge
             Stretch(textGo.GetComponent<RectTransform>());
             var text = textGo.AddComponent<TextMeshProUGUI>();
             text.text = "";
-            text.alignment = TextAlignmentOptions.MidlineLeft;
+            text.alignment = TextAlignmentOptions.Left; // vertical-middle (Midline sat high)
             text.color = new Color(0.1f, 0.1f, 0.12f, 1f);
             text.fontSize = 14f * sf;
             text.raycastTarget = false;
@@ -1841,8 +1841,16 @@ namespace FigForge
             MakeClickTarget(bg, ctx);
             ApplyDropdownBackgroundStates(bg, c, ctx);
 
-            var caption = AddControlLabel(go, "Label", c.value, c.parts, "Label", ctx, TextAlignmentOptions.MidlineLeft);
+            var caption = AddControlLabel(go, "Label", c.value, c.parts, "Label", ctx, TextAlignmentOptions.Left);
             dd.captionText = caption;
+            // Span the control's full height so the caption is vertically centered; the
+            // captured Label box hugs the text height (sits high). Keep the captured
+            // horizontal box so the caption doesn't overlap the Arrow on the right.
+            var crt = caption.GetComponent<RectTransform>();
+            crt.anchorMin = new Vector2(crt.anchorMin.x, 0f);
+            crt.anchorMax = new Vector2(crt.anchorMax.x, 1f);
+            crt.offsetMin = new Vector2(crt.offsetMin.x, 0f);
+            crt.offsetMax = new Vector2(crt.offsetMax.x, 0f);
             if (HasPartTree(c, "Arrow"))
             {
                 // Full render-only arrow subtree (the Regular state, with its nested
@@ -2374,7 +2382,9 @@ namespace FigForge
         // forces unchanged screens to rebuild and pick up the new generation.
         // v31: toggle/radio Label spans full control height + vertical-middle alignment
         //      (was MidlineLeft in a text-height-hugging box, which sat high).
-        internal const int CanonicalSchema = 31;
+        // v32: same vertical-middle treatment for dropdown caption + input placeholder/
+        //      text; dropdown/input Background kept procedural (SDF) when shape covers it.
+        internal const int CanonicalSchema = 32;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
