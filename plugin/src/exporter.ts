@@ -1202,7 +1202,14 @@ export async function exportDesign(
     // the Label stays a bound TMP (FigForgeBindings.label rewrites it per-instance),
     // so it must remain a real text component, not a flattened subtree.
     const partTrees: Record<string, ElementSubtree> = {};
-    const bgTree = await captureSubtree(bg);
+    // Skip the Background subtree when the procedural `shape` already covers it (an
+    // SDF-able rect — no baked asset). Rasterizing such a background re-bakes any drop
+    // shadow into a PNG whose pixel bounds EXCEED the node geometry, while assetBounds
+    // still records the un-shadowed geometry. Stretched into the part rect that shifts
+    // the visible box toward a corner, leaving the (correctly centered) Checkmark
+    // looking offset. Keep the subtree only for backgrounds the SDF path can't draw.
+    const bgIsSdf = !!shape && !shape.asset;
+    const bgTree = bgIsSdf ? undefined : await captureSubtree(bg);
     if (bgTree) partTrees.Background = bgTree;
     const ckTree = await captureSubtree(ckNode);
     if (ckTree) partTrees.Checkmark = ckTree;

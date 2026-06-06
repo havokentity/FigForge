@@ -1722,12 +1722,17 @@ namespace FigForge
             TextMeshProUGUI label = null;
             if ((c.parts != null && c.parts.ContainsKey("Label")) || !string.IsNullOrEmpty(c.label))
             {
-                label = AddControlLabel(go, "Label", c.label, c.parts, "Label", ctx, TextAlignmentOptions.MidlineLeft);
-                // Keep the captured left edge but extend to the control's right edge so a
-                // left-aligned label has the full remaining width (no truncation).
+                label = AddControlLabel(go, "Label", c.label, c.parts, "Label", ctx, TextAlignmentOptions.Left);
+                // Keep the captured LEFT edge, but span the control's full HEIGHT and extend
+                // to its right edge. The captured Label box hugs the measured text height
+                // (smaller than both the control and the line height), so centering inside it
+                // leaves the text sitting high. Full-height box + vertical-middle (Left)
+                // alignment centers the label against the box/checkmark, no truncation.
                 var lrt = label.GetComponent<RectTransform>();
-                lrt.anchorMax = new Vector2(1f, lrt.anchorMax.y);
-                lrt.offsetMax = new Vector2(-6f * ctx.scaleFactor, lrt.offsetMax.y);
+                lrt.anchorMin = new Vector2(lrt.anchorMin.x, 0f);
+                lrt.anchorMax = new Vector2(1f, 1f);
+                lrt.offsetMin = new Vector2(0f, 0f);
+                lrt.offsetMax = new Vector2(-6f * ctx.scaleFactor, 0f);
             }
 
             // Whole-component click surface: a transparent HitArea spanning the control
@@ -2367,7 +2372,9 @@ namespace FigForge
         // NOTE: bumping this also busts the importer's screen-level reuse cache
         // (folded into FigForgeImporterWindow.ManifestHash), so a schema change
         // forces unchanged screens to rebuild and pick up the new generation.
-        internal const int CanonicalSchema = 30;
+        // v31: toggle/radio Label spans full control height + vertical-middle alignment
+        //      (was MidlineLeft in a text-height-hugging box, which sat high).
+        internal const int CanonicalSchema = 31;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

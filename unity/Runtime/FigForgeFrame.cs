@@ -28,7 +28,8 @@ namespace FigForge
         // via the active manager. Internal string key is never exposed to callers.
         public void Show()
         {
-            if (FrameManager.Active != null) FrameManager.Active.Show(screenName);
+            var m = FrameManager.Resolve();
+            if (m != null) m.Show(screenName);
         }
 
         public virtual void OnShow() { }

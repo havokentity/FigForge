@@ -173,7 +173,7 @@ namespace FigForge
             sb.AppendLine("    {");
             sb.AppendLine("        // The frame currently shown (null before any Show / in edit mode).");
             sb.AppendLine("        public static FigForge.FigForgeFrame Current");
-            sb.AppendLine("            => FigForge.FrameManager.Active != null ? FigForge.FrameManager.Active.Current : null;");
+            sb.AppendLine("            => FigForge.FrameManager.Resolve()?.Current;");
             sb.AppendLine();
             sb.AppendLine("        // Typed + null-safe navigation: Frames.Show(Frames.Settings). (Or Frames.Settings.Show().)");
             sb.AppendLine("        public static void Show(FigForge.FigForgeFrame frame) { if (frame != null) frame.Show(); }");
@@ -187,8 +187,7 @@ namespace FigForge
             // Emitted INSIDE namespace FigForge.Generated, so the frame type is unqualified;
             // the manager is the package's FigForge.FrameManager (cross-assembly reference).
             return "public static " + f.className + " " + f.className
-                 + " => FigForge.FrameManager.Active != null ? FigForge.FrameManager.Active.Find(\""
-                 + Escape(f.screenKey) + "\") as " + f.className + " : null;";
+                 + " => FigForge.FrameManager.Resolve()?.Find(\"" + Escape(f.screenKey) + "\") as " + f.className + ";";
         }
 
         // ---- generated .cs.meta + asmdef ----------------------------------------------

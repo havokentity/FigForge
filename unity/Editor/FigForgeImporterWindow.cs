@@ -668,6 +668,24 @@ namespace FigForge
             rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
         }
 
+        // Lay a root frame out side-by-side (top-left anchored) for design visibility, so
+        // the frames don't overlap in the editor. Authoring-only: at runtime
+        // FrameManager.Show snaps the active frame to fill the canvas.
+        static void SpreadFrame(GameObject page, int index, Manifest m)
+        {
+            var rt = page.GetComponent<RectTransform>();
+            if (rt == null) return;
+            float w = m.screen != null && m.screen.referenceResolution != null ? m.screen.referenceResolution.w : 0f;
+            float h = m.screen != null && m.screen.referenceResolution != null ? m.screen.referenceResolution.h : 0f;
+            if (w < 1f) w = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.w : 1080f;
+            if (h < 1f) h = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.h : 1920f;
+            const float gap = 80f;
+            rt.anchorMin = rt.anchorMax = new Vector2(0f, 1f); // canvas top-left
+            rt.pivot = new Vector2(0f, 1f);
+            rt.sizeDelta = new Vector2(w, h);
+            rt.anchoredPosition = new Vector2(index * (w + gap), 0f);
+        }
+
         void BuildPageProject(string projectPath)
         {
             _log.Clear();
@@ -740,6 +758,7 @@ namespace FigForge
                     bs.usesShell = usesShell;
                     GenerateAndWireFrame(page, m, frameCtx, bs, loaded[i].ps.section);
                     mgr.Register(bs);
+                    if (!usesShell) SpreadFrame(page, built, m); // side-by-side design layout (runtime Show fills)
                     built++;
                 }
 

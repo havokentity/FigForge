@@ -38,6 +38,11 @@ namespace FigForge
         protected void Awake() { Active = this; }
         protected void OnDestroy() { if (Active == this) Active = null; }
 
+        // The active manager, or — when none is set (edit mode) — the one in the open
+        // scene, so the generated `Frames` accessors resolve outside play mode too.
+        internal static FrameManager Resolve()
+            => Active != null ? Active : FindFirstObjectByType<FrameManager>();
+
         // Resolve a registered frame by its screenName (used by generated accessors).
         public FigForgeFrame Find(string screenName)
         {
@@ -73,11 +78,22 @@ namespace FigForge
             }
             if (target != null)
             {
+                // The shown root frame snaps to fill the canvas. The design-time side-by-side
+                // spread (set up at import) is just for authoring; at runtime the active frame
+                // takes the viewport and the rest are hidden.
+                if (!target.usesShell) FillParent(target.GetComponent<RectTransform>());
                 Current = target;
                 if (shell != null) shell.SetActive(target.usesShell);
             }
             else Debug.LogWarning($"[FigForge] FrameManager: no screen named '{screenName}'.");
             return target != null;
+        }
+
+        static void FillParent(RectTransform rt)
+        {
+            if (rt == null) return;
+            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+            rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
         }
     }
 }
