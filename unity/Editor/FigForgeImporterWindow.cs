@@ -948,7 +948,17 @@ namespace FigForge
         Canvas ResolveCanvas()
         {
             EnsureEventSystem(); // always — even when an existing canvas is reused
+            var canvas = ResolveCanvasObject();
+            // Always render the FigForge page through the dedicated FigForge camera (Screen
+            // Space - Camera), UPGRADING a reused Overlay canvas too. Overlay can't be captured
+            // by the blend compositor, and in the Scene view it renders at screen-pixel scale
+            // (content shrinks into a corner) — Camera mode is consistent in edit + play.
+            ConfigureCanvasForCamera(canvas);
+            return canvas;
+        }
 
+        Canvas ResolveCanvasObject()
+        {
             if (!_newCanvas && _existingCanvas != null) return _existingCanvas;
 
             var existing = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
@@ -957,40 +967,48 @@ namespace FigForge
             if (_connectedScene && existing != null && existing.GetComponent<FrameManager>() != null) return existing;
 
             var go = new GameObject("FigForge Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-            var canvas = go.GetComponent<Canvas>();
-            // Screen Space - Camera (not Overlay): the page renders through the SRP camera, so
-            // the blend compositor can capture it to a RenderTexture for destination-reading
-            // blends, and URP sorting/post applies. Overlay UI is composited after the SRP and
-            // can't be captured — hence the switch.
-            canvas.renderMode = RenderMode.ScreenSpaceCamera;
-            canvas.worldCamera = ResolveUiCamera();
-            canvas.planeDistance = 100f;
             var scaler = go.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             float rh = ReferenceHeight(_manifest.screen.figmaSize.h);
             scaler.referenceResolution = new Vector2(
                 _manifest.screen.figmaSize.w * (rh / Mathf.Max(1f, _manifest.screen.figmaSize.h)), rh);
             scaler.matchWidthOrHeight = 0.5f;
-            return canvas;
+            return go.GetComponent<Canvas>();
         }
 
-        // The camera a Screen Space - Camera canvas renders through. Reuse the scene's main
-        // camera (so the UI rides the SRP and the page can be captured for the compositor);
-        // create a minimal orthographic one only if the scene has none.
-        static Camera ResolveUiCamera()
+        // Point a FigForge page canvas at the dedicated FigForge camera in Screen Space -
+        // Camera mode. Idempotent — also upgrades a reused Overlay canvas.
+        static void ConfigureCanvasForCamera(Canvas canvas)
         {
-            var cam = Camera.main;
-            if (cam != null) return cam;
-            cam = Object.FindObjectsByType<Camera>(FindObjectsSortMode.InstanceID).FirstOrDefault();
-            if (cam != null) return cam;
+            if (canvas == null) return;
+            canvas.renderMode = RenderMode.ScreenSpaceCamera;
+            canvas.worldCamera = EnsureFigForgeCamera();
+            canvas.planeDistance = 100f;
+        }
 
-            var go = new GameObject("Main Camera", typeof(Camera));
-            go.tag = "MainCamera";
-            cam = go.GetComponent<Camera>();
-            cam.clearFlags = CameraClearFlags.SolidColor;
-            cam.backgroundColor = new Color(0.1f, 0.1f, 0.12f, 1f);
+        // A dedicated orthographic camera FigForge owns — so it never hijacks or fights the
+        // scene's main camera. If another camera already exists it OVERLAYS it (clears depth
+        // only, higher depth) so the existing scene/skybox shows behind the UI; if FigForge's
+        // is the only camera it clears to a solid background. Reused if already present.
+        static Camera EnsureFigForgeCamera()
+        {
+            const string camName = "FigForge Camera";
+            var all = Object.FindObjectsByType<Camera>(FindObjectsSortMode.InstanceID);
+            var cam = all.FirstOrDefault(c => c.name == camName);
+            bool otherCamera = all.Any(c => c != cam && c.name != camName);
+
+            if (cam == null)
+                cam = new GameObject(camName, typeof(Camera)).GetComponent<Camera>();
+
             cam.orthographic = true;
+            cam.cullingMask = ~0;                       // everything; a UI-only scene draws just the UI
+            cam.clearFlags = otherCamera ? CameraClearFlags.Depth : CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.1f, 0.1f, 0.12f, 1f);
+            cam.depth = 100f;                           // render on top of the scene camera
+            cam.nearClipPlane = 0.1f;
+            cam.farClipPlane = 1000f;
             cam.transform.position = new Vector3(0f, 0f, -10f);
+            cam.transform.rotation = Quaternion.identity;
             return cam;
         }
 
