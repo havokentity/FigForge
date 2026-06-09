@@ -671,14 +671,19 @@ namespace FigForge
         // Lay a root frame out side-by-side (top-left anchored) for design visibility, so
         // the frames don't overlap in the editor. Authoring-only: at runtime
         // FrameManager.Show snaps the active frame to fill the canvas.
-        static void SpreadFrame(GameObject page, int index, Manifest m)
+        void SpreadFrame(GameObject page, int index, Manifest m)
         {
             var rt = page.GetComponent<RectTransform>();
             if (rt == null) return;
-            float w = m.screen != null && m.screen.referenceResolution != null ? m.screen.referenceResolution.w : 0f;
-            float h = m.screen != null && m.screen.referenceResolution != null ? m.screen.referenceResolution.h : 0f;
-            if (w < 1f) w = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.w : 1080f;
-            if (h < 1f) h = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.h : 1920f;
+            // Size to the Figma frame in the CANVAS coordinate space (figmaSize * scaleFactor),
+            // matching the CanvasScaler reference. NOT screen.referenceResolution — that is
+            // figmaSize * EXPORT scale (the asset pixel resolution), which at 2x makes the
+            // frame double-size with content stranded in the top-left quarter.
+            float fw = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.w : 1920f;
+            float fh = m.screen != null && m.screen.figmaSize != null ? m.screen.figmaSize.h : 1080f;
+            float sf = fh > 0f ? ReferenceHeight(fh) / fh : 1f;
+            float w = fw * sf;
+            float h = fh * sf;
             const float gap = 80f;
             rt.anchorMin = rt.anchorMax = new Vector2(0f, 1f); // canvas top-left
             rt.pivot = new Vector2(0f, 1f);
