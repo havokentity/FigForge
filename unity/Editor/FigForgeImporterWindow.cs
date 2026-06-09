@@ -931,13 +931,19 @@ namespace FigForge
             return panel;
         }
 
-        // First canvas in the open scene — prefers a root ScreenSpaceOverlay one.
+        // First canvas in the open scene — prefers a root FigForge one (Camera or Overlay).
         static Canvas FirstSceneCanvas()
         {
             var all = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.InstanceID);
-            return all.FirstOrDefault(c => c.transform.parent == null && c.renderMode == RenderMode.ScreenSpaceOverlay)
+            return all.FirstOrDefault(c => c.transform.parent == null && IsFigForgeCanvasMode(c.renderMode))
                 ?? all.FirstOrDefault();
         }
+
+        // Render modes FigForge uses for a page canvas. Screen Space - Camera is the
+        // default (lets the blend compositor capture the page to a RenderTexture); Overlay
+        // is still accepted so older scenes reuse their existing canvas on re-import.
+        static bool IsFigForgeCanvasMode(RenderMode mode)
+            => mode == RenderMode.ScreenSpaceCamera || mode == RenderMode.ScreenSpaceOverlay;
 
         Canvas ResolveCanvas()
         {
@@ -946,13 +952,19 @@ namespace FigForge
             if (!_newCanvas && _existingCanvas != null) return _existingCanvas;
 
             var existing = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
-                .FirstOrDefault(c => c.transform.parent == null && c.renderMode == RenderMode.ScreenSpaceOverlay);
+                .FirstOrDefault(c => c.transform.parent == null && IsFigForgeCanvasMode(c.renderMode));
             if (!_newCanvas && existing != null) return existing;
             if (_connectedScene && existing != null && existing.GetComponent<FrameManager>() != null) return existing;
 
             var go = new GameObject("FigForge Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             var canvas = go.GetComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            // Screen Space - Camera (not Overlay): the page renders through the SRP camera, so
+            // the blend compositor can capture it to a RenderTexture for destination-reading
+            // blends, and URP sorting/post applies. Overlay UI is composited after the SRP and
+            // can't be captured — hence the switch.
+            canvas.renderMode = RenderMode.ScreenSpaceCamera;
+            canvas.worldCamera = ResolveUiCamera();
+            canvas.planeDistance = 100f;
             var scaler = go.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             float rh = ReferenceHeight(_manifest.screen.figmaSize.h);
@@ -960,6 +972,26 @@ namespace FigForge
                 _manifest.screen.figmaSize.w * (rh / Mathf.Max(1f, _manifest.screen.figmaSize.h)), rh);
             scaler.matchWidthOrHeight = 0.5f;
             return canvas;
+        }
+
+        // The camera a Screen Space - Camera canvas renders through. Reuse the scene's main
+        // camera (so the UI rides the SRP and the page can be captured for the compositor);
+        // create a minimal orthographic one only if the scene has none.
+        static Camera ResolveUiCamera()
+        {
+            var cam = Camera.main;
+            if (cam != null) return cam;
+            cam = Object.FindObjectsByType<Camera>(FindObjectsSortMode.InstanceID).FirstOrDefault();
+            if (cam != null) return cam;
+
+            var go = new GameObject("Main Camera", typeof(Camera));
+            go.tag = "MainCamera";
+            cam = go.GetComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.1f, 0.1f, 0.12f, 1f);
+            cam.orthographic = true;
+            cam.transform.position = new Vector3(0f, 0f, -10f);
+            return cam;
         }
 
         // An EventSystem with the RIGHT input module, or buttons never react. On a
