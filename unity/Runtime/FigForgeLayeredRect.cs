@@ -386,12 +386,24 @@ namespace FigForge
             return _directMaterial;
         }
 
+        // GrabPass (FigForge/CachedBlend, for destination-reading Tier-2 blends) exists
+        // ONLY in the Built-in pipeline. Under any SRP (URP/HDRP) it's unavailable and the
+        // shader would render magenta, so we detect the active pipeline — honouring a
+        // Quality-level RP override via currentRenderPipeline — and degrade Tier-2 to
+        // normal alpha compositing through CachedQuad. Full Tier-2 fidelity under URP is
+        // the job of the GrabPass-free page compositor (FigForgePageCompositor), which
+        // composites against bound textures instead of grabbing the framebuffer.
+        internal static bool DestinationReadBlendSupported
+            => GraphicsSettings.currentRenderPipeline == null;
+
         Material EnsureCachedMaterial()
         {
             // Tier-2 (destination-reading) modes present through the GrabPass shader so
             // they blend correctly against the backdrop; tier-1 stays on the cheap
-            // fixed-function quad. Recreate if the blend tier changed.
-            string shaderName = BlendTier(blendMode) == 2 ? "FigForge/CachedBlend" : "FigForge/CachedQuad";
+            // fixed-function quad. Under an SRP, GrabPass is gone — Tier-2 falls back to the
+            // quad (normal alpha). Recreate if the chosen shader changed.
+            string shaderName = (BlendTier(blendMode) == 2 && DestinationReadBlendSupported)
+                ? "FigForge/CachedBlend" : "FigForge/CachedQuad";
             if (_cachedMaterial != null && _cachedMaterial.shader != null && _cachedMaterial.shader.name == shaderName)
                 return _cachedMaterial;
             if (_cachedMaterial != null) DestroyRuntimeMaterial(_cachedMaterial);
