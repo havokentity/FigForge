@@ -987,7 +987,9 @@ namespace FigForge
         {
             if (canvas == null) return;
             canvas.renderMode = RenderMode.ScreenSpaceCamera;
-            canvas.worldCamera = EnsureFigForgeCamera();
+            var scaler = canvas.GetComponent<CanvasScaler>();
+            float refH = scaler != null && scaler.referenceResolution.y > 1f ? scaler.referenceResolution.y : 1080f;
+            canvas.worldCamera = EnsureFigForgeCamera(refH);
             canvas.planeDistance = 100f;
         }
 
@@ -995,7 +997,7 @@ namespace FigForge
         // scene's main camera. If another camera already exists it OVERLAYS it (clears depth
         // only, higher depth) so the existing scene/skybox shows behind the UI; if FigForge's
         // is the only camera it clears to a solid background. Reused if already present.
-        static Camera EnsureFigForgeCamera()
+        static Camera EnsureFigForgeCamera(float refHeight)
         {
             const string camName = "FigForge Camera";
             var all = Object.FindObjectsByType<Camera>(FindObjectsSortMode.InstanceID);
@@ -1006,6 +1008,11 @@ namespace FigForge
                 cam = new GameObject(camName, typeof(Camera)).GetComponent<Camera>();
 
             cam.orthographic = true;
+            // Pixel-matched: ortho half-height = reference half-height, so the canvas (and a
+            // figmaSize frame) is 1 world unit per reference pixel — large + workable in the
+            // Scene view. Screen Space - Camera still fills the viewport in play, so the
+            // rendered result is unchanged; only the world size differs.
+            cam.orthographicSize = Mathf.Max(1f, refHeight * 0.5f);
             cam.cullingMask = ~0;                       // everything; a UI-only scene draws just the UI
             cam.clearFlags = otherCamera ? CameraClearFlags.Depth : CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.1f, 0.1f, 0.12f, 1f);
