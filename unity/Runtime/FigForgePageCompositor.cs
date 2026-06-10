@@ -180,6 +180,13 @@ namespace FigForge
             // handler sits in the willRenderCanvases subscription order (re-entrancy
             // guarded by _inRebuild).
             Canvas.ForceUpdateCanvases();
+            // Twice: source handlers run INSIDE the dispatch above — after its
+            // registry pass — and may queue fresh present-quad rebuilds (first-time
+            // texture binds). The capture renders below process pending canvas
+            // updates while renderers are temporarily culled, and uGUI CONSUMES a
+            // queued rebuild it skips for a culled renderer — the quad's geometry/
+            // material would never upload (permanently invisible). Flush until clean.
+            Canvas.ForceUpdateCanvases();
 
             CollectCanvasGraphics();
             bool complete = true;

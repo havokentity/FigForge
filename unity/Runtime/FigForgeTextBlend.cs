@@ -166,6 +166,15 @@ namespace FigForge
             _present.enabled = true;
             _present.Bind(tex, blended != null, blendMode,
                 blended != null ? 1f : appearanceOpacity, CompositorPad);
+            // Recover a rebuild the canvas consumed while the capture pass had the
+            // quad culled — safe here (we're a willRenderCanvases subscriber, not
+            // inside the registry's rebuild loop).
+            if (_present.RebuildSkippedWhileCulled)
+            {
+                _present.ClearRebuildSkipped();
+                _present.SetVerticesDirty();
+                _present.SetMaterialDirty();
+            }
         }
 
         // The live TMP renderers must not draw while the quad presents the text.
@@ -297,6 +306,67 @@ namespace FigForge
         }
 
 #if UNITY_EDITOR
+        // Dumps the whole chain to files next to the project (works even when console
+        // capture is unavailable): FFTextState.txt + surface/blended PNGs with
+        // covered-pixel counts — "is the bake empty / is the blend empty" at a glance.
+        [ContextMenu("Save Debug Surfaces")]
+        void SaveDebugSurfaces()
+        {
+            EnsureSurface();
+            string dir = System.IO.Path.GetFullPath(System.IO.Path.Combine(Application.dataPath, ".."));
+            var comp = _pageCompositor != null ? _pageCompositor : GetComponentInParent<FigForgePageCompositor>();
+            var blended = BlendedSurfaceOrNull();
+            var sb = new System.Text.StringBuilder();
+            sb.Append("blend=").Append(blendMode)
+              .Append(" tmpMeshVerts=").Append(_text != null && _text.mesh != null ? _text.mesh.vertexCount : -1)
+              .Append(" tmpText='").Append(_text != null ? _text.text : "null")
+              .Append("' tmpCulled=").Append(_text != null && _text.canvasRenderer != null ? _text.canvasRenderer.cull.ToString() : "?")
+              .Append(" bakeDirty=").Append(_bakeDirty)
+              .Append(" surface=").Append(_surface != null ? _surface.width + "x" + _surface.height + ":created=" + _surface.IsCreated() : "null")
+              .Append(" surfaceCoveredPx=").Append(CoveredPixels(_surface, out string sp)).Append(sp)
+              .Append(" compositor=").Append(comp != null ? comp.gameObject.name + ":owns=" + comp.ShouldRenderLayer(this) : "none")
+              .Append(" blended=").Append(blended != null ? blended.width + "x" + blended.height : "null")
+              .Append(" blendedCoveredPx=").Append(CoveredPixels(blended, out string bp)).Append(bp)
+              .Append(" present=").Append(_present != null ? _present.enabled + ":" + (_present.mainTexture != null ? _present.mainTexture.name : "null") : "null");
+            if (_surface != null) WriteRtPng(_surface, System.IO.Path.Combine(dir, "FFTextSurface.png"));
+            if (blended != null) WriteRtPng(blended, System.IO.Path.Combine(dir, "FFTextBlended.png"));
+            System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "FFTextState.txt"), sb.ToString());
+            Debug.Log("[FigForge] " + sb, this);
+        }
+
+        static int CoveredPixels(RenderTexture rt, out string note)
+        {
+            note = "";
+            if (rt == null) return -1;
+            var prev = RenderTexture.active;
+            var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
+            RenderTexture.active = rt;
+            tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+            tex.Apply(false);
+            RenderTexture.active = prev;
+            var px = tex.GetPixels32();
+            int covered = 0;
+            for (int i = 0; i < px.Length; i++) if (px[i].a > 8) covered++;
+            DestroyImmediate(tex);
+            note = "/" + px.Length;
+            return covered;
+        }
+
+        static void WriteRtPng(RenderTexture rt, string path)
+        {
+            var prev = RenderTexture.active;
+            var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
+            RenderTexture.active = rt;
+            tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+            tex.Apply(false);
+            RenderTexture.active = prev;
+            var px = tex.GetPixels32();
+            for (int i = 0; i < px.Length; i++) px[i].a = 255;
+            tex.SetPixels32(px);
+            System.IO.File.WriteAllBytes(path, tex.EncodeToPNG());
+            DestroyImmediate(tex);
+        }
+
         [ContextMenu("Log Text Blend State")]
         void LogTextBlendState()
         {
@@ -486,6 +556,44 @@ namespace FigForge
         float _opacity = 1f;
 
         public override Texture mainTexture => _texture != null ? _texture : s_WhiteTexture;
+
+#if UNITY_EDITOR
+        // Diagnostic counters (read via inspector tooling): how the canvas treats us.
+        public int DbgRebuildCalls { get; private set; }
+        public int DbgGeometryUpdates { get; private set; }
+        public int DbgMaterialUpdates { get; private set; }
+        public string DbgLastSkip { get; private set; } = "";
+
+        protected override void UpdateGeometry() { DbgGeometryUpdates++; base.UpdateGeometry(); }
+        protected override void UpdateMaterial() { DbgMaterialUpdates++; base.UpdateMaterial(); }
+#endif
+
+        // uGUI CONSUMES a queued rebuild even when Graphic.Rebuild early-outs for a
+        // culled renderer — and this quad is transiently culled by the page
+        // compositor's capture pass. If that window swallows our only pending
+        // rebuild, geometry/material never upload and the quad is permanently
+        // invisible. Flag it; the owner re-dirties us from OUTSIDE the rebuild loop
+        // (dirtying from inside would be rejected by the registry).
+        public bool RebuildSkippedWhileCulled { get; private set; }
+        public void ClearRebuildSkipped() { RebuildSkippedWhileCulled = false; }
+
+        public override void Rebuild(CanvasUpdate update)
+        {
+            if (update == CanvasUpdate.PreRender)
+            {
+#if UNITY_EDITOR
+                DbgRebuildCalls++;
+#endif
+                if (canvasRenderer != null && canvasRenderer.cull)
+                {
+                    RebuildSkippedWhileCulled = true;
+#if UNITY_EDITOR
+                    DbgLastSkip = "culled@" + Time.frameCount;
+#endif
+                }
+            }
+            base.Rebuild(update);
+        }
 
         public void Bind(Texture texture, bool premultOver, FigForgeBlendMode blend, float opacity, float pad)
         {
