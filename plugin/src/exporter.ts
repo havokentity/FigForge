@@ -1407,7 +1407,10 @@ export async function exportDesign(
       listItems: listItems.length ? listItems : undefined,
       scrollbarWidth, scrollTrackShape, scrollThumbShape, scrollThumbRollover, scrollThumbPressed,
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
-      parts: partsOf(master, ['Background']) };
+      // 'Mask' (optional, usually hidden): a designer-drawn rect that defines the exact
+      // scroll/clip region — Unity anchors the list viewport to it instead of deriving
+      // the box from the Background interior minus the Header.
+      parts: partsOf(master, ['Background', 'Mask']) };
   }
 
   const stateByNode = new Map<string, CanonicalStates>();

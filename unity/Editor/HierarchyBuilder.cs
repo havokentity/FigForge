@@ -2095,23 +2095,39 @@ namespace FigForge
             scroll.horizontal = false; scroll.vertical = true;
             scroll.movementType = ScrollRect.MovementType.Elastic; scroll.scrollSensitivity = 20f;
 
-            // The viewport is the MASK: a box matching the Background's INTERIOR — inset
-            // past the background stroke plus 1px of SDF anti-aliasing so row edges can
-            // never appear to poke outside the rounded background at fractional canvas
-            // scales — and excluding the Header strip at the top.
+            // The viewport is the clip region, DESIGNER-DEFINED where possible:
+            //   1. An explicit (usually hidden) 'Mask' layer in the Figma component gives
+            //      the exact scroll/clip box — anchored verbatim.
+            //   2. Otherwise the box is derived: the Background INTERIOR, inset past the
+            //      background stroke + 1px of SDF anti-aliasing (so row edges can't poke
+            //      outside the rounded background at fractional canvas scales), excluding
+            //      the Header strip at the top.
+            // Whether content CLIPS at all also follows the designer: the Figma frame's
+            // clipsContent (an explicit Mask layer implies clipping).
             float bgStrokeW = c.shape != null && c.shape.stroke != null ? Mathf.Max(0f, c.shape.stroke.weight) : 0f;
             float maskInset = (bgStrokeW + 1f) * sf;
+            bool hasMaskPart = c.parts != null && c.parts.ContainsKey("Mask");
             var viewport = NewRect("Viewport", go.transform);
             var vrt = viewport.GetComponent<RectTransform>();
-            vrt.anchorMin = Vector2.zero; vrt.anchorMax = Vector2.one;
-            vrt.offsetMin = new Vector2(maskInset, maskInset);
-            vrt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH : maskInset));
+            if (hasMaskPart)
+            {
+                AnchorPart(vrt, c.parts, "Mask");
+            }
+            else
+            {
+                vrt.anchorMin = Vector2.zero; vrt.anchorMax = Vector2.one;
+                vrt.offsetMin = new Vector2(maskInset, maskInset);
+                vrt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH : maskInset));
+            }
             if (viewport.GetComponent<CanvasRenderer>() == null) viewport.AddComponent<CanvasRenderer>();
             viewport.AddComponent<Image>().color = new Color(1, 1, 1, 0.004f); // near-invisible drag/clip target
-            var mask = viewport.AddComponent<RectMask2D>();
-            // Feather the clip edge ~1px so hard row edges blend like the AA'd background edge.
-            int soft = Mathf.Max(1, Mathf.RoundToInt(sf));
-            mask.softness = new Vector2Int(soft, soft);
+            if (e.clipsContent || hasMaskPart)
+            {
+                var mask = viewport.AddComponent<RectMask2D>();
+                // Feather the clip edge ~1px so hard row edges blend like the AA'd background edge.
+                int soft = Mathf.Max(1, Mathf.RoundToInt(sf));
+                mask.softness = new Vector2Int(soft, soft);
+            }
             scroll.viewport = vrt;
 
             var content = NewRect("Content", viewport.transform);
@@ -2137,9 +2153,22 @@ namespace FigForge
             float sbW = sbWFig * sf;
             var sbGo = NewRect("Scrollbar", go.transform);
             var srt = sbGo.GetComponent<RectTransform>();
-            srt.anchorMin = new Vector2(1f, 0f); srt.anchorMax = Vector2.one; srt.pivot = new Vector2(1f, 0.5f);
-            srt.offsetMin = new Vector2(-(sbW + maskInset), maskInset);
-            srt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH + maskInset : maskInset));
+            srt.pivot = new Vector2(1f, 0.5f);
+            if (hasMaskPart)
+            {
+                // Hug the right edge of the designer's clip region.
+                var mp = c.parts["Mask"]; // [minX, minY, maxX, maxY] normalized
+                srt.anchorMin = new Vector2(mp[2], mp[1]);
+                srt.anchorMax = new Vector2(mp[2], mp[3]);
+                srt.offsetMin = new Vector2(-sbW, 0f);
+                srt.offsetMax = Vector2.zero;
+            }
+            else
+            {
+                srt.anchorMin = new Vector2(1f, 0f); srt.anchorMax = Vector2.one;
+                srt.offsetMin = new Vector2(-(sbW + maskInset), maskInset);
+                srt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH + maskInset : maskInset));
+            }
             if (sbGo.GetComponent<CanvasRenderer>() == null) sbGo.AddComponent<CanvasRenderer>();
             var sbHit = sbGo.AddComponent<Image>();
             sbHit.color = new Color(0, 0, 0, 0);
@@ -2482,7 +2511,10 @@ namespace FigForge
         // v37: scrollbar interaction via plain transparent Images (bar + handle) with the
         //      SDF shapes as render-only children; thumb hover/press tint from the captured
         //      ThumbRollover/ThumbPressed layers (FigForgeScrollbarStates).
-        internal const int CanonicalSchema = 37;
+        // v38: designer-defined list clipping — an explicit 'Mask' layer anchors the
+        //      viewport (scrollbar hugs its right edge), and the Figma frame's clipsContent
+        //      decides whether the list clips at all.
+        internal const int CanonicalSchema = 38;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
