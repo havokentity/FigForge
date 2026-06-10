@@ -984,7 +984,7 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
 async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentNode> {
   const name = listVariantName(opts);
   const reuse = findMaster(name);
-  if (reuse) { ensureListScrollbar(reuse); ensureListRoundedClip(reuse); placeInstance(reuse); return reuse; }
+  if (reuse) { ensureListScrollbar(reuse); ensureListRoundedClip(reuse); ensureListMask(reuse); placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const titleFont = await loadBoldFont(font);
@@ -1037,10 +1037,36 @@ async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentN
 
   ensureListScrollbar(comp);
   ensureListRoundedClip(comp);
+  ensureListMask(comp);
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: name }));
   parkMaster(comp);
   placeInstance(comp);
   return comp;
+}
+
+// Add the (hidden) 'Mask' layer that defines the scroll/clip region — the designer's
+// handle on clipping. Defaults to the Background interior minus the Header (the same
+// box Unity would derive): inset past the bg stroke + 1px. Move/resize it to control
+// exactly where rows render; Unity anchors the viewport to it and the scrollbar hugs
+// its right edge. Retrofitted onto existing masters like the Scrollbar layer.
+function ensureListMask(comp: ComponentNode): void {
+  if (!('children' in comp)) return;
+  const kids = (comp as ChildrenMixin).children as SceneNode[];
+  if (kids.some((c) => c.name === 'Mask')) return;
+  const W = comp.width, H = comp.height;
+  const header = kids.find((c) => c.name === 'Header');
+  const HEADER = header ? (header as unknown as { height: number }).height : 0;
+  const bg = kids.find((c) => c.name === 'Background');
+  const strokeW = bg && typeof (bg as unknown as { strokeWeight?: unknown }).strokeWeight === 'number'
+    ? (bg as unknown as { strokeWeight: number }).strokeWeight : 0;
+  const inset = strokeW + 1;
+
+  const mask = solidRect('Mask', Math.max(1, W - inset * 2), Math.max(1, H - HEADER - inset * 2), 0,
+    { r: 0.2, g: 0.55, b: 1 }, 0.12); // guide tint; hidden anyway
+  mask.x = inset; mask.y = HEADER + inset;
+  mask.visible = false;
+  mask.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(mask);
 }
 
 // Round the List COMPONENT FRAME to the Background's radius so clipsContent clips
