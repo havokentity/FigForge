@@ -225,6 +225,7 @@ export interface CanonicalRef {
   scrollThumbShape?: ButtonShape; // list: scrollbar thumb styling ('Scrollbar/Thumb')
   scrollThumbRollover?: RGBA; // list: thumb hover colour ('Scrollbar/ThumbRollover', hidden layer)
   scrollThumbPressed?: RGBA;  // list: thumb pressed colour ('Scrollbar/ThumbPressed', hidden layer)
+  maskShape?: ButtonShape;    // list: the 'Mask' layer's styling — its cornerRadius rounds the clip
   // dropdown: the option row is its own component (DropdownOption) with states; these
   // drive the TMP_Dropdown item template (options[] above are the option texts)
   optionShape?: ButtonShape; // DropdownOption Regular shape (corner/fill/border)

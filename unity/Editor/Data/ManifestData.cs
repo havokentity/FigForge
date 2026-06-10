@@ -201,6 +201,7 @@ namespace FigForge
         public CanonicalShape scrollThumbShape; // list: scrollbar thumb styling ('Scrollbar/Thumb')
         public float[] scrollThumbRollover; // list: thumb hover colour ('Scrollbar/ThumbRollover')
         public float[] scrollThumbPressed;  // list: thumb pressed colour ('Scrollbar/ThumbPressed')
+        public CanonicalShape maskShape;    // list: the 'Mask' layer's styling — cornerRadius rounds the clip
         public CanonicalShape optionShape; // dropdown: option row Regular shape
         public CanonicalShape popupShape;  // dropdown popup shell/background (Options frame)
         public CanonicalShape optionRolloverShape; // dropdown: option row Rollover full shape

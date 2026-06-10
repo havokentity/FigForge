@@ -1059,10 +1059,14 @@ function ensureListMask(comp: ComponentNode): void {
   const bg = kids.find((c) => c.name === 'Background');
   const strokeW = bg && typeof (bg as unknown as { strokeWeight?: unknown }).strokeWeight === 'number'
     ? (bg as unknown as { strokeWeight: number }).strokeWeight : 0;
+  const bgRadius = bg && typeof (bg as unknown as { cornerRadius?: unknown }).cornerRadius === 'number'
+    ? (bg as unknown as { cornerRadius: number }).cornerRadius : 0;
   const inset = strokeW + 1;
 
-  const mask = solidRect('Mask', Math.max(1, W - inset * 2), Math.max(1, H - HEADER - inset * 2), 0,
-    { r: 0.2, g: 0.55, b: 1 }, 0.12); // guide tint; hidden anyway
+  // The Mask's OWN corner radius defines the clip rounding in Unity (rounded stencil
+  // mask) — default it to the Background's radius so rows follow the container curve.
+  const mask = solidRect('Mask', Math.max(1, W - inset * 2), Math.max(1, H - HEADER - inset * 2),
+    Math.max(0, bgRadius - inset), { r: 0.2, g: 0.55, b: 1 }, 0.12); // guide tint; hidden anyway
   mask.x = inset; mask.y = HEADER + inset;
   mask.visible = false;
   mask.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };

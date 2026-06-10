@@ -1402,10 +1402,16 @@ export async function exportDesign(
     const scrollThumbRollover = sbThumbRoll ? (stateSolid(sbThumbRoll) ?? undefined) : undefined;
     const scrollThumbPressed = sbThumbPress ? (stateSolid(sbThumbPress) ?? undefined) : undefined;
 
+    // The Mask layer's own styling — its corner radius drives the ROUNDED clip in
+    // Unity (rounded stencil mask), so the clip shape is entirely designer-defined.
+    const maskNode = childByName(master, 'Mask');
+    const maskShape = maskNode ? (shapeOf(maskNode) ?? undefined) : undefined;
+
     return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
       itemHeight, headerHeight, label: rowLabel,
       listItems: listItems.length ? listItems : undefined,
       scrollbarWidth, scrollTrackShape, scrollThumbShape, scrollThumbRollover, scrollThumbPressed,
+      maskShape,
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       // 'Mask' (optional, usually hidden): a designer-drawn rect that defines the exact
       // scroll/clip region — Unity anchors the list viewport to it instead of deriving

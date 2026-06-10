@@ -2120,13 +2120,30 @@ namespace FigForge
                 vrt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH : maskInset));
             }
             if (viewport.GetComponent<CanvasRenderer>() == null) viewport.AddComponent<CanvasRenderer>();
-            viewport.AddComponent<Image>().color = new Color(1, 1, 1, 0.004f); // near-invisible drag/clip target
-            if (e.clipsContent || hasMaskPart)
+            float maskR = (c.maskShape != null ? c.maskShape.cornerRadius : 0f) * sf;
+            bool listClips = e.clipsContent || hasMaskPart;
+            if (listClips && maskR > 0.5f)
             {
-                var mask = viewport.AddComponent<RectMask2D>();
-                // Feather the clip edge ~1px so hard row edges blend like the AA'd background edge.
-                int soft = Mathf.Max(1, Mathf.RoundToInt(sf));
-                mask.softness = new Vector2Int(soft, soft);
+                // ROUNDED clip, designer-defined by the Mask layer's own corner radius.
+                // The rounded SDF graphic doubles as drag target and stencil source — its
+                // shader discards outside the rounded shape, so the stencil Mask clips
+                // rows to the curve at EVERY scroll position (same pattern as ApplyClip).
+                var rr = viewport.AddComponent<FigForgeRoundedRect>();
+                rr.Configure(FigForgeFill.Solid(new Color(1f, 1f, 1f, 0.004f)), FigForgeStroke.None,
+                    new Vector4(maskR, maskR, maskR, maskR));
+                rr.raycastTarget = true; // the scroll drag surface
+                viewport.AddComponent<Mask>().showMaskGraphic = true;
+            }
+            else
+            {
+                viewport.AddComponent<Image>().color = new Color(1, 1, 1, 0.004f); // near-invisible drag/clip target
+                if (listClips)
+                {
+                    var mask = viewport.AddComponent<RectMask2D>();
+                    // Feather the clip edge ~1px so hard row edges blend like the AA'd background edge.
+                    int soft = Mathf.Max(1, Mathf.RoundToInt(sf));
+                    mask.softness = new Vector2Int(soft, soft);
+                }
             }
             scroll.viewport = vrt;
 
@@ -2226,13 +2243,9 @@ namespace FigForge
             string labelTmpl = string.IsNullOrEmpty(c.label) ? "Item" : c.label;
             var list = go.AddComponent<FigForgeList>();
             list.Configure(crt, rowH, labelTmpl, ToListRowStyle(c.itemShape, sf), hover, hasHover);
-            // Rows follow the container's rounded corners (first row top pair, last row
-            // bottom pair) so square row fills can't paint over the Background's curves.
-            // A Header strip already covers the top corners, so zero the top pair then.
-            float listCr = Mathf.Max(0f, (c.shape != null ? c.shape.cornerRadius : 0f) * sf - maskInset);
-            list.containerCorners = headerH > 0f
-                ? new Vector4(0f, 0f, listCr, listCr)
-                : new Vector4(listCr, listCr, listCr, listCr);
+            // Row corner rounding (containerCorners) stays zero: the clip shape is owned by
+            // the designer's Mask layer now — its corner radius rounds the clip itself, so
+            // nothing is derived from the Background's corners anymore.
 
             // Rich rows: build the captured Item subtree once as a hidden template that
             // FigForgeList clones per row (icon/title/subtitle/accessory/divider), with
@@ -2514,7 +2527,10 @@ namespace FigForge
         // v38: designer-defined list clipping — an explicit 'Mask' layer anchors the
         //      viewport (scrollbar hugs its right edge), and the Figma frame's clipsContent
         //      decides whether the list clips at all.
-        internal const int CanonicalSchema = 38;
+        // v39: the Mask layer's own corner radius rounds the clip (rounded stencil mask,
+        //      correct at every scroll position); background-corner-derived row rounding
+        //      removed — the clip shape is entirely designer-owned.
+        internal const int CanonicalSchema = 39;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
