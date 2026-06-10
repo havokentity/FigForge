@@ -22,7 +22,8 @@
 // changes, layout-hash drift, camera resize). When clean the quads are static
 // textured quads — zero per-frame compositor work. Changes to FOREIGN graphics
 // beneath a blend layer are not auto-detected; call MarkDirty() if you animate
-// content under a Tier-2 layer.
+// or reorder content under a Tier-2 layer at runtime. (In the editor, hierarchy
+// edits mark the compositor dirty automatically.)
 // =============================================================================
 
 using System.Collections.Generic;
@@ -98,21 +99,42 @@ namespace FigForge
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
             Canvas.willRenderCanvases += HandleWillRenderCanvases;
+#if UNITY_EDITOR
+            // The compositor only gets OnTransformChildrenChanged for its own
+            // GameObject, so deep hierarchy edits (reordering text above/below a
+            // blend layer) would otherwise leave a stale backdrop while authoring.
+            // Runtime reorders still need an explicit MarkDirty().
+            UnityEditor.EditorApplication.hierarchyChanged -= HandleHierarchyChanged;
+            UnityEditor.EditorApplication.hierarchyChanged += HandleHierarchyChanged;
+#endif
             MarkDirty();
         }
 
         void OnDisable()
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.hierarchyChanged -= HandleHierarchyChanged;
+#endif
             ReleaseAllBlendedTargets();
         }
 
         void OnDestroy()
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.hierarchyChanged -= HandleHierarchyChanged;
+#endif
             ReleaseAllBlendedTargets();
             DestroyRuntimeMaterial(_compositeMaterial);
         }
+
+#if UNITY_EDITOR
+        void HandleHierarchyChanged()
+        {
+            MarkDirty();
+        }
+#endif
 
         void OnTransformChildrenChanged()
         {
@@ -181,6 +203,9 @@ namespace FigForge
                 RenderTexture.ReleaseTemporary(capture);
             }
 
+            // Blit leaves the last blended target active; don't let anything
+            // downstream inherit it as a render target.
+            RenderTexture.active = null;
             if (complete) _dirty = false;
         }
 
@@ -330,6 +355,10 @@ namespace FigForge
                     hash = hash * 31 + Quantized(rect.w);
                     hash = hash * 31 + (int)layer.CompositorBlendMode;
                     hash = hash * 31 + Quantized(layer.CompositorOpacity);
+                    // Pure z-reorders move a layer in paint order without moving it on
+                    // screen — the backdrop set changes while the rect doesn't.
+                    for (var t = layer.transform; t != null; t = t.parent)
+                        hash = hash * 31 + t.GetSiblingIndex();
                 }
                 return hash;
             }
