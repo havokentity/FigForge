@@ -2091,7 +2091,10 @@ namespace FigForge
                 BuildPartSubtree(headerGo, c.partTrees["Header"], ctx);
             }
 
-            var scroll = go.AddComponent<ScrollRect>();
+            // FigForgeScrollRect: stock wheel input bypasses the drag rubber-band and
+            // overshoots Elastic bounds violently — it clamps wheel movement to the range
+            // (hard stop, like the thumb) while drags keep the elastic bounce.
+            var scroll = go.AddComponent<FigForgeScrollRect>();
             scroll.horizontal = false; scroll.vertical = true;
             scroll.movementType = ScrollRect.MovementType.Elastic; scroll.scrollSensitivity = 20f;
 
@@ -2528,7 +2531,9 @@ namespace FigForge
         // v40: default scrollbar width 6 -> 10 px (manifests without a captured width).
         // v41: scrollbar lives INSIDE the viewport so the (rounded) mask clips it with
         //      the rows.
-        internal const int CanonicalSchema = 41;
+        // v42: FigForgeScrollRect clamps mouse-wheel overshoot (hard stop at the range);
+        //      drags keep the elastic bounce.
+        internal const int CanonicalSchema = 42;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

@@ -934,7 +934,8 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
   content.primaryAxisAlignItems = 'MIN';
   content.counterAxisAlignItems = 'CENTER';
   content.itemSpacing = 12;
-  content.paddingLeft = PAD; content.paddingRight = PAD;
+  // Extra right padding keeps the trailing Accessory chevron 10px off the edge.
+  content.paddingLeft = PAD; content.paddingRight = PAD + 10;
   content.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   item.appendChild(content);
 
@@ -999,6 +1000,11 @@ function upgradeAllListMasters(): void {
   for (const page of figma.root.children) {
     for (const n of page.children) {
       if (n.type !== 'COMPONENT') continue;
+      // ListItem masters carry no canonical tag — match by name.
+      if (n.name === 'ListItem' || n.name.startsWith('ListItem ')) {
+        repairListItemChevronPadding(n as ComponentNode);
+        continue;
+      }
       const tag = (n as ComponentNode).getSharedPluginData('figforge', 'canonical');
       if (!tag) continue;
       try { if ((JSON.parse(tag) as { kind?: string }).kind !== 'list') continue; } catch { continue; }
@@ -1009,6 +1015,16 @@ function upgradeAllListMasters(): void {
       ensureListMask(comp);
     }
   }
+}
+
+// Pristine old-default rows had the Accessory chevron flush at paddingRight 14 —
+// nudge it 10px in. Only the exact old default is touched.
+function repairListItemChevronPadding(item: ComponentNode): void {
+  if (!('children' in item)) return;
+  const content = (item as ChildrenMixin).children.find((c) => c.name === 'Content');
+  if (!content || !('paddingRight' in content)) return;
+  const f = content as FrameNode;
+  if (f.paddingRight === 14) f.paddingRight = 24;
 }
 
 // A Scrollbar frame still at the PRISTINE old default (6px wide, 3px thumb radius)
