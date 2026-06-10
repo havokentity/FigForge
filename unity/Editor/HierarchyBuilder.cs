@@ -697,6 +697,13 @@ namespace FigForge
             ApplyText_Outline(tmp, t);
             MatchTextWeight(tmp);
             ApplyOpacity(go, e, tmp.color);
+
+            // Live Figma blend mode on text: a companion bakes the TMP mesh to a
+            // surface and composites it — Tier-2 via the page compositor, Multiply/
+            // Screen/PlusLighter via GPU blend state. Opacity rides the TMP vertex
+            // colour (ApplyOpacity above), so the companion presents at opacity 1.
+            if (e.style != null && NonNormalBlend(e.style.blendMode))
+                go.AddComponent<FigForgeTextBlend>().Configure(BlendModeFromManifest(e.style.blendMode));
         }
 
         // A Figma text stroke → a TMP outline. Uses the per-instance fontMaterial

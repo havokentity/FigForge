@@ -265,6 +265,17 @@ function buildStyle(node: SceneNode, options: ExportOptions, hasAsset: boolean):
   };
 }
 
+// Minimal style for TEXT nodes: layer opacity + blend mode only — full
+// buildStyle would lift the glyph colour paints into panel fills. Emitted only
+// when either matters, so plain text keeps a lean manifest. Unity folds the
+// opacity into the TMP colour and attaches FigForgeTextBlend for live blends.
+function textStyle(node: SceneNode): Style | undefined {
+  const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
+  const blendMode = nodeBlendMode(node);
+  if (opacity >= 0.999 && (blendMode === 'normal' || blendMode === 'passThrough')) return undefined;
+  return { opacity, blendMode, cornerRadius: 0 };
+}
+
 function alignH(v: string | undefined): TextProps['alignH'] {
   switch (v) {
     case 'CENTER':
@@ -1155,6 +1166,7 @@ export async function exportDesign(
       if (node.type === 'TEXT' && !hasAsset) {
         text = buildText(node as TextNode);
         components.push('TextMeshProUGUI');
+        style = textStyle(node);
       } else {
         style = buildStyle(node, options, hasAsset);
         if (hasAsset || style?.fill || style?.stroke) components.push('Image');
@@ -1592,6 +1604,7 @@ export async function exportDesign(
       styles.add(text.fontStyle);
       fontMap.set(text.fontFamily, styles);
       components.push('TextMeshProUGUI');
+      style = textStyle(node);
     } else {
       style = buildStyle(node, options, hasAsset);
       if (hasAsset || style?.fill || style?.stroke) components.push('Image');
