@@ -80,7 +80,7 @@ export interface Stroke {
 }
 
 export interface Shadow {
-  kind?: 'dropShadow' | 'innerShadow' | 'layerBlur';
+  kind?: 'dropShadow' | 'innerShadow' | 'layerBlur' | 'backgroundBlur';
   color: RGBA;
   offsetX: number;
   offsetY: number;

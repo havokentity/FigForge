@@ -202,6 +202,21 @@ function extractShadows(node: SceneNode): Shadow[] {
       });
       continue;
     }
+    if (e.type === 'BACKGROUND_BLUR') {
+      // Destination-reading, like Tier-2 blend modes: Unity's page compositor
+      // blurs the captured backdrop behind the layer's shape (glassmorphism).
+      const bb = e as unknown as { radius?: number };
+      out.push({
+        kind: 'backgroundBlur',
+        color: [0, 0, 0, 0],
+        offsetX: 0,
+        offsetY: 0,
+        blur: bb.radius ?? 0,
+        spread: 0,
+        inner: false,
+      });
+      continue;
+    }
     if (e.type === 'LAYER_BLUR') {
       const lb = e as unknown as {
         radius?: number;

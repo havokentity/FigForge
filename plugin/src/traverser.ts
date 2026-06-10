@@ -109,6 +109,17 @@ function hasLiveBlend(node: SceneNode): boolean {
   return !!bm && bm !== 'NORMAL' && bm !== 'PASS_THROUGH';
 }
 
+/**
+ * Background blur (glassmorphism) reads the backdrop at render time — it can
+ * never be baked into a PNG (the blur depends on whatever ends up behind the
+ * node in Unity). Keep such nodes procedural so the page compositor renders it.
+ */
+function hasBackgroundBlur(node: SceneNode): boolean {
+  const effects = (node as unknown as { effects?: readonly Effect[] }).effects;
+  if (!Array.isArray(effects)) return false;
+  return effects.some((e) => e.type === 'BACKGROUND_BLUR' && e.visible !== false);
+}
+
 export function hasVisibleStroke(node: SceneNode): boolean {
   const w = (node as unknown as { strokeWeight?: number }).strokeWeight;
   if (typeof w === 'number' && w <= 0) return false;
@@ -147,13 +158,14 @@ export function isExportable(node: SceneNode): boolean {
   if (isIconContainer(node)) return true; // all-vector children → single icon
   if (CONTAINER_TYPES.has(node.type)) {
     if (hasChildren(node) && node.children.some(isVisible)) return false; // structural container
-    // A blend-mode panel must stay procedural for live blending — unless an
-    // image fill forces rasterization (then the blend is lost; Unity warns).
-    if (hasLiveBlend(node) && !hasImageFill(node)) return false;
+    // Blend-mode and background-blur panels must stay procedural for live
+    // destination-reading compositing — unless an image fill forces
+    // rasterization (then the effect is lost; Unity warns for blends).
+    if ((hasLiveBlend(node) || hasBackgroundBlur(node)) && !hasImageFill(node)) return false;
     return hasMeaningfulFill(node) || hasVisibleStroke(node);
   }
   if (node.type === 'RECTANGLE') {
-    if (hasLiveBlend(node) && !hasImageFill(node)) return false;
+    if ((hasLiveBlend(node) || hasBackgroundBlur(node)) && !hasImageFill(node)) return false;
     return hasMeaningfulFill(node) || hasVisibleStroke(node);
   }
   return false;

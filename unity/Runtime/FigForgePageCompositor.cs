@@ -21,12 +21,16 @@
 // Performance: captures and blits run only when dirty (source content/layout
 // changes, layout-hash drift, camera resize). When clean the quads are static
 // textured quads — zero per-frame compositor work. Changes to FOREIGN graphics
-// beneath a blend layer are not auto-detected; call MarkDirty() if you animate
-// or reorder content under a Tier-2 layer at runtime. (In the editor, hierarchy
-// edits mark the compositor dirty automatically.)
+// beneath a blend layer are auto-detected at runtime: a state hash over the
+// canvas's graphics (identity, paint order, position, size, color, texture)
+// plus TMP's TEXT_CHANGED event for text-content edits. MarkDirty() remains
+// for exotic cases — custom shaders animating without color/transform changes,
+// or when auto-detect is disabled. (In the editor, hierarchy edits mark the
+// compositor dirty automatically.)
 // =============================================================================
 
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -44,11 +48,26 @@ namespace FigForge
         readonly List<Graphic> _canvasGraphics = new List<Graphic>();
         readonly List<CanvasRenderer> _culled = new List<CanvasRenderer>();
 
+        // Auto-detect runtime changes to foreign graphics (plain Images, TMP text)
+        // under blend layers: a linear scan of the canvas's graphics each canvas
+        // update while blend layers are active. Disable and call MarkDirty()
+        // manually if the page has a very large graphic count.
+        [SerializeField] bool autoDetectForeignChanges = true;
+
+        public bool AutoDetectForeignChanges
+        {
+            get => autoDetectForeignChanges;
+            set => autoDetectForeignChanges = value;
+        }
+
         Material _compositeMaterial;
+        Material _blurMaterial;
         bool _dirty = true;
         bool _inRebuild;
         bool _warnedCaptureFailed;
         int _layoutHash;
+        int _foreignHash;
+        bool _foreignHashValid;
 
         public bool IsActive => isActiveAndEnabled && ActiveAdvancedCount() > 0;
 
@@ -100,6 +119,10 @@ namespace FigForge
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
             Canvas.willRenderCanvases += HandleWillRenderCanvases;
+            // Text-content edits change neither rect, position, color, nor texture
+            // instance — the foreign-state hash can't see them, TMP's event can.
+            TMPro_EventManager.TEXT_CHANGED_EVENT.Remove(HandleTextChanged);
+            TMPro_EventManager.TEXT_CHANGED_EVENT.Add(HandleTextChanged);
 #if UNITY_EDITOR
             // The compositor only gets OnTransformChildrenChanged for its own
             // GameObject, so deep hierarchy edits (reordering text above/below a
@@ -114,6 +137,7 @@ namespace FigForge
         void OnDisable()
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
+            TMPro_EventManager.TEXT_CHANGED_EVENT.Remove(HandleTextChanged);
 #if UNITY_EDITOR
             UnityEditor.EditorApplication.hierarchyChanged -= HandleHierarchyChanged;
 #endif
@@ -123,11 +147,13 @@ namespace FigForge
         void OnDestroy()
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
+            TMPro_EventManager.TEXT_CHANGED_EVENT.Remove(HandleTextChanged);
 #if UNITY_EDITOR
             UnityEditor.EditorApplication.hierarchyChanged -= HandleHierarchyChanged;
 #endif
             ReleaseAllBlendedTargets();
             DestroyRuntimeMaterial(_compositeMaterial);
+            DestroyRuntimeMaterial(_blurMaterial);
         }
 
 #if UNITY_EDITOR
@@ -158,6 +184,7 @@ namespace FigForge
 
             SortOrderedLayers();
             if (LayoutChanged(cam)) MarkDirty();
+            if (autoDetectForeignChanges) DetectForeignChanges();
             if (!_dirty) return;
 
             _inRebuild = true;
@@ -215,12 +242,15 @@ namespace FigForge
                 }
                 _warnedCaptureFailed = false;
 
+                var backdropRect = BackdropRect(layer, cam);
                 _compositeMaterial.SetTexture("_Backdrop", capture);
-                _compositeMaterial.SetVector("_BackdropRect", BackdropRect(layer, cam));
+                _compositeMaterial.SetVector("_BackdropRect", backdropRect);
                 _compositeMaterial.SetVector("_BackdropSize", new Vector4(capture.width, capture.height, 0f, 0f));
                 _compositeMaterial.SetFloat("_BlendMode", (float)layer.CompositorBlendMode);
                 _compositeMaterial.SetFloat("_AppearanceOpacity", layer.CompositorOpacity);
-                Graphics.Blit(surface, target, _compositeMaterial);
+                var blurTex = PrepareBackdropBlur(layer, capture, target, backdropRect);
+                Graphics.Blit(surface, target, _compositeMaterial, 0);
+                if (blurTex != null) RenderTexture.ReleaseTemporary(blurTex);
                 RenderTexture.ReleaseTemporary(capture);
             }
 
@@ -236,6 +266,87 @@ namespace FigForge
             var shader = Shader.Find("FigForge/Composite");
             if (shader == null) return false;
             _compositeMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+            return true;
+        }
+
+        // ---- Backdrop blur (glassmorphism) --------------------------------------
+
+        // Figma background blur: blur the captured backdrop behind the layer's
+        // SHAPE, then let the blend pass composite the fill over it (out-alpha =
+        // shape coverage, so the blur replaces the sharp backdrop inside the shape
+        // while shadows in the pad ring stay over the sharp page). Returns the
+        // temporary blurred crop (caller releases) or null when the layer has no
+        // background blur. Configures all pass-0 blur uniforms either way.
+        RenderTexture PrepareBackdropBlur(IFigForgeCompositorSource layer, RenderTexture capture,
+                                          RenderTexture target, Vector4 backdropRect)
+        {
+            float blurCanvasPx = layer.CompositorBackdropBlur;
+            if (blurCanvasPx <= 0.001f || !EnsureBlurMaterial())
+            {
+                _compositeMaterial.SetFloat("_HasBackdropBlur", 0f);
+                return null;
+            }
+
+            var rect = layer.CompositorRectTransform.rect;
+            float pad = layer.CompositorPad;
+            float surfacePerCanvas = target.width / Mathf.Max(1f, rect.width + 2f * pad);
+            float surfacePerScreen = target.width / Mathf.Max(1f, backdropRect.z);
+            float blurSurfacePx = blurCanvasPx * surfacePerCanvas;
+
+            // Crop a region EXTENDED by the blur kernel's reach: pixels near the
+            // shape edge need backdrop context from beyond the layer rect, else the
+            // clamped sampling smears the crop's edge pixels across the glass.
+            int extend = Mathf.CeilToInt(1.75f * blurSurfacePx + 1f);
+            int limit = SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 8192;
+            int bw = Mathf.Clamp(target.width + 2 * extend, 1, limit);
+            int bh = Mathf.Clamp(target.height + 2 * extend, 1, limit);
+            float extendScreen = extend / Mathf.Max(0.0001f, surfacePerScreen);
+
+            var blurTex = RenderTexture.GetTemporary(bw, bh, 0, RenderTextureFormat.ARGB32);
+            blurTex.filterMode = FilterMode.Bilinear;
+            blurTex.wrapMode = TextureWrapMode.Clamp;
+            _compositeMaterial.SetVector("_CropRect", new Vector4(
+                backdropRect.x - extendScreen, backdropRect.y - extendScreen,
+                backdropRect.z + 2f * extendScreen, backdropRect.w + 2f * extendScreen));
+            Graphics.Blit(capture, blurTex, _compositeMaterial, 1);
+            ApplySeparableBlur(blurTex, blurSurfacePx);
+
+            // Shape bounds in surface pixels for the analytic rounded-rect coverage.
+            float padPx = pad * surfacePerCanvas;
+            var shapeRect = new Vector4(padPx, padPx, rect.width * surfacePerCanvas, rect.height * surfacePerCanvas);
+            var radii = layer.CompositorShapeCorners * surfacePerCanvas;
+            float maxRad = 0.5f * Mathf.Min(shapeRect.z, shapeRect.w);
+            radii = new Vector4(Mathf.Min(radii.x, maxRad), Mathf.Min(radii.y, maxRad),
+                                Mathf.Min(radii.z, maxRad), Mathf.Min(radii.w, maxRad));
+
+            _compositeMaterial.SetFloat("_HasBackdropBlur", 1f);
+            _compositeMaterial.SetTexture("_BackdropBlurTex", blurTex);
+            _compositeMaterial.SetVector("_BlurUvParams", new Vector4(extend, extend, bw, bh));
+            _compositeMaterial.SetVector("_ShapeRectPx", shapeRect);
+            _compositeMaterial.SetVector("_ShapeRadiusPx", radii);
+            _compositeMaterial.SetVector("_TargetSize", new Vector4(target.width, target.height, 0f, 0f));
+            return blurTex;
+        }
+
+        void ApplySeparableBlur(RenderTexture targetRt, float radiusPx)
+        {
+            var temp = RenderTexture.GetTemporary(targetRt.width, targetRt.height, 0, RenderTextureFormat.ARGB32);
+            temp.filterMode = FilterMode.Bilinear;
+            temp.wrapMode = TextureWrapMode.Clamp;
+            _blurMaterial.SetVector("_BlurParams", new Vector4(1f, 0f, radiusPx, radiusPx));
+            _blurMaterial.SetVector("_Direction", new Vector4(1f, 0f, 0f, 0f));
+            Graphics.Blit(targetRt, temp, _blurMaterial);
+            _blurMaterial.SetVector("_Direction", new Vector4(0f, 1f, 0f, 0f));
+            Graphics.Blit(temp, targetRt, _blurMaterial);
+            RenderTexture.ReleaseTemporary(temp);
+        }
+
+        bool EnsureBlurMaterial()
+        {
+            if (_blurMaterial != null) return true;
+            var shader = Shader.Find("FigForge/LayerBlur");
+            if (shader == null) return false;
+            _blurMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
             return true;
         }
 
@@ -376,6 +487,7 @@ namespace FigForge
                     hash = hash * 31 + Quantized(rect.w);
                     hash = hash * 31 + (int)layer.CompositorBlendMode;
                     hash = hash * 31 + Quantized(layer.CompositorOpacity);
+                    hash = hash * 31 + Quantized(layer.CompositorBackdropBlur);
                     // Pure z-reorders move a layer in paint order without moving it on
                     // screen — the backdrop set changes while the rect doesn't.
                     for (var t = layer.transform; t != null; t = t.parent)
@@ -388,6 +500,82 @@ namespace FigForge
         static int Quantized(float value)
         {
             return Mathf.RoundToInt(value * 100f);
+        }
+
+        // ---- Foreign-change detection ------------------------------------------
+
+        // Runtime auto-dirty for FOREIGN graphics (plain Images, TMP text, ...)
+        // under blend layers: hash identity, paint order, position, size, color,
+        // and texture of every graphic on the canvas; any drift → MarkDirty().
+        void DetectForeignChanges()
+        {
+            // Reuses the cached list. Rebuild recollects it afterwards, which is
+            // fine — this scan must see the CURRENT canvas population either way.
+            CollectCanvasGraphics();
+            int hash = ComputeForeignHash();
+            if (!_foreignHashValid)
+            {
+                // Lazy seed: the compositor already starts dirty, so the first
+                // computation must not trigger a spurious extra MarkDirty cycle.
+                _foreignHashValid = true;
+                _foreignHash = hash;
+                return;
+            }
+            if (hash == _foreignHash) return;
+            _foreignHash = hash;
+            MarkDirty();
+        }
+
+        int ComputeForeignHash()
+        {
+            unchecked
+            {
+                int hash = 17;
+                for (int i = 0; i < _canvasGraphics.Count; i++)
+                {
+                    var graphic = _canvasGraphics[i];
+                    if (graphic == null) continue;
+                    var t = graphic.transform;
+                    hash = hash * 31 + graphic.GetInstanceID();
+                    // Sibling index + parent identity catch reorders/reparents.
+                    hash = hash * 31 + t.GetSiblingIndex();
+                    hash = hash * 31 + (t.parent != null ? t.parent.GetInstanceID() : 0);
+                    var pos = t.localPosition;
+                    hash = hash * 31 + Quantized(pos.x);
+                    hash = hash * 31 + Quantized(pos.y);
+                    var rect = ((RectTransform)graphic.rectTransform).rect;
+                    hash = hash * 31 + Quantized(rect.width);
+                    hash = hash * 31 + Quantized(rect.height);
+                    Color32 c = graphic.color;
+                    hash = hash * 31 + (c.r | c.g << 8 | c.b << 16 | c.a << 24);
+                    // Texture identity catches sprite swaps. Our own blended-RT
+                    // rebinds keep stable instances except on resize (which the
+                    // layout hash already dirties), so no feedback loop.
+                    var tex = graphic.mainTexture;
+                    hash = hash * 31 + (tex != null ? tex.GetInstanceID() : 0);
+                }
+                return hash;
+            }
+        }
+
+        // Text-content edits keep rect, position, color, and texture instance all
+        // unchanged — invisible to the foreign-state hash — so TMP's regen event
+        // dirties us directly.
+        void HandleTextChanged(Object obj)
+        {
+            // TMP regens fired by our own Canvas.ForceUpdateCanvases during Rebuild
+            // land in the same capture — re-dirtying here would rebuild every frame.
+            if (_inRebuild) return;
+            if (!autoDetectForeignChanges) return;
+            // Component cast first: Object-typed refs of destroyed components
+            // bypass the overloaded null check (same caveat as SetGraphicDirty).
+            var component = obj as Component;
+            if (component == null) return;
+            var canvas = GetComponentInParent<Canvas>();
+            var root = canvas != null ? (canvas.rootCanvas != null ? canvas.rootCanvas : canvas) : null;
+            if (root == null) return;
+            if (!component.transform.IsChildOf(root.transform)) return;
+            MarkDirty();
         }
 
         // ---- Layer bookkeeping -------------------------------------------------

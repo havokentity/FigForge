@@ -359,14 +359,19 @@ namespace FigForge
 
             if (hasAsset)
             {
-                if (NonNormalBlend(style != null ? style.blendMode : null))
-                    ctx.log($"'{e.name}' has blend mode '{style.blendMode}' but was rasterized to a PNG — " +
-                            "baked images composite as normal alpha, so the blend is lost. Remove the image " +
-                            "fill / PNG override to keep it procedural for live blending.");
                 img.sprite = ctx.sprites[e.asset];
+                if (NonNormalBlend(style != null ? style.blendMode : null))
+                {
+                    // Live blend on a rasterized node: the companion bakes the sprite
+                    // and presents it through the blend pipeline. Keep Image.type
+                    // Simple — the baked PNG already contains the node's corners, and
+                    // the bake shader stretches the sprite across the rect (9-slice
+                    // geometry would never reach the bake).
+                    go.AddComponent<FigForgeImageBlend>().Configure(BlendModeFromManifest(style.blendMode));
+                }
                 // Auto-9-slice when the sprite was imported with a border (rounded /
                 // bordered panel) so it scales without smearing the corners.
-                if (img.sprite != null && img.sprite.border.sqrMagnitude > 0.01f)
+                else if (img.sprite != null && img.sprite.border.sqrMagnitude > 0.01f)
                 { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
                 ApplyOpacity(go, e, Color.white, opacityBaked: true);
             }
@@ -574,6 +579,7 @@ namespace FigForge
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/LayerBlur"));
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/Composite"));
                 AddAlwaysIncludedShader(arr, Shader.Find("FigForge/VectorBake"));
+                AddAlwaysIncludedShader(arr, Shader.Find("FigForge/ImageBake"));
                 so.ApplyModifiedProperties();
             }
             catch { /* best effort — editor still works via Shader.Find */ }
@@ -1060,6 +1066,7 @@ namespace FigForge
                 {
                     case "innerShadow": inner++; break;
                     case "layerBlur": blur++; break;
+                    case "backgroundBlur": break; // composite-time (page compositor), no paint budget
                     default: drop++; break;
                 }
             }
@@ -1117,6 +1124,13 @@ namespace FigForge
                     effect.endBlur = end;
                     effect.enabled = Mathf.Max(effect.blur, effect.endBlur) > 0.001f;
                     outEffects.Add(effect);
+                    continue;
+                }
+                if (kind == "backgroundBlur")
+                {
+                    // Glassmorphism: the page compositor blurs the captured backdrop
+                    // behind the shape; this just records the radius on the graphic.
+                    outEffects.Add(FigForgeEffectLayer.BackgroundBlur(s.blur * ctx.scaleFactor));
                     continue;
                 }
 

@@ -34,7 +34,7 @@ namespace FigForge
         Luminosity,
     }
 
-    public enum FigForgeEffectKind { DropShadow, InnerShadow, LayerBlur }
+    public enum FigForgeEffectKind { DropShadow, InnerShadow, LayerBlur, BackgroundBlur }
     public enum FigForgeLayerBlurMode { Uniform, Progressive }
     public enum FigForgeStrokeStyle { Solid, Dashed }
     public enum FigForgeCompositorMode { Auto, Direct, CachedSource }
@@ -158,6 +158,23 @@ namespace FigForge
             };
         }
 
+        // Figma background blur (glassmorphism): blurs the BACKDROP behind the
+        // shape, not the layer's own paint. Composited by the page compositor.
+        public static FigForgeEffectLayer BackgroundBlur(float blur)
+        {
+            return new FigForgeEffectLayer
+            {
+                enabled = blur > 0.001f,
+                kind = FigForgeEffectKind.BackgroundBlur,
+                color = new Color(0, 0, 0, 0),
+                offset = Vector2.zero,
+                blur = Mathf.Max(0f, blur),
+                spread = 0f,
+                blurMode = FigForgeLayerBlurMode.Uniform,
+                endBlur = Mathf.Max(0f, blur),
+            };
+        }
+
         public void Normalize()
         {
             blur = Mathf.Max(0f, blur);
@@ -166,6 +183,12 @@ namespace FigForge
             {
                 if (blurMode != FigForgeLayerBlurMode.Progressive) blurMode = FigForgeLayerBlurMode.Uniform;
                 enabled = enabled && Mathf.Max(blur, endBlur) > 0.001f;
+                return;
+            }
+            if (kind == FigForgeEffectKind.BackgroundBlur)
+            {
+                blurMode = FigForgeLayerBlurMode.Uniform;
+                enabled = enabled && blur > 0.001f;
                 return;
             }
             if (kind != FigForgeEffectKind.InnerShadow) kind = FigForgeEffectKind.DropShadow;
@@ -213,15 +236,31 @@ namespace FigForge
         public FigForgeBlendMode CompositorBlendMode => blendMode;
         public float CompositorOpacity => appearanceOpacity;
         public float CompositorPad => MeshPad();
+        public float CompositorBackdropBlur => BackdropBlurRadius();
+        public Vector4 CompositorShapeCorners => corners;
         public RectTransform CompositorRectTransform => rectTransform;
-        // Tier-2 (destination-reading) blends route through the page compositor on
-        // BOTH pipelines: it captures the real page (foreign uGUI included) and hands
-        // this graphic a pre-blended texture to present at its own hierarchy position.
-        // Registration is additionally gated on the canvas being capturable (Screen
-        // Space - Camera); otherwise the per-graphic fallback applies — GrabPass under
-        // Built-in, plain alpha under SRP.
+        // Tier-2 (destination-reading) blends AND background blur route through the
+        // page compositor on BOTH pipelines: it captures the real page (foreign uGUI
+        // included) and hands this graphic a pre-blended texture to present at its
+        // own hierarchy position. Registration is additionally gated on the canvas
+        // being capturable (Screen Space - Camera); otherwise the per-graphic
+        // fallback applies — GrabPass under Built-in, plain alpha under SRP (and
+        // background blur degrades to no blur).
         public const bool PageCompositorEnabled = true;
-        public bool RequiresPageCompositor => PageCompositorEnabled && BlendTier(blendMode) == 2;
+        public bool RequiresPageCompositor =>
+            PageCompositorEnabled && (BlendTier(blendMode) == 2 || BackdropBlurRadius() > 0.001f);
+
+        // First enabled background-blur effect's radius (canvas px, 0 = none).
+        float BackdropBlurRadius()
+        {
+            for (int i = 0; i < effects.Count; i++)
+            {
+                var e = effects[i];
+                if (e.enabled && e.kind == FigForgeEffectKind.BackgroundBlur && e.blur > 0.001f)
+                    return e.blur;
+            }
+            return 0f;
+        }
         public float AppearanceOpacity
         {
             get => appearanceOpacity;
@@ -942,6 +981,9 @@ namespace FigForge
             // Tier-2 (destination-reading) modes present through the GrabPass blend
             // shader, which needs the flattened cached surface.
             if (BlendTier(blendMode) == 2) return true;
+            // Background blur composites through the page compositor even at Normal
+            // blend — the quad presents the pre-composited glass.
+            if (BackdropBlurRadius() > 0.001f) return true;
             if (BlendTier(blendMode) == 1 && blendMode != FigForgeBlendMode.PassThrough && blendMode != FigForgeBlendMode.Normal)
                 return true;
             return VisibleDropShadowCount() > 0

@@ -56,6 +56,8 @@ namespace FigForge
         public FigForgeBlendMode CompositorBlendMode => _blendMode;
         public float CompositorOpacity => _appearanceOpacity;
         public float CompositorPad => AaPadPx;
+        public float CompositorBackdropBlur => 0f;          // background blur lives on panels (LayeredRect)
+        public Vector4 CompositorShapeCorners => Vector4.zero;
         public RectTransform CompositorRectTransform => rectTransform;
         public RenderTexture GetCompositorSurface() { EnsureSurface(); return _cachedSurface; }
 
