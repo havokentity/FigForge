@@ -76,6 +76,7 @@ Shader "FigForge/LayeredRect4"
         _StencilWriteMask ("Stencil Write Mask", Float) = 255
         _StencilReadMask ("Stencil Read Mask", Float) = 255
         _ColorMask ("Color Mask", Float) = 15
+        _ClipRect ("Clip Rect", Vector) = (-32767, -32767, 32767, 32767)
     }
     SubShader
     {
@@ -93,7 +94,11 @@ Shader "FigForge/LayeredRect4"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            // RectMask2D support: without this keyword + UnityGet2DClipping the SDF
+            // graphics silently IGNORE the mask (rows drew outside the list viewport).
+            #pragma multi_compile __ UNITY_UI_CLIP_RECT
             #include "UnityCG.cginc"
+            #include "UnityUI.cginc"
             #include "FigForgeBlend.cginc"
 
             struct appdata
@@ -108,8 +113,10 @@ Shader "FigForge/LayeredRect4"
                 float4 pos:SV_POSITION;
                 fixed4 color:COLOR;
                 float4 uv0:TEXCOORD0;
+                float4 worldPosition:TEXCOORD1; // canvas-space pos for RectMask2D clipping
             };
 
+            float4 _ClipRect;
             sampler2D _MainTex;
             float _FillCount;
             float4 _FillFlags;
@@ -174,6 +181,7 @@ Shader "FigForge/LayeredRect4"
             v2f vert(appdata v)
             {
                 v2f o;
+                o.worldPosition = v.vertex;
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.color = v.color;
                 o.uv0 = v.uv0;
@@ -466,6 +474,11 @@ Shader "FigForge/LayeredRect4"
                 if (_PremultiplyOutput > 0.5)
                     outc.rgb *= outc.a;
                 float clipv = max(outc.a, shapeCov);
+                #ifdef UNITY_UI_CLIP_RECT
+                float maskf = UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
+                outc *= maskf;
+                clipv *= maskf;
+                #endif
                 clip(clipv - 0.001);
                 return outc;
             }

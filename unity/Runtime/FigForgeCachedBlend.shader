@@ -16,6 +16,7 @@ Shader "FigForge/CachedBlend"
         _StencilWriteMask ("Stencil Write Mask", Float) = 255
         _StencilReadMask ("Stencil Read Mask", Float) = 255
         _ColorMask ("Color Mask", Float) = 15
+        _ClipRect ("Clip Rect", Vector) = (-32767, -32767, 32767, 32767)
     }
     SubShader
     {
@@ -39,20 +40,26 @@ Shader "FigForge/CachedBlend"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            // RectMask2D support: outside the clip rect the coverage drops to 0, so the
+            // pixel resolves to the unmodified backdrop (this pass REPLACES the backdrop).
+            #pragma multi_compile __ UNITY_UI_CLIP_RECT
             #include "UnityCG.cginc"
+            #include "UnityUI.cginc"
             #include "FigForgeBlend.cginc"
 
             struct appdata { float4 vertex : POSITION; fixed4 color : COLOR; float2 uv0 : TEXCOORD0; };
-            struct v2f { float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; float4 grabUV : TEXCOORD1; };
+            struct v2f { float4 pos : SV_POSITION; fixed4 color : COLOR; float2 uv : TEXCOORD0; float4 grabUV : TEXCOORD1; float4 worldPosition : TEXCOORD2; };
 
             sampler2D _MainTex;
             sampler2D _GrabTexture;
             float _AppearanceOpacity;
             float _BlendMode;
+            float4 _ClipRect;
 
             v2f vert(appdata v)
             {
                 v2f o;
+                o.worldPosition = v.vertex;
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.color = v.color;
                 o.uv = v.uv0;
@@ -64,6 +71,9 @@ Shader "FigForge/CachedBlend"
             {
                 fixed4 surf = tex2D(_MainTex, i.uv);                 // premultiplied layer
                 float cov = surf.a * saturate(_AppearanceOpacity) * i.color.a;
+                #ifdef UNITY_UI_CLIP_RECT
+                cov *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
+                #endif
                 fixed3 layer = surf.rgb / max(surf.a, 1e-4);         // -> straight colour
                 layer *= i.color.rgb;
                 fixed3 backdrop = tex2Dproj(_GrabTexture, i.grabUV).rgb;

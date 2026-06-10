@@ -28,6 +28,7 @@ Shader "FigForge/RoundedRect"
         _StencilWriteMask ("Stencil Write Mask", Float) = 255
         _StencilReadMask ("Stencil Read Mask", Float) = 255
         _ColorMask ("Color Mask", Float) = 15
+        _ClipRect ("Clip Rect", Vector) = (-32767, -32767, 32767, 32767)
     }
     SubShader
     {
@@ -44,7 +45,11 @@ Shader "FigForge/RoundedRect"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            // RectMask2D support: without this keyword + UnityGet2DClipping the SDF
+            // graphics silently IGNORE the mask (rows drew outside the list viewport).
+            #pragma multi_compile __ UNITY_UI_CLIP_RECT
             #include "UnityCG.cginc"
+            #include "UnityUI.cginc"
 
             struct appdata
             {
@@ -68,11 +73,15 @@ Shader "FigForge/RoundedRect"
                 float4 uv3:TEXCOORD3;
                 float3 normal:TEXCOORD4;
                 float4 tangent:TEXCOORD5;
+                float4 worldPosition:TEXCOORD6; // canvas-space pos for RectMask2D clipping
             };
+
+            float4 _ClipRect;
 
             v2f vert(appdata v)
             {
                 v2f o;
+                o.worldPosition = v.vertex;
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.color = v.color;
                 o.uv0 = v.uv0;
@@ -317,6 +326,11 @@ Shader "FigForge/RoundedRect"
                 // With a shadow, keep the (larger) shadow footprint; otherwise clip to
                 // the shape so this graphic can still serve as a rounded UGUI Mask.
                 float clipv = (shadowColor.a > 0.001) ? outA : shapeCov;
+                #ifdef UNITY_UI_CLIP_RECT
+                float maskf = UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
+                outc *= maskf;
+                clipv *= maskf;
+                #endif
                 clip(clipv - 0.001);
                 return outc;
             }

@@ -18,6 +18,7 @@ Shader "FigForge/CachedQuad"
         _StencilWriteMask ("Stencil Write Mask", Float) = 255
         _StencilReadMask ("Stencil Read Mask", Float) = 255
         _ColorMask ("Color Mask", Float) = 15
+        _ClipRect ("Clip Rect", Vector) = (-32767, -32767, 32767, 32767)
     }
     SubShader
     {
@@ -35,7 +36,11 @@ Shader "FigForge/CachedQuad"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            // RectMask2D support: without this keyword + UnityGet2DClipping the cached
+            // presentation quad silently IGNORES the mask (drew outside list viewports).
+            #pragma multi_compile __ UNITY_UI_CLIP_RECT
             #include "UnityCG.cginc"
+            #include "UnityUI.cginc"
 
             struct appdata
             {
@@ -49,14 +54,17 @@ Shader "FigForge/CachedQuad"
                 float4 pos:SV_POSITION;
                 fixed4 color:COLOR;
                 float2 uv:TEXCOORD0;
+                float4 worldPosition:TEXCOORD1; // canvas-space pos for RectMask2D clipping
             };
 
             sampler2D _MainTex;
             float _AppearanceOpacity;
+            float4 _ClipRect;
 
             v2f vert(appdata v)
             {
                 v2f o;
+                o.worldPosition = v.vertex;
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.color = v.color;
                 o.uv = v.uv0;
@@ -69,6 +77,10 @@ Shader "FigForge/CachedQuad"
                 c *= saturate(_AppearanceOpacity);
                 c.rgb *= i.color.rgb * i.color.a;
                 c.a *= i.color.a;
+                #ifdef UNITY_UI_CLIP_RECT
+                // Premultiplied output: scale the WHOLE colour by the mask factor.
+                c *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
+                #endif
                 clip(c.a - 0.001);
                 return c;
             }
