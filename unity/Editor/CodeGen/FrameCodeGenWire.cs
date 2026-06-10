@@ -20,12 +20,26 @@ namespace FigForge
 {
     internal static class FrameCodeGenWire
     {
+        static bool _pending;
+
         [DidReloadScripts]
         static void OnScriptsReloaded()
         {
-            // Defer a tick so the freshly compiled types + the scene are fully settled
+            RequestUpgrade();
+        }
+
+        // The importer calls this after (re)building screens. When the generated code is
+        // UNCHANGED, no compile follows the import — [DidReloadScripts] never fires — and
+        // a rebuilt page would sit on the base FigForgeFrame forever (Frames.X casts fail,
+        // resolving null). The type already exists in that case, so upgrading right away
+        // works; when a compile IS pending the reload hook covers it. Idempotent.
+        internal static void RequestUpgrade()
+        {
+            if (_pending) return;
+            _pending = true;
+            // Defer a tick so freshly compiled types + the scene are fully settled
             // before we mutate components.
-            EditorApplication.delayCall += UpgradePendingFrames;
+            EditorApplication.delayCall += () => { _pending = false; UpgradePendingFrames(); };
         }
 
         static void UpgradePendingFrames()

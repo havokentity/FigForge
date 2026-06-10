@@ -658,6 +658,11 @@ namespace FigForge
                     if (ctx.byElementId.TryGetValue(mem.sourceName, out var memGo) && memGo != null)
                         reg.Register(mem.Key, memGo);
             Log($"generated accessors for frame '{model.className}' ({model.members.Count} member(s))", MessageType.Info);
+            // When the generated code is unchanged, no compile follows this import and the
+            // [DidReloadScripts] upgrade never fires — the rebuilt page would stay on the
+            // base FigForgeFrame (Frames.X resolves null). Upgrade now; if a compile IS
+            // pending, the reload hook covers it instead (idempotent).
+            FrameCodeGenWire.RequestUpgrade();
         }
 
         static void StretchToParent(GameObject go)
