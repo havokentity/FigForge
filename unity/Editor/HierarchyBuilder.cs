@@ -2389,7 +2389,7 @@ namespace FigForge
             slider.minValue = hasRange ? c.minValue : 0f;
             slider.maxValue = hasRange ? c.maxValue : 1f;
             slider.wholeNumbers = false; // slot snapping (below) covers discrete sliders
-            slider.slots = c.slots >= 2 ? c.slots : 0;
+            slider.Slots = c.slots >= 2 ? c.slots : 0;
 
             float[] full = { 0f, 0f, 1f, 1f };
             float[] trackBox = c.parts != null && c.parts.TryGetValue("Track", out var tb) && tb != null && tb.Length >= 4 ? tb : full;

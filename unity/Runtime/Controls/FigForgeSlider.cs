@@ -4,11 +4,18 @@
 // live value read-out, and optional slot snapping, wired by the importer. The
 // value range is the Figma component's authored [minValue..maxValue] (legacy
 // imports: 0..1, the Fill÷Track width ratio).
+//
+// Everything is re-rangeable through code at runtime: the inherited
+// minValue/maxValue setters and the Slots property all funnel through Set, so
+// the current value re-clamps/re-snaps and the read-out refreshes on change.
+// (The tick NOTCH visuals are the baked Figma 'Ticks' layer — changing Slots in
+// code changes the snapping, not the notch graphics.)
 // =============================================================================
 
 using System.Globalization;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
 namespace FigForge
@@ -23,8 +30,21 @@ namespace FigForge
         [Tooltip("Live value read-out (wired by the importer when the Figma component has a 'Value' layer). Rewritten on every value change. May be null.")]
         public TMP_Text tmpTxt_value;
 
-        [Tooltip("Discrete slot count (0/1 = continuous). Values snap to `slots` evenly spaced positions across [minValue..maxValue], including both ends — drags, track clicks, and code-assigned values alike.")]
-        public int slots;
+        [Tooltip("Discrete slot count (0/1 = continuous). Values snap to this many evenly spaced positions across [minValue..maxValue], including both ends — drags, track clicks, and code-assigned values alike.")]
+        [SerializeField, FormerlySerializedAs("slots")] int m_Slots;
+
+        /// <summary>Discrete slot count (0/1 = continuous) — `slider.Slots = 11`.
+        /// Setting it re-snaps the current value to the new grid immediately
+        /// (onValueChanged fires if the value moves).</summary>
+        public int Slots
+        {
+            get => m_Slots;
+            set
+            {
+                m_Slots = Mathf.Max(0, value);
+                Set(this.value, true); // re-snap the current value to the new grid
+            }
+        }
 
         /// <summary>The label's text — `slider.Label = "Volume"`. No-op if there's no label.
         /// (Use the `tmpTxt_label` TMP_Text for font/colour/advanced styling.)</summary>
@@ -69,9 +89,9 @@ namespace FigForge
 
         float Snap(float v)
         {
-            if (slots < 2 || maxValue <= minValue) return v;
+            if (m_Slots < 2 || maxValue <= minValue) return v;
             float t = Mathf.InverseLerp(minValue, maxValue, Mathf.Clamp(v, minValue, maxValue));
-            float snapped = Mathf.Round(t * (slots - 1)) / (slots - 1);
+            float snapped = Mathf.Round(t * (m_Slots - 1)) / (m_Slots - 1);
             return Mathf.Lerp(minValue, maxValue, snapped);
         }
 
