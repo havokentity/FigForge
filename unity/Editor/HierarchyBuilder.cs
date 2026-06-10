@@ -2272,6 +2272,15 @@ namespace FigForge
             }
             else list.CreatePreviewRows(count);
 
+            // Initial scrollbar visibility for EDIT mode (the AutoHide + tolerance logic in
+            // FigForgeScrollRect.LateUpdate only runs in play mode): hidden when the rows
+            // fit the viewport within the same tolerance.
+            int builtRows = c.listItems != null && c.listItems.Count > 0 ? c.listItems.Count : count;
+            float viewportH = hasMaskPart
+                ? (c.parts["Mask"][3] - c.parts["Mask"][1]) * e.rect.h * sf
+                : e.rect.h * sf - headerH - 2f * maskInset;
+            sbGo.SetActive(builtRows * rowH > viewportH + scroll.scrollbarHideTolerance);
+
             var bind = go.AddComponent<FigForgeBindings>(); bind.background = bg;
             return go;
         }
@@ -2533,7 +2542,10 @@ namespace FigForge
         //      the rows.
         // v42: FigForgeScrollRect clamps mouse-wheel overshoot (hard stop at the range);
         //      drags keep the elastic bounce.
-        internal const int CanonicalSchema = 42;
+        // v43: scrollbar hides when rows fit the viewport within a tolerance (mask insets
+        //      made AutoHide show a useless bar for a few px of overflow) + correct initial
+        //      state in edit mode.
+        internal const int CanonicalSchema = 43;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

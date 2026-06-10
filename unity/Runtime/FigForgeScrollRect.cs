@@ -19,6 +19,12 @@ namespace FigForge
     [AddComponentMenu("FigForge/Scroll Rect")]
     public class FigForgeScrollRect : ScrollRect
     {
+        [Tooltip("Hide the vertical scrollbar when the content overflows the viewport by no " +
+                 "more than this many px. Stock AutoHide shows the bar for ANY overflow — " +
+                 "including the few px the list's mask insets add — so a list that visually " +
+                 "fits its rows still grew a (useless) scrollbar.")]
+        public float scrollbarHideTolerance = 8f;
+
         bool _dragging;
         bool _allowElastic; // true while a drag/flick is in flight or settling back
 
@@ -44,6 +50,7 @@ namespace FigForge
         protected override void LateUpdate()
         {
             base.LateUpdate();
+            EnforceScrollbarTolerance();
             if (movementType != MovementType.Elastic || content == null) return;
             if (_dragging) return;
             if (_allowElastic)
@@ -54,6 +61,19 @@ namespace FigForge
                 return;
             }
             ClampToRange();
+        }
+
+        // Stock AutoHide re-activates the bar each frame for any overflow > 0.01px; this
+        // runs after it and re-hides when the overflow is within the tolerance, so the
+        // net state at render time is correct (no flicker).
+        void EnforceScrollbarTolerance()
+        {
+            if (verticalScrollbar == null || content == null || viewport == null) return;
+            if (verticalScrollbarVisibility == ScrollbarVisibility.Permanent) return;
+            float overflow = content.rect.height - viewport.rect.height;
+            if (overflow <= Mathf.Max(0.01f, scrollbarHideTolerance)
+                && verticalScrollbar.gameObject.activeSelf)
+                verticalScrollbar.gameObject.SetActive(false);
         }
 
         bool InRange()
