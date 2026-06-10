@@ -49,8 +49,8 @@ namespace FigForge
         readonly Vector3[] _worldCorners = new Vector3[4];
 
         // ---- IFigForgeCompositorSource ----------------------------------------
-        // Disabled alongside FigForgeLayeredRect — the page compositor MVP blanks
-        // foreign uGUI on the page (see FigForgeLayeredRect.PageCompositorEnabled).
+        // Tier-2 blends ride the page compositor (real-backdrop blending) alongside
+        // FigForgeLayeredRect; registration is gated on a capturable canvas there.
         public bool RequiresPageCompositor =>
             FigForgeLayeredRect.PageCompositorEnabled && FigForgeLayeredRect.BlendTier(_blendMode) == 2;
         public FigForgeBlendMode CompositorBlendMode => _blendMode;
@@ -70,13 +70,36 @@ namespace FigForge
             return comp != null && comp.ShouldRenderLayer(this);
         }
 
+        // The compositor's pre-blended premultiplied texture for this layer, or null
+        // when this graphic isn't compositor-owned (or hasn't been composited yet).
+        RenderTexture BlendedSurfaceOrNull()
+        {
+            var comp = _pageCompositor != null ? _pageCompositor : GetComponentInParent<FigForgePageCompositor>();
+            if (comp == null || !comp.ShouldRenderLayer(this)) return null;
+            return comp.GetBlendedSurface(this);
+        }
+
         // Standalone = needs a flattened surface but no active page compositor owns
         // it (e.g. a lone Multiply glyph) → present the surface ourselves with GPU
         // blend state.
         bool PresentingStandalone() => NeedsFlatten && _cachedSurface != null && !IsRenderedByPageCompositor();
 
-        public override Texture mainTexture =>
-            PresentingStandalone() && _cachedSurface != null ? _cachedSurface : Texture2D.whiteTexture;
+        // Presenting a quad at all — standalone flatten OR compositor-owned (where
+        // the quad shows the compositor's pre-blended texture).
+        bool PresentingQuad() => PresentingStandalone() || IsRenderedByPageCompositor();
+
+        public override Texture mainTexture
+        {
+            get
+            {
+                var blended = BlendedSurfaceOrNull();
+                if (blended != null) return blended;
+                // Compositor-owned but not yet composited → cached surface (normal
+                // alpha) rather than a white flash from the default texture.
+                if (PresentingQuad() && _cachedSurface != null) return _cachedSurface;
+                return Texture2D.whiteTexture;
+            }
+        }
 
         // Bake a drawing onto this graphic. `colors` is per-vertex, region colour
         // pre-multiplied by AA alpha (NOT by opacity — opacity is applied at present).
@@ -104,11 +127,12 @@ namespace FigForge
             vh.Clear();
             if (!HasMesh) return;
 
-            // Under an active page compositor, ALL FigForge surfaces (even Normal) are
-            // replayed into the backdrop, so draw nothing here and let it present.
+            // Compositor-owned: same padded present quad, textured with the
+            // compositor's pre-blended result instead of the raw surface.
             if (IsRenderedByPageCompositor())
             {
                 EnsureSurface();
+                BuildPresentQuad(vh);
                 return;
             }
             // Non-normal blend with no compositor → flatten + present with GPU blend.
@@ -177,7 +201,7 @@ namespace FigForge
         {
             get
             {
-                if (PresentingStandalone())
+                if (PresentingQuad())
                 {
                     var m = EnsurePresentMaterial();
                     ConfigurePresentMaterial(m);
@@ -192,7 +216,7 @@ namespace FigForge
         {
             get
             {
-                if (!PresentingStandalone()) return base.materialForRendering;
+                if (!PresentingQuad()) return base.materialForRendering;
                 EnsurePresentMaterial();
                 var rm = base.materialForRendering; // stencil-wrapped copy of `material`
                 if (rm != null) ConfigurePresentMaterial(rm);
@@ -221,8 +245,12 @@ namespace FigForge
         void ConfigurePresentMaterial(Material m)
         {
             if (m == null) return;
-            m.mainTexture = _cachedSurface != null ? _cachedSurface : Texture2D.whiteTexture;
-            m.SetFloat("_AppearanceOpacity", Mathf.Clamp01(_appearanceOpacity));
+            // Compositor-owned: present the pre-blended texture; opacity is already
+            // baked into its coverage at composite time.
+            var blended = BlendedSurfaceOrNull();
+            m.mainTexture = blended != null ? blended
+                : (_cachedSurface != null ? (Texture)_cachedSurface : Texture2D.whiteTexture);
+            m.SetFloat("_AppearanceOpacity", blended != null ? 1f : Mathf.Clamp01(_appearanceOpacity));
             m.SetFloat("_BlendMode", (float)_blendMode);
 
             // Surface is premultiplied → normal = One/OneMinusSrcAlpha. Tier-1 modes
@@ -452,6 +480,9 @@ namespace FigForge
                 _pageCompositor = null;
             }
             if (!RequiresPageCompositor || !isActiveAndEnabled) return;
+            // No capturable canvas (Screen Space - Overlay etc.) → stay on the
+            // per-graphic fallback path.
+            if (!FigForgePageCapture.CanCapture(canvas)) return;
             _pageCompositor = FindOrCreatePageCompositor();
             if (_pageCompositor != null) _pageCompositor.Register(this);
         }

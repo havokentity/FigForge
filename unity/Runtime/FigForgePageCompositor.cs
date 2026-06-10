@@ -1,6 +1,32 @@
+// =============================================================================
+// FigForge — page compositor. Gives Tier-2 (destination-reading) Figma blend
+// modes — Overlay, Soft Light, Difference, Darken, Color Dodge/Burn, Hue/Sat/
+// Color/Luminosity — a REAL backdrop on both pipelines, GrabPass-free:
+//
+//   1. Capture: render the page through its own camera (FigForgePageCapture)
+//      with every graphic at-or-above the layer in paint order culled, so the
+//      backdrop contains exactly what Figma blends against — foreign uGUI
+//      (TMP text, plain Images) included, content above the layer excluded.
+//   2. Blend:   one blit per layer (FigForge/Composite) sampling the layer's
+//      cached premultiplied surface against the capture at its screen rect,
+//      producing a premultiplied blended texture (coverage in alpha).
+//   3. Present: the layer's OWN graphic draws that texture as a normal
+//      premult-over quad at its hierarchy position — so masking (_ClipRect /
+//      stencil), raycast targets, and z-order against foreign content all
+//      behave like any other graphic. There is no full-page present.
+//
+// Layers chain: a lower Tier-2 layer's blended quad stays visible in a higher
+// layer's capture, so stacked blend modes composite through each other.
+//
+// Performance: captures and blits run only when dirty (source content/layout
+// changes, layout-hash drift, camera resize). When clean the quads are static
+// textured quads — zero per-frame compositor work. Changes to FOREIGN graphics
+// beneath a blend layer are not auto-detected; call MarkDirty() if you animate
+// content under a Tier-2 layer.
+// =============================================================================
+
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 namespace FigForge
@@ -11,21 +37,23 @@ namespace FigForge
     public class FigForgePageCompositor : MonoBehaviour
     {
         readonly List<IFigForgeCompositorSource> _advancedLayers = new List<IFigForgeCompositorSource>();
-        readonly List<IFigForgeCompositorSource> _paintLayers = new List<IFigForgeCompositorSource>();
-        readonly Vector3[] _worldCorners = new Vector3[4];
+        readonly List<IFigForgeCompositorSource> _orderedLayers = new List<IFigForgeCompositorSource>();
+        readonly Dictionary<IFigForgeCompositorSource, RenderTexture> _blended = new Dictionary<IFigForgeCompositorSource, RenderTexture>();
+        readonly List<IFigForgeCompositorSource> _orphanScratch = new List<IFigForgeCompositorSource>();
+        readonly List<Graphic> _canvasGraphics = new List<Graphic>();
+        readonly List<CanvasRenderer> _culled = new List<CanvasRenderer>();
 
-        RectTransform _rectTransform;
-        FigForgePageCompositeGraphic _presentGraphic;
         Material _compositeMaterial;
-        RenderTexture _front;
-        RenderTexture _back;
         bool _dirty = true;
-        int _rtWidth;
-        int _rtHeight;
+        bool _inRebuild;
         int _layoutHash;
-        float _surfaceScale = 1f;
 
         public bool IsActive => isActiveAndEnabled && ActiveAdvancedCount() > 0;
+
+        // Whether this page can be composited at all: needs a Screen Space - Camera
+        // canvas to capture through. Sources check this BEFORE registering and stay
+        // on their per-graphic fallback path (BIRP GrabPass / URP alpha) otherwise.
+        public bool CanComposite => FigForgePageCapture.CanCapture(GetComponentInParent<Canvas>());
 
         public void Register(IFigForgeCompositorSource layer)
         {
@@ -38,7 +66,10 @@ namespace FigForge
         {
             if (layer == null) return;
             if (_advancedLayers.Remove(layer))
+            {
+                ReleaseBlendedTarget(layer);
                 MarkDirty();
+            }
         }
 
         public bool ShouldRenderLayer(IFigForgeCompositorSource layer)
@@ -46,7 +77,16 @@ namespace FigForge
             return IsActive
                 && layer != null
                 && layer.isActiveAndEnabled
+                && _advancedLayers.Contains(layer)
                 && layer.transform.IsChildOf(transform);
+        }
+
+        // The premultiplied blended texture the layer's graphic presents. Null until
+        // the first rebuild after registration (the graphic falls back to its cached
+        // surface for that frame).
+        public RenderTexture GetBlendedSurface(IFigForgeCompositorSource layer)
+        {
+            return layer != null && _blended.TryGetValue(layer, out var rt) ? rt : null;
         }
 
         public void MarkDirty()
@@ -56,7 +96,6 @@ namespace FigForge
 
         void OnEnable()
         {
-            _rectTransform = transform as RectTransform;
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
             Canvas.willRenderCanvases += HandleWillRenderCanvases;
             MarkDirty();
@@ -65,15 +104,13 @@ namespace FigForge
         void OnDisable()
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
-            ReleaseRenderTextures();
-            if (_presentGraphic != null)
-                _presentGraphic.SetTexture(null);
+            ReleaseAllBlendedTargets();
         }
 
         void OnDestroy()
         {
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
-            ReleaseRenderTextures();
+            ReleaseAllBlendedTargets();
             DestroyRuntimeMaterial(_compositeMaterial);
         }
 
@@ -89,63 +126,62 @@ namespace FigForge
 
         void HandleWillRenderCanvases()
         {
+            if (_inRebuild) return;
             PruneAdvancedLayers();
-            if (!IsActive)
-            {
-                if (_presentGraphic != null)
-                    _presentGraphic.enabled = false;
-                return;
-            }
+            if (!IsActive) return;
 
-            EnsurePresentGraphic();
-            if (_presentGraphic != null)
-            {
-                _presentGraphic.enabled = true;
-                PositionPresentGraphic();
-            }
+            var cam = FigForgePageCapture.ResolveCamera(GetComponentInParent<Canvas>());
+            if (cam == null) return;
 
-            if (UpdateTargetSize() || LayoutChanged())
-                MarkDirty();
-
+            SortOrderedLayers();
+            if (LayoutChanged(cam)) MarkDirty();
             if (!_dirty) return;
-            Rebuild();
+
+            _inRebuild = true;
+            try { Rebuild(cam); }
+            finally { _inRebuild = false; }
         }
 
-        void Rebuild()
+        void Rebuild(Camera cam)
         {
-            if (_rectTransform == null) _rectTransform = transform as RectTransform;
-            if (_rectTransform == null) return;
-            if (!EnsureRenderTextures() || !EnsureCompositeMaterial()) return;
+            if (!EnsureCompositeMaterial()) return;
 
-            CollectPaintLayers();
-            Clear(_front);
+            // Allocate/refresh the per-layer targets FIRST, so the present quads bind
+            // the final RT instances during the forced canvas update below. Later
+            // blits write into the same instances — no further rebinding needed, and
+            // lower layers' quads show current content in higher layers' captures.
+            for (int i = 0; i < _orderedLayers.Count; i++)
+                EnsureBlendedTarget(_orderedLayers[i]);
 
-            for (int i = 0; i < _paintLayers.Count; i++)
+            // Make quad geometry/material bindings current regardless of where this
+            // handler sits in the willRenderCanvases subscription order (re-entrancy
+            // guarded by _inRebuild).
+            Canvas.ForceUpdateCanvases();
+
+            CollectCanvasGraphics();
+            bool complete = true;
+            for (int i = 0; i < _orderedLayers.Count; i++)
             {
-                var layer = _paintLayers[i];
-                if (!ShouldRenderLayer(layer)) continue;
-
+                var layer = _orderedLayers[i];
                 var surface = layer.GetCompositorSurface();
-                if (surface == null) continue;
+                var target = GetBlendedSurface(layer);
+                if (surface == null || target == null) continue;
 
-                // MVP: all FigForge layers in this page subtree are replayed through
-                // the same compositor shader. Foreign uGUI is intentionally not part
-                // of the backdrop yet, which keeps Built-in pipeline support simple.
-                _compositeMaterial.SetTexture("_Source", surface);
-                _compositeMaterial.SetTexture("_Backdrop", _front);
+                CullAtOrAbove(layer);
+                var capture = FigForgePageCapture.CaptureTemporary(cam);
+                RestoreCulled();
+                if (capture == null) { complete = false; break; }
+
+                _compositeMaterial.SetTexture("_Backdrop", capture);
+                _compositeMaterial.SetVector("_BackdropRect", BackdropRect(layer, cam));
+                _compositeMaterial.SetVector("_BackdropSize", new Vector4(capture.width, capture.height, 0f, 0f));
                 _compositeMaterial.SetFloat("_BlendMode", (float)layer.CompositorBlendMode);
                 _compositeMaterial.SetFloat("_AppearanceOpacity", layer.CompositorOpacity);
-                _compositeMaterial.SetVector("_SourceRect", LayerSourceRect(layer, surface));
-                _compositeMaterial.SetVector("_PageSize", new Vector4(_rtWidth, _rtHeight, 0f, 0f));
-                _compositeMaterial.SetVector("_ClipRect", new Vector4(-1000000000f, -1000000000f, 1000000000f, 1000000000f));
-
-                Graphics.Blit(_front, _back, _compositeMaterial);
-                Swap(ref _front, ref _back);
+                Graphics.Blit(surface, target, _compositeMaterial);
+                RenderTexture.ReleaseTemporary(capture);
             }
 
-            if (_presentGraphic != null)
-                _presentGraphic.SetTexture(_front);
-            _dirty = false;
+            if (complete) _dirty = false;
         }
 
         bool EnsureCompositeMaterial()
@@ -157,155 +193,144 @@ namespace FigForge
             return true;
         }
 
-        bool EnsureRenderTextures()
-        {
-            if (_rtWidth <= 0 || _rtHeight <= 0)
-                UpdateTargetSize();
-            if (_rtWidth <= 0 || _rtHeight <= 0) return false;
-            if (_front != null && _back != null && _front.width == _rtWidth && _front.height == _rtHeight)
-                return true;
+        // ---- Per-layer blended targets -----------------------------------------
 
-            ReleaseRenderTextures();
-            _front = FigForgeCompositorCache.RentPageRT(_rtWidth, _rtHeight);
-            _back = FigForgeCompositorCache.RentPageRT(_rtWidth, _rtHeight);
-            if (_front == null || _back == null)
+        void EnsureBlendedTarget(IFigForgeCompositorSource layer)
+        {
+            var surface = layer.GetCompositorSurface();
+            if (surface == null) return;
+            _blended.TryGetValue(layer, out var rt);
+            if (rt != null && rt.width == surface.width && rt.height == surface.height) return;
+
+            if (rt != null) FigForgeCompositorCache.ReturnPageRT(rt);
+            rt = FigForgeCompositorCache.RentPageRT(surface.width, surface.height);
+            if (rt == null) { _blended.Remove(layer); return; }
+            rt.name = "FigForgeBlended_" + surface.width + "x" + surface.height;
+            _blended[layer] = rt;
+            SetGraphicDirty(layer); // rebind mainTexture/material to the new instance
+        }
+
+        void ReleaseBlendedTarget(IFigForgeCompositorSource layer)
+        {
+            if (layer == null || !_blended.TryGetValue(layer, out var rt)) return;
+            if (rt != null) FigForgeCompositorCache.ReturnPageRT(rt);
+            _blended.Remove(layer);
+            SetGraphicDirty(layer);
+        }
+
+        void ReleaseAllBlendedTargets()
+        {
+            foreach (var kv in _blended)
             {
-                ReleaseRenderTextures();
-                return false;
+                if (kv.Value != null) FigForgeCompositorCache.ReturnPageRT(kv.Value);
+                SetGraphicDirty(kv.Key);
             }
-            _front.name = "FigForgePageFront_" + _rtWidth + "x" + _rtHeight;
-            _back.name = "FigForgePageBack_" + _rtWidth + "x" + _rtHeight;
-            return true;
+            _blended.Clear();
         }
 
-        void ReleaseRenderTextures()
+        static void SetGraphicDirty(IFigForgeCompositorSource layer)
         {
-            if (_front != null) FigForgeCompositorCache.ReturnPageRT(_front);
-            if (_back != null) FigForgeCompositorCache.ReturnPageRT(_back);
-            _front = null;
-            _back = null;
+            // Component cast first: interface-typed refs bypass Unity's overloaded
+            // null check, and touching a destroyed component's members throws.
+            var component = layer as Component;
+            if (component == null) return;
+            var graphic = component.GetComponent<Graphic>();
+            if (graphic == null) return;
+            graphic.SetMaterialDirty();
+            graphic.SetVerticesDirty();
         }
 
-        bool UpdateTargetSize()
+        // ---- Backdrop rect mapping ---------------------------------------------
+
+        // The layer's padded surface rect in capture pixels. WorldToScreenPoint keeps
+        // this robust against CanvasScaler/camera setup; min/max over all four corners
+        // tolerates rotated ancestors (the surface itself is axis-aligned, as before).
+        Vector4 BackdropRect(IFigForgeCompositorSource layer, Camera cam)
         {
-            if (_rectTransform == null) _rectTransform = transform as RectTransform;
-            if (_rectTransform == null) return false;
-
-            var rect = _rectTransform.rect;
-            float scale = SurfaceScaleFactor();
-            int limit = MaxSurfaceTextureSize();
-            int width = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.width) * scale), 1, limit);
-            int height = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.height) * scale), 1, limit);
-            bool changed = width != _rtWidth || height != _rtHeight || !Mathf.Approximately(scale, _surfaceScale);
-            _rtWidth = width;
-            _rtHeight = height;
-            _surfaceScale = scale;
-            return changed;
-        }
-
-        float SurfaceScaleFactor()
-        {
-            float scale = 1f;
-            var c = GetComponentInParent<Canvas>();
-            if (c != null) scale = Mathf.Max(scale, c.scaleFactor);
-
-            if (_rectTransform != null)
-            {
-                var rect = _rectTransform.rect;
-                if (rect.width > 0.001f && rect.height > 0.001f)
-                {
-                    Camera cam = ProjectionCamera(c);
-                    _rectTransform.GetWorldCorners(_worldCorners);
-                    float projectedWidth = Vector2.Distance(
-                        RectTransformUtility.WorldToScreenPoint(cam, _worldCorners[0]),
-                        RectTransformUtility.WorldToScreenPoint(cam, _worldCorners[3]));
-                    float projectedHeight = Vector2.Distance(
-                        RectTransformUtility.WorldToScreenPoint(cam, _worldCorners[0]),
-                        RectTransformUtility.WorldToScreenPoint(cam, _worldCorners[1]));
-                    scale = Mathf.Max(scale, projectedWidth / rect.width, projectedHeight / rect.height);
-                }
-            }
-
-            return Mathf.Ceil(Mathf.Clamp(scale, 1f, 16f) * 4f) * 0.25f;
-        }
-
-        Camera ProjectionCamera(Canvas c)
-        {
-            Camera cam = null;
-#if UNITY_EDITOR
-            if (!Application.isPlaying)
-                cam = EditorSceneViewCamera();
-#endif
-            if (cam == null && c != null && c.renderMode != RenderMode.ScreenSpaceOverlay)
-                cam = c.worldCamera;
-            return cam != null ? cam : Camera.current;
-        }
-
-#if UNITY_EDITOR
-        static Camera EditorSceneViewCamera()
-        {
-            var sceneViewType = System.Type.GetType("UnityEditor.SceneView,UnityEditor");
-            if (sceneViewType == null) return null;
-
-            object sceneView = null;
-            var current = sceneViewType.GetProperty("currentDrawingSceneView", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-            if (current != null) sceneView = current.GetValue(null, null);
-            if (sceneView == null)
-            {
-                var last = sceneViewType.GetProperty("lastActiveSceneView", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (last != null) sceneView = last.GetValue(null, null);
-            }
-            if (sceneView == null) return null;
-
-            var cameraProp = sceneViewType.GetProperty("camera", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-            return cameraProp != null ? cameraProp.GetValue(sceneView, null) as Camera : null;
-        }
-#endif
-
-        Vector4 LayerSourceRect(IFigForgeCompositorSource layer, RenderTexture surface)
-        {
-            var pageRect = _rectTransform.rect;
-            var bounds = RectTransformUtility.CalculateRelativeRectTransformBounds(_rectTransform, layer.CompositorRectTransform);
+            var rt = layer.CompositorRectTransform;
+            var r = rt.rect;
             float pad = layer.CompositorPad;
-            float x = (bounds.min.x - pad - pageRect.xMin) * _surfaceScale;
-            float y = (bounds.min.y - pad - pageRect.yMin) * _surfaceScale;
-            return new Vector4(x, y, surface.width, surface.height);
+            Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+            Vector2 max = new Vector2(float.MinValue, float.MinValue);
+            for (int i = 0; i < 4; i++)
+            {
+                var local = new Vector3(
+                    (i == 0 || i == 1) ? r.xMin - pad : r.xMax + pad,
+                    (i == 0 || i == 3) ? r.yMin - pad : r.yMax + pad,
+                    0f);
+                Vector2 screen = RectTransformUtility.WorldToScreenPoint(cam, rt.TransformPoint(local));
+                min = Vector2.Min(min, screen);
+                max = Vector2.Max(max, screen);
+            }
+            return new Vector4(min.x, min.y, Mathf.Max(1f, max.x - min.x), Mathf.Max(1f, max.y - min.y));
         }
 
-        bool LayoutChanged()
+        // ---- Capture visibility ------------------------------------------------
+
+        void CollectCanvasGraphics()
         {
-            int hash = ComputeLayoutHash();
+            _canvasGraphics.Clear();
+            var canvas = GetComponentInParent<Canvas>();
+            var root = canvas != null ? (canvas.rootCanvas != null ? canvas.rootCanvas : canvas) : null;
+            if (root == null) return;
+            root.GetComponentsInChildren(false, _canvasGraphics);
+        }
+
+        // Cull every graphic at-or-above the layer in paint order: the backdrop must
+        // contain only what's BELOW it (Figma semantics). Lower Tier-2 layers' quads
+        // stay visible so stacked blends chain. Renderers already culled (RectMask2D
+        // fast-cull) are left alone and excluded from restore.
+        void CullAtOrAbove(IFigForgeCompositorSource layer)
+        {
+            _culled.Clear();
+            var pivot = layer.transform;
+            for (int i = 0; i < _canvasGraphics.Count; i++)
+            {
+                var g = _canvasGraphics[i];
+                if (g == null) continue;
+                if (CompareTransforms(g.transform, pivot) < 0) continue;
+                var cr = g.canvasRenderer;
+                if (cr == null || cr.cull) continue;
+                cr.cull = true;
+                _culled.Add(cr);
+            }
+        }
+
+        void RestoreCulled()
+        {
+            for (int i = 0; i < _culled.Count; i++)
+                _culled[i].cull = false;
+            _culled.Clear();
+        }
+
+        // ---- Dirty tracking ----------------------------------------------------
+
+        bool LayoutChanged(Camera cam)
+        {
+            int hash = ComputeLayoutHash(cam);
             if (hash == _layoutHash) return false;
             _layoutHash = hash;
             return true;
         }
 
-        int ComputeLayoutHash()
+        int ComputeLayoutHash(Camera cam)
         {
             unchecked
             {
                 int hash = 17;
-                if (_rectTransform != null)
+                hash = hash * 31 + cam.pixelWidth;
+                hash = hash * 31 + cam.pixelHeight;
+                for (int i = 0; i < _orderedLayers.Count; i++)
                 {
-                    var rect = _rectTransform.rect;
-                    hash = hash * 31 + Quantized(rect.width);
-                    hash = hash * 31 + Quantized(rect.height);
-                }
-
-                CollectPaintLayers();
-                for (int i = 0; i < _paintLayers.Count; i++)
-                {
-                    var layer = _paintLayers[i];
-                    if (layer == null) continue;
-                    var bounds = RectTransformUtility.CalculateRelativeRectTransformBounds(_rectTransform, layer.CompositorRectTransform);
-                    hash = hash * 31 + Quantized(bounds.min.x);
-                    hash = hash * 31 + Quantized(bounds.min.y);
-                    hash = hash * 31 + Quantized(bounds.size.x);
-                    hash = hash * 31 + Quantized(bounds.size.y);
-                    hash = hash * 31 + layer.transform.GetSiblingIndex();
+                    var layer = _orderedLayers[i];
+                    var rect = BackdropRect(layer, cam);
+                    hash = hash * 31 + Quantized(rect.x);
+                    hash = hash * 31 + Quantized(rect.y);
+                    hash = hash * 31 + Quantized(rect.z);
+                    hash = hash * 31 + Quantized(rect.w);
                     hash = hash * 31 + (int)layer.CompositorBlendMode;
+                    hash = hash * 31 + Quantized(layer.CompositorOpacity);
                 }
-                hash = hash * 31 + Quantized(_surfaceScale);
                 return hash;
             }
         }
@@ -315,18 +340,59 @@ namespace FigForge
             return Mathf.RoundToInt(value * 100f);
         }
 
-        void CollectPaintLayers()
+        // ---- Layer bookkeeping -------------------------------------------------
+
+        void SortOrderedLayers()
         {
-            _paintLayers.Clear();
-            if (!IsActive) return;
-            GetComponentsInChildren(false, _paintLayers);
-            for (int i = _paintLayers.Count - 1; i >= 0; i--)
+            _orderedLayers.Clear();
+            for (int i = 0; i < _advancedLayers.Count; i++)
             {
-                var layer = _paintLayers[i];
-                if (layer == null || !layer.isActiveAndEnabled || !layer.transform.IsChildOf(transform))
-                    _paintLayers.RemoveAt(i);
+                var layer = _advancedLayers[i];
+                if (ShouldRenderLayer(layer))
+                    _orderedLayers.Add(layer);
             }
-            _paintLayers.Sort(CompareHierarchy);
+            _orderedLayers.Sort(CompareHierarchy);
+        }
+
+        int ActiveAdvancedCount()
+        {
+            PruneAdvancedLayers();
+            return _advancedLayers.Count;
+        }
+
+        void PruneAdvancedLayers()
+        {
+            bool removed = false;
+            for (int i = _advancedLayers.Count - 1; i >= 0; i--)
+            {
+                var layer = _advancedLayers[i];
+                if (layer == null || !layer.isActiveAndEnabled || !layer.RequiresPageCompositor || !layer.transform.IsChildOf(transform))
+                {
+                    _advancedLayers.RemoveAt(i);
+                    removed = true;
+                }
+            }
+            if (removed) ReleaseOrphanedTargets();
+        }
+
+        // Targets whose layer was pruned (or destroyed — the dictionary key can be a
+        // dead component reference) leak pooled RTs unless swept here.
+        void ReleaseOrphanedTargets()
+        {
+            _orphanScratch.Clear();
+            foreach (var kv in _blended)
+            {
+                var layer = kv.Key;
+                if (layer == null || (layer as Object) == null || !_advancedLayers.Contains(layer))
+                    _orphanScratch.Add(layer);
+            }
+            for (int i = 0; i < _orphanScratch.Count; i++)
+            {
+                if (_blended.TryGetValue(_orphanScratch[i], out var rt) && rt != null)
+                    FigForgeCompositorCache.ReturnPageRT(rt);
+                _blended.Remove(_orphanScratch[i]);
+            }
+            _orphanScratch.Clear();
         }
 
         static int CompareHierarchy(IFigForgeCompositorSource a, IFigForgeCompositorSource b)
@@ -363,80 +429,6 @@ namespace FigForge
             return path;
         }
 
-        int ActiveAdvancedCount()
-        {
-            PruneAdvancedLayers();
-            return _advancedLayers.Count;
-        }
-
-        void PruneAdvancedLayers()
-        {
-            for (int i = _advancedLayers.Count - 1; i >= 0; i--)
-            {
-                var layer = _advancedLayers[i];
-                if (layer == null || !layer.isActiveAndEnabled || !layer.RequiresPageCompositor || !layer.transform.IsChildOf(transform))
-                    _advancedLayers.RemoveAt(i);
-            }
-        }
-
-        static void Clear(RenderTexture target)
-        {
-            var previous = RenderTexture.active;
-            Graphics.SetRenderTarget(target);
-            GL.Clear(true, true, Color.clear);
-            RenderTexture.active = previous;
-        }
-
-        static void Swap(ref RenderTexture a, ref RenderTexture b)
-        {
-            var temp = a;
-            a = b;
-            b = temp;
-        }
-
-        static int MaxSurfaceTextureSize()
-        {
-            int systemLimit = SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 8192;
-            return Mathf.Clamp(systemLimit, 4096, 16384);
-        }
-
-        void EnsurePresentGraphic()
-        {
-            if (_presentGraphic != null) return;
-
-            var existing = transform.Find("__FigForgePageComposite");
-            var go = existing != null ? existing.gameObject : new GameObject("__FigForgePageComposite", typeof(RectTransform));
-            go.hideFlags = HideFlags.HideAndDontSave;
-            if (go.transform.parent != transform)
-                go.transform.SetParent(transform, false);
-            PositionPresentGraphic();
-
-            var rt = go.transform as RectTransform;
-            rt.anchorMin = Vector2.zero;
-            rt.anchorMax = Vector2.one;
-            rt.offsetMin = Vector2.zero;
-            rt.offsetMax = Vector2.zero;
-            rt.localScale = Vector3.one;
-            rt.localRotation = Quaternion.identity;
-
-            _presentGraphic = go.GetComponent<FigForgePageCompositeGraphic>();
-            if (_presentGraphic == null)
-                _presentGraphic = go.AddComponent<FigForgePageCompositeGraphic>();
-            _presentGraphic.raycastTarget = false;
-            _presentGraphic.color = Color.white;
-        }
-
-        void PositionPresentGraphic()
-        {
-            if (_presentGraphic == null) return;
-            var present = _presentGraphic.transform;
-            var fill = transform.Find("Fill");
-            if (fill != null && fill != present)
-                present.SetSiblingIndex(fill.GetSiblingIndex() + 1);
-            else
-                present.SetAsFirstSibling();
-        }
-
         static void DestroyRuntimeMaterial(Material material)
         {
             if (material == null) return;
@@ -449,7 +441,9 @@ namespace FigForge
         // will see it as a backdrop — Tier-2 (destination-reading) sources hidden,
         // everything else (foreign uGUI included) rendered through the page camera.
         // Selects sources by blend tier directly, NOT RequiresPageCompositor, so the
-        // pass is testable while the compositor routing is still disabled.
+        // pass is testable regardless of registration state. Alpha is forced opaque
+        // in the PNG: uGUI leaves non-1 destination alpha along AA edges, which the
+        // compositor ignores but PNG viewers show as a pale fringe.
         [ContextMenu("Save Debug Page Capture (Tier-2 Hidden)")]
         void SaveDebugPageCapture()
         {
@@ -490,6 +484,10 @@ namespace FigForge
             RenderTexture.active = prev;
             RenderTexture.ReleaseTemporary(rt);
 
+            var px = tex.GetPixels32();
+            for (int i = 0; i < px.Length; i++) px[i].a = 255;
+            tex.SetPixels32(px);
+
             string path = System.IO.Path.GetFullPath(
                 System.IO.Path.Combine(Application.dataPath, "..", "FigForgePageCapture.png"));
             System.IO.File.WriteAllBytes(path, tex.EncodeToPNG());
@@ -497,84 +495,5 @@ namespace FigForge
             Debug.Log("[FigForge] Page capture saved (" + culled.Count + " Tier-2 source(s) hidden): " + path, this);
         }
 #endif
-    }
-
-    [RequireComponent(typeof(CanvasRenderer))]
-    public sealed class FigForgePageCompositeGraphic : MaskableGraphic
-    {
-        Material _material;
-        Texture _texture;
-
-        public override Texture mainTexture => _texture != null ? _texture : s_WhiteTexture;
-
-        public void SetTexture(Texture texture)
-        {
-            if (_texture == texture) return;
-            _texture = texture;
-            SetMaterialDirty();
-            SetVerticesDirty();
-        }
-
-        public override Material material
-        {
-            get
-            {
-                if (_material == null)
-                {
-                    var shader = Shader.Find("FigForge/CachedQuad");
-                    if (shader != null)
-                    {
-                        _material = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
-                        _material.SetFloat("_AppearanceOpacity", 1f);
-                        _material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-                        _material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-                        _material.SetInt("_SrcBlendA", (int)UnityEngine.Rendering.BlendMode.One);
-                        _material.SetInt("_DstBlendA", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-                        _material.SetInt("_BlendOp", (int)BlendOp.Add);
-                        _material.SetInt("_BlendOpA", (int)BlendOp.Add);
-                    }
-                }
-                return _material != null ? _material : base.material;
-            }
-            set { }
-        }
-
-        protected override void OnEnable()
-        {
-            base.OnEnable();
-            color = Color.white;
-            raycastTarget = false;
-        }
-
-        protected override void OnPopulateMesh(VertexHelper vh)
-        {
-            var r = GetPixelAdjustedRect();
-            vh.Clear();
-            AddVert(vh, new Vector3(r.xMin, r.yMin), color, new Vector2(0f, 0f));
-            AddVert(vh, new Vector3(r.xMin, r.yMax), color, new Vector2(0f, 1f));
-            AddVert(vh, new Vector3(r.xMax, r.yMax), color, new Vector2(1f, 1f));
-            AddVert(vh, new Vector3(r.xMax, r.yMin), color, new Vector2(1f, 0f));
-            vh.AddTriangle(0, 1, 2);
-            vh.AddTriangle(2, 3, 0);
-        }
-
-        protected override void OnDestroy()
-        {
-            if (_material != null)
-            {
-                if (Application.isPlaying) Destroy(_material);
-                else DestroyImmediate(_material);
-            }
-            base.OnDestroy();
-        }
-
-        static void AddVert(VertexHelper vh, Vector3 pos, Color32 color, Vector2 uv)
-        {
-            var v = UIVertex.simpleVert;
-            v.position = pos;
-            v.color = color;
-            v.uv0 = uv;
-            vh.AddVert(v);
-        }
     }
 }

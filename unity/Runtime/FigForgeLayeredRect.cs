@@ -214,12 +214,13 @@ namespace FigForge
         public float CompositorOpacity => appearanceOpacity;
         public float CompositorPad => MeshPad();
         public RectTransform CompositorRectTransform => rectTransform;
-        // Page compositor disabled: the MVP only replays FigForge layers, so when it
-        // activates its full-screen present graphic blanks all foreign uGUI (text,
-        // plain Images) on the page. Until it composites foreign content, advanced
-        // blend modes fall back to best-effort per-graphic blending (renders, doesn't
-        // blank the page). Flip back to `BlendTier(blendMode) == 2` once it can.
-        public const bool PageCompositorEnabled = false;
+        // Tier-2 (destination-reading) blends route through the page compositor on
+        // BOTH pipelines: it captures the real page (foreign uGUI included) and hands
+        // this graphic a pre-blended texture to present at its own hierarchy position.
+        // Registration is additionally gated on the canvas being capturable (Screen
+        // Space - Camera); otherwise the per-graphic fallback applies — GrabPass under
+        // Built-in, plain alpha under SRP.
+        public const bool PageCompositorEnabled = true;
         public bool RequiresPageCompositor => PageCompositorEnabled && BlendTier(blendMode) == 2;
         public float AppearanceOpacity
         {
@@ -376,11 +377,24 @@ namespace FigForge
                 if (ShouldUseCachedSource())
                 {
                     EnsureCachedSurface();
+                    // Compositor-owned: present the pre-blended texture. Falls back to
+                    // the cached surface (normal alpha) until the first composite lands.
+                    var blended = BlendedSurfaceOrNull();
+                    if (blended != null) return blended;
                     if (_cachedSurface != null) return _cachedSurface;
                 }
                 EnsurePaintTexture();
                 return _paintTexture != null ? _paintTexture : Texture2D.whiteTexture;
             }
+        }
+
+        // The compositor's pre-blended premultiplied texture for this layer, or null
+        // when this graphic isn't compositor-owned (or hasn't been composited yet).
+        RenderTexture BlendedSurfaceOrNull()
+        {
+            var comp = _pageCompositor != null ? _pageCompositor : GetComponentInParent<FigForgePageCompositor>();
+            if (comp == null || !comp.ShouldRenderLayer(this)) return null;
+            return comp.GetBlendedSurface(this);
         }
 
         Material ActiveRenderMaterial()
@@ -410,11 +424,11 @@ namespace FigForge
 
         Material EnsureCachedMaterial()
         {
-            // Tier-2 (destination-reading) modes present through the GrabPass shader so
-            // they blend correctly against the backdrop; tier-1 stays on the cheap
-            // fixed-function quad. Under an SRP, GrabPass is gone — Tier-2 falls back to the
-            // quad (normal alpha). Recreate if the chosen shader changed.
-            string shaderName = (BlendTier(blendMode) == 2 && DestinationReadBlendSupported)
+            // Compositor-owned Tier-2 layers present their pre-blended texture through
+            // the cheap premult-over quad. Otherwise Tier-2 falls back to the GrabPass
+            // blend shader (Built-in only); under an SRP without a compositor it
+            // degrades to the quad (normal alpha). Recreate if the chosen shader changed.
+            string shaderName = (BlendTier(blendMode) == 2 && DestinationReadBlendSupported && !IsRenderedByPageCompositor())
                 ? "FigForge/CachedBlend" : "FigForge/CachedQuad";
             if (_cachedMaterial != null && _cachedMaterial.shader != null && _cachedMaterial.shader.name == shaderName)
                 return _cachedMaterial;
@@ -539,8 +553,19 @@ namespace FigForge
 
         void UpdateCachedMaterialProperties(Material target)
         {
-            target.mainTexture = _cachedSurface != null ? _cachedSurface : Texture2D.whiteTexture;
-            target.SetFloat("_AppearanceOpacity", appearanceOpacity);
+            // Compositor-owned: opacity is already baked into the blended texture's
+            // coverage at composite time — applying it here would double it.
+            var blended = BlendedSurfaceOrNull();
+            if (blended != null)
+            {
+                target.mainTexture = blended;
+                target.SetFloat("_AppearanceOpacity", 1f);
+            }
+            else
+            {
+                target.mainTexture = _cachedSurface != null ? _cachedSurface : Texture2D.whiteTexture;
+                target.SetFloat("_AppearanceOpacity", appearanceOpacity);
+            }
             target.SetFloat("_BlendMode", (float)blendMode);
             ApplyCachedBlendState(target);
         }
@@ -1006,6 +1031,9 @@ namespace FigForge
             }
 
             if (!RequiresPageCompositor || !isActiveAndEnabled) return;
+            // No capturable canvas (Screen Space - Overlay etc.) → stay on the
+            // per-graphic fallback: GrabPass under Built-in, plain alpha under SRP.
+            if (!FigForgePageCapture.CanCapture(canvas)) return;
             _pageCompositor = FindOrCreatePageCompositor();
             if (_pageCompositor != null)
                 _pageCompositor.Register(this);
@@ -1213,13 +1241,10 @@ namespace FigForge
 
         protected override void OnPopulateMesh(VertexHelper vh)
         {
-            if (IsRenderedByPageCompositor())
-            {
-                EnsureCachedSurface();
-                vh.Clear();
-                return;
-            }
-
+            // Compositor-owned layers populate the same padded quad as the cached
+            // present path — they just sample the pre-blended texture instead. The
+            // quad lives at this graphic's own hierarchy position, so masks, raycasts
+            // and z-order against foreign uGUI behave like any other graphic.
             UpdateActiveMaterial(ActiveRenderMaterial());
             var r = GetPixelAdjustedRect();
             float pad = MeshPad();
