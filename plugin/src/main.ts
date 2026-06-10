@@ -990,7 +990,44 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
 // page). Skin the one ListItem master (Regular/Rollover/Pressed/Selected states, Icon,
 // Title, Subtitle, Accessory, Divider) and every row updates. In Unity the row is
 // repeated `count` times (count = (list height − header) ÷ row height) with state swaps.
+// Bring EVERY list master in the document up to the current conventions — so one
+// +List click repairs all variants, not just the one being (re)created. Repairs:
+// missing Scrollbar/Mask layers, the interim radius-0 Mask, the pristine old 6px
+// default scrollbar, and the rounded component clip. Designer customisations are
+// never touched (repairs match exact old defaults only).
+function upgradeAllListMasters(): void {
+  for (const page of figma.root.children) {
+    for (const n of page.children) {
+      if (n.type !== 'COMPONENT') continue;
+      const tag = (n as ComponentNode).getSharedPluginData('figforge', 'canonical');
+      if (!tag) continue;
+      try { if ((JSON.parse(tag) as { kind?: string }).kind !== 'list') continue; } catch { continue; }
+      const comp = n as ComponentNode;
+      repairOldDefaultScrollbar(comp);
+      ensureListScrollbar(comp);
+      ensureListRoundedClip(comp);
+      ensureListMask(comp);
+    }
+  }
+}
+
+// A Scrollbar frame still at the PRISTINE old default (6px wide, 3px thumb radius)
+// predates the thicker default — rebuild it at the current default. Any other size
+// or radius means the designer touched it: leave it alone.
+function repairOldDefaultScrollbar(comp: ComponentNode): void {
+  if (!('children' in comp)) return;
+  const sb = (comp as ChildrenMixin).children.find((c) => c.name === 'Scrollbar');
+  if (!sb || Math.round((sb as unknown as { width: number }).width) !== 6) return;
+  const thumb = 'children' in sb
+    ? ((sb as ChildrenMixin).children as SceneNode[]).find((c) => c.name === 'Thumb') : undefined;
+  const tr = thumb && typeof (thumb as unknown as { cornerRadius?: unknown }).cornerRadius === 'number'
+    ? (thumb as unknown as { cornerRadius: number }).cornerRadius : -1;
+  if (tr !== 3) return;
+  sb.remove(); // ensureListScrollbar recreates it at the current default
+}
+
 async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentNode> {
+  upgradeAllListMasters();
   const name = listVariantName(opts);
   const sbWidth = clampScrollbarWidth(opts.scrollbarWidth);
   const reuse = findMaster(name);
