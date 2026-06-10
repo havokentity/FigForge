@@ -148,11 +148,17 @@
   .create-settings {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-start;
   }
-  .port-chip input, .font-chip input {
+  .port-chip input, .font-chip input, .token-chip input {
     width: 54px; background: transparent; border: none; color: inherit; padding: 0; min-height: 16px;
   }
   .font-chip input { width: 42px; }
-  .port-chip input:focus, .font-chip input:focus { outline: none; }
+  .token-chip input { width: 116px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .port-chip input:focus, .font-chip input:focus, .token-chip input:focus { outline: none; }
+  /* Unity live-import settings, grouped with the Send-to-Unity buttons in the footer. */
+  .unity-settings { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; }
+  .unity-settings .port-chip { flex: none; }
+  .unity-settings .token-chip { flex: 1 1 auto; min-width: 0; }
+  .unity-settings .token-chip input { flex: 1 1 auto; width: auto; min-width: 0; }
 
   /* ---- List variants popover (floats under the ＋List chip) ---- */
   .list-pop {
@@ -444,7 +450,6 @@
         <div class="create-settings">
           <label class="chip" title="ON: masters live on a dedicated FigForge Components page. OFF: masters are parked on your current page."><input type="checkbox" id="componentsPageChk" checked />Components page</label>
           <label class="chip font-chip" title="TextMeshPro SDF face dilate used by generated Unity font assets">Dilate <input type="number" id="fontFaceDilate" value="0.15" min="0" max="1" step="0.01" /></label>
-          <label class="chip port-chip" title="Unity live-import port (FigForge importer must have live import enabled)">Unity <input type="number" id="unityPort" value="1995" min="1024" max="65535" /></label>
         </div>
       </div>
 
@@ -492,6 +497,10 @@
             <div class="progress" id="progress"><div></div></div>
           </div>
           <div class="export-actions">
+            <div class="unity-settings">
+              <label class="chip port-chip" title="Unity live-import port (FigForge importer must have live import enabled)">Port <input type="number" id="unityPort" value="1995" min="1024" max="65535" /></label>
+              <label class="chip token-chip" title="Live-import token from the Unity FigForge importer (Live import → Plugin token → Copy). Click here and paste with ⌘/Ctrl-V.">Token <input type="text" id="unityToken" placeholder="paste from Unity (⌘V)" autocomplete="off" spellcheck="false" /></label>
+            </div>
             <button class="btn-primary btn-unity" id="exportUnityBtn" title="Send every top-level frame on this page straight to Unity (FigForge importer with live import enabled)">→ Send Page to Unity</button>
             <button class="btn-ghost btn-frame-unity" id="exportFrameUnityBtn" title="Send only the selected frame straight to Unity" disabled>Send Frame</button>
             <button class="btn-ghost" id="exportBtn" disabled>Download Frame</button>

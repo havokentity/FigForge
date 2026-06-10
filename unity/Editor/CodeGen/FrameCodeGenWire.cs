@@ -71,6 +71,7 @@ namespace FigForge
             var reg = go.GetComponent<FigForgeScreen>();
             var mgr = baseFrame.GetComponentInParent<FrameManager>();
             int idx = mgr != null ? mgr.screens.IndexOf(baseFrame) : -1;
+            bool wasInitial = mgr != null && mgr.initialScreen == baseFrame;
 
             // FigForgeFrame is [DisallowMultipleComponent], so the base must go before the
             // subclass can be added.
@@ -86,6 +87,7 @@ namespace FigForge
             {
                 if (idx >= 0 && idx < mgr.screens.Count) mgr.screens[idx] = comp;
                 else if (!mgr.screens.Contains(comp)) mgr.Register(comp);
+                if (wasInitial) mgr.initialScreen = comp;
                 EditorUtility.SetDirty(mgr);
             }
             EditorUtility.SetDirty(comp);

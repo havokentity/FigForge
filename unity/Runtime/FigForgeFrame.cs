@@ -29,7 +29,7 @@ namespace FigForge
         public void Show()
         {
             var m = FrameManager.Resolve();
-            if (m != null) m.Show(screenName);
+            if (m != null) m.Show(this);
         }
 
         public virtual void OnShow() { }

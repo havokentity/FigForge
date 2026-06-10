@@ -30,6 +30,7 @@ interface UiPrefs {
   chips?: Record<string, boolean>;
   componentsPage?: boolean;
   unityPort?: string;
+  unityToken?: string;
   fontFaceDilate?: string;
   windowPreset?: string;
   mcpDesired?: boolean;
@@ -127,6 +128,42 @@ if (unityPortEl) {
   const saved = readPrefs().unityPort;
   if (saved) unityPortEl.value = saved;
   unityPortEl.addEventListener('input', () => savePrefs({ unityPort: unityPortEl.value }));
+}
+const unityTokenEl = document.getElementById('unityToken') as HTMLInputElement | null;
+if (unityTokenEl) {
+  const el = unityTokenEl;
+  const saved = readPrefs().unityToken;
+  if (saved) el.value = saved;
+  const looksLikeToken = (s: string) => /^[0-9a-f]{32}$/i.test(s);
+  const applyToken = (raw: string) => {
+    const t = raw.trim();
+    el.value = t;
+    savePrefs({ unityToken: t });
+    if (looksLikeToken(t)) setStatus('Live-import token set.');
+  };
+  el.addEventListener('input', () => savePrefs({ unityToken: el.value.trim() }));
+  // Reliable path: a real ⌘/Ctrl-V paste. Figma's plugin sandbox delivers clipboard
+  // data on an actual paste keystroke (unlike navigator.clipboard.readText, which it
+  // blocks). When the pasted text is a token we own the update so it lands clean.
+  el.addEventListener('paste', (e) => {
+    const text = e.clipboardData?.getData('text');
+    if (text && looksLikeToken(text.trim())) {
+      e.preventDefault();
+      applyToken(text);
+      el.select();
+    }
+  });
+  // Bonus: hosts that DO grant clipboard-read (e.g. a browser preview) auto-fill on
+  // click. Figma blocks this, so it silently no-ops there — paste with ⌘V instead.
+  el.addEventListener('focus', async () => {
+    el.select();
+    try {
+      const clip = (await navigator.clipboard?.readText())?.trim();
+      if (clip && looksLikeToken(clip) && clip !== el.value.trim()) applyToken(clip);
+    } catch {
+      // clipboard read blocked by the sandbox — use ⌘V.
+    }
+  });
 }
 const fontDilateEl = document.getElementById('fontFaceDilate') as HTMLInputElement | null;
 if (fontDilateEl) {
@@ -521,15 +558,21 @@ function unityImportUrl(): string {
   return `http://127.0.0.1:${port}/import`;
 }
 
+function unityToken(): string {
+  return ($('#unityToken') as HTMLInputElement)?.value.trim() || '';
+}
+
 async function sendToUnity(project: { name: string; initial: string }, screens: PageScreen[]) {
   const url = unityImportUrl();
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-FigForge-Token': unityToken() },
       body: JSON.stringify({ project, screens }),
     });
     if (res.ok) setStatus(`Sent ${screens.length} screen(s) → Unity. Building in the FigForge importer.`);
+    else if (res.status === 401)
+      setStatus('Unity rejected the token — copy it from the FigForge importer (Live import → Plugin token) into the Token field.', true);
     else setStatus(`Unity refused the import (HTTP ${res.status}).`, true);
   } catch (e) {
     setStatus(`Couldn't reach Unity at ${url} — is the FigForge importer open with live import enabled?`, true);

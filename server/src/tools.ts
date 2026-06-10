@@ -63,7 +63,11 @@ export async function executeExportUnity(
   let written = 0;
   for (const asset of Array.isArray(exp.assets) ? exp.assets : []) {
     if (!asset || typeof asset.name !== 'string' || !Array.isArray(asset.data)) continue;
-    await writeFile(path.join(resolvedDir, asset.name), Buffer.from(asset.data as number[]));
+    // Flatten to the bare file name so a "../"-bearing asset name can't escape
+    // the validated output dir (path.basename strips all directory components).
+    const safeName = path.basename(asset.name);
+    if (!safeName || safeName === '.' || safeName === '..') continue;
+    await writeFile(path.join(resolvedDir, safeName), Buffer.from(asset.data as number[]));
     written++;
   }
 

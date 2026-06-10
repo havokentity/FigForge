@@ -23,8 +23,8 @@ namespace FigForge
         [Tooltip("All pages this manager controls (children with a FigForgeFrame).")]
         public List<FigForgeFrame> screens = new List<FigForgeFrame>();
 
-        [Tooltip("screenName shown on Start. Empty = first registered screen.")]
-        public string initialScreen;
+        [Tooltip("Frame shown on Start. None = first registered screen.")]
+        public FigForgeFrame initialScreen;
 
         [Tooltip("Persistent chrome (top/nav menus). Shown only while a screen with usesShell=true is active.")]
         public GameObject shell;
@@ -57,8 +57,7 @@ namespace FigForge
         void Start()
         {
             if (screens.Count == 0) return;
-            if (!string.IsNullOrEmpty(initialScreen)) Show(initialScreen);
-            else Show(screens[0].screenName);
+            Show(initialScreen != null ? initialScreen : screens[0]);
         }
 
         public void Register(FigForgeFrame screen)
@@ -66,16 +65,17 @@ namespace FigForge
             if (screen != null && !screens.Contains(screen)) screens.Add(screen);
         }
 
-        public bool Show(string screenName)
+        public bool Show(string screenName) => Show(Find(screenName), screenName);
+
+        // Show a registered frame directly (reference equality, no name lookup).
+        public bool Show(FigForgeFrame frame)
+            => Show(frame != null && screens.Contains(frame) ? frame : null,
+                    frame != null ? frame.screenName : "<none>");
+
+        bool Show(FigForgeFrame target, string label)
         {
-            FigForgeFrame target = null;
             foreach (var s in screens)
-            {
-                if (s == null) continue;
-                bool match = s.screenName == screenName;
-                s.SetVisible(match);
-                if (match) target = s;
-            }
+                if (s != null) s.SetVisible(s == target);
             if (target != null)
             {
                 // The shown root frame snaps to fill the canvas. The design-time side-by-side
@@ -85,7 +85,7 @@ namespace FigForge
                 Current = target;
                 if (shell != null) shell.SetActive(target.usesShell);
             }
-            else Debug.LogWarning($"[FigForge] FrameManager: no screen named '{screenName}'.");
+            else Debug.LogWarning($"[FigForge] FrameManager: no screen named '{label}'.");
             return target != null;
         }
 

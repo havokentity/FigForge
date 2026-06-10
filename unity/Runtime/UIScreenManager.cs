@@ -22,8 +22,8 @@ namespace FigForge
         }
 
         public List<Page> pages = new List<Page>();
-        [Tooltip("Page shown on Start. Empty = first registered page.")]
-        public string initialScreen;
+        [Tooltip("Page shown on Start. None = first registered page.")]
+        public VisualTreeAsset initialScreen;
 
         public string Current { get; private set; }
 
@@ -34,7 +34,8 @@ namespace FigForge
         void Start()
         {
             if (pages.Count == 0) return;
-            Show(string.IsNullOrEmpty(initialScreen) ? pages[0].name : initialScreen);
+            var init = initialScreen != null ? pages.Find(x => x != null && x.tree == initialScreen) : null;
+            Show(init != null ? init.name : pages[0].name);
         }
 
         /// <summary>Register (or replace) a page. Used by the importer at build time.</summary>

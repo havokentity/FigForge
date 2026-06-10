@@ -26,12 +26,18 @@ namespace FigForge
     {
         const string PrefEnabled = "FigForge.LiveImport.Enabled";
         const string PrefPort = "FigForge.LiveImport.Port";
+        const string PrefToken = "FigForge.LiveImport.Token";
+        const string TokenHeader = "X-FigForge-Token";
         const int DefaultPort = 1995;
         const string LiveRoot = "Assets/FigForge/Live";
 
         static HttpListener _listener;
         static readonly Queue<string> _inbox = new Queue<string>();
         static readonly object _gate = new object();
+
+        // Cached so the off-main-thread request handler never touches EditorPrefs.
+        // Primed on the main thread in Start() / the Token getter.
+        static volatile string _token;
 
         public static bool Enabled
         {
@@ -49,6 +55,35 @@ namespace FigForge
         public static string Status { get; private set; } = "stopped";
         public static string Url => $"http://127.0.0.1:{Port}/import";
 
+        /// <summary>Shared secret the Figma plugin must echo in the
+        /// <c>X-FigForge-Token</c> header. Generated on first use and persisted,
+        /// so only a client that knows it (your plugin, after a one-time paste)
+        /// can trigger an import — a random web page on 127.0.0.1 cannot.</summary>
+        public static string Token
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_token))
+                {
+                    var t = EditorPrefs.GetString(PrefToken, "");
+                    if (string.IsNullOrEmpty(t))
+                    {
+                        t = Guid.NewGuid().ToString("N");
+                        EditorPrefs.SetString(PrefToken, t);
+                    }
+                    _token = t;
+                }
+                return _token;
+            }
+        }
+
+        public static void RegenerateToken()
+        {
+            var t = Guid.NewGuid().ToString("N");
+            EditorPrefs.SetString(PrefToken, t);
+            _token = t;
+        }
+
         static FigForgeLiveImport()
         {
             EditorApplication.update += Pump;
@@ -62,6 +97,7 @@ namespace FigForge
         static void Start()
         {
             if (_listener != null) return;
+            _ = Token; // prime the cache on the main thread before requests arrive
             try
             {
                 var l = new HttpListener();
@@ -103,7 +139,7 @@ namespace FigForge
                 var res = ctx.Response;
                 res.AddHeader("Access-Control-Allow-Origin", "*");
                 res.AddHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-                res.AddHeader("Access-Control-Allow-Headers", "Content-Type");
+                res.AddHeader("Access-Control-Allow-Headers", "Content-Type, " + TokenHeader);
 
                 switch (ctx.Request.HttpMethod)
                 {
@@ -114,6 +150,18 @@ namespace FigForge
                         Respond(res, 200, "{\"ok\":true,\"product\":\"FigForge\",\"live\":true}");
                         break;
                     case "POST":
+                        // Gate side effects on the shared secret. CORS can't stop a
+                        // cross-origin POST (a simple text/plain request needs no
+                        // preflight), so the token is what keeps a random web page
+                        // from writing bundles and triggering builds.
+                        var expected = _token;
+                        var supplied = ctx.Request.Headers[TokenHeader];
+                        if (string.IsNullOrEmpty(expected) ||
+                            !string.Equals(supplied, expected, StringComparison.Ordinal))
+                        {
+                            Respond(res, 401, "{\"ok\":false,\"error\":\"unauthorized\"}");
+                            break;
+                        }
                         string body;
                         using (var sr = new StreamReader(ctx.Request.InputStream,
                                    ctx.Request.ContentEncoding ?? Encoding.UTF8))
@@ -204,9 +252,14 @@ namespace FigForge
                     foreach (var a in s.assets)
                     {
                         if (a == null || string.IsNullOrEmpty(a.name) || a.data == null) continue;
+                        // Flatten to the bare file name. Like ZipImporter, this
+                        // neutralises any "../" path-traversal in the asset name
+                        // so a crafted bundle can't escape the screen folder.
+                        var assetName = Path.GetFileName(a.name);
+                        if (string.IsNullOrEmpty(assetName)) continue;
                         var bytes = new byte[a.data.Length];
                         for (int i = 0; i < a.data.Length; i++) bytes[i] = (byte)a.data[i];
-                        File.WriteAllBytes(Path.Combine(folderAbs, a.name), bytes);
+                        File.WriteAllBytes(Path.Combine(folderAbs, assetName), bytes);
                     }
 
                 indexScreens.Add(new ProjIndexScreen

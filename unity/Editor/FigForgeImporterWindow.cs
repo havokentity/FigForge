@@ -220,13 +220,27 @@ namespace FigForge
                 {
                     int port = EditorGUILayout.DelayedIntField("Port", FigForgeLiveImport.Port);
                     if (port != FigForgeLiveImport.Port) FigForgeLiveImport.Port = port;
+
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        EditorGUILayout.PrefixLabel("Plugin token");
+                        EditorGUILayout.SelectableLabel(FigForgeLiveImport.Token, EditorStyles.textField,
+                            GUILayout.Height(EditorGUIUtility.singleLineHeight));
+                        if (GUILayout.Button("Copy", EditorStyles.miniButton, GUILayout.Width(46)))
+                            EditorGUIUtility.systemCopyBuffer = FigForgeLiveImport.Token;
+                        if (GUILayout.Button("New", EditorStyles.miniButton, GUILayout.Width(40)) &&
+                            EditorUtility.DisplayDialog("Regenerate live-import token?",
+                                "The Figma plugin won't be able to import again until the new token is pasted into its Unity token field.",
+                                "Regenerate", "Cancel"))
+                            FigForgeLiveImport.RegenerateToken();
+                    }
                 }
 
                 EditorGUILayout.LabelField(
                     (FigForgeLiveImport.Listening ? "● " : "○ ") + FigForgeLiveImport.Status,
                     EditorStyles.miniLabel);
                 EditorGUILayout.HelpBox(
-                    "In the Figma plugin, hit “Export → Unity” to build the page here automatically — no zip, loopback only.",
+                    "Paste this token into the Figma plugin (Unity token field) once. Then hit “Send to Unity” to build the page here automatically — no zip, loopback only.",
                     MessageType.None);
             }
             Divider();
@@ -774,12 +788,12 @@ namespace FigForge
                     built++;
                 }
 
-                mgr.initialScreen = proj.initial;
+                var init = mgr.screens.Find(s => s != null && s.screenName == proj.initial);
+                mgr.initialScreen = init;
                 if (canvas.GetComponent<FigForgeNavBinder>() == null) canvas.gameObject.AddComponent<FigForgeNavBinder>();
 
                 // Editor convenience: show only the initial screen + the shell if it uses one.
-                foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(s.screenName == proj.initial);
-                var init = mgr.screens.Find(s => s != null && s.screenName == proj.initial);
+                foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(s == init);
                 if (mgr.shell != null) mgr.shell.SetActive(init != null && init.usesShell);
 
                 Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build Page");
@@ -820,7 +834,7 @@ namespace FigForge
                 var vta = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.VisualTreeAsset>(res.uxmlPath);
                 if (vta != null) { mgr.Register(m.screen.name, vta); built++; }
             }
-            mgr.initialScreen = proj.initial;
+            mgr.initialScreen = mgr.pages.Find(p => p != null && p.name == proj.initial)?.tree;
             Undo.RegisterCreatedObjectUndo(go, "FigForge Build Page");
             UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
                 UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
