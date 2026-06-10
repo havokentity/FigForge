@@ -2128,8 +2128,11 @@ namespace FigForge
             scroll.content = crt;
 
             // Scrollbar — a real uGUI Scrollbar on the right edge, styled from the captured
-            // 'Scrollbar' layer (Track/Thumb shapes); a neutral rounded thumb when the design
-            // has none. Overlay style: floats over the rows and auto-hides when they fit.
+            // 'Scrollbar' layer (Track/Thumb shapes + ThumbRollover/Pressed colours); a
+            // neutral rounded thumb when the design has none. Overlay style: floats over
+            // the rows and auto-hides when they fit. INTERACTION uses plain transparent
+            // Images on the bar + handle (the stock uGUI raycast pattern) — the SDF shapes
+            // are render-only children, so dragging never depends on SDF raycast geometry.
             float sbWFig = c.scrollbarWidth > 0.01f ? c.scrollbarWidth : 6f;
             float sbW = sbWFig * sf;
             var sbGo = NewRect("Scrollbar", go.transform);
@@ -2137,25 +2140,55 @@ namespace FigForge
             srt.anchorMin = new Vector2(1f, 0f); srt.anchorMax = Vector2.one; srt.pivot = new Vector2(1f, 0.5f);
             srt.offsetMin = new Vector2(-(sbW + maskInset), maskInset);
             srt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH + maskInset : maskInset));
-            var sbTrack = AddShapeGraphic(sbGo, c.scrollTrackShape, ctx); // null → transparent Image
-            MakeClickTarget(sbTrack, ctx); // track click pages the list
+            if (sbGo.GetComponent<CanvasRenderer>() == null) sbGo.AddComponent<CanvasRenderer>();
+            var sbHit = sbGo.AddComponent<Image>();
+            sbHit.color = new Color(0, 0, 0, 0);
+            sbHit.raycastTarget = true; // track click pages the list
+            if (c.scrollTrackShape != null)
+            {
+                var trackGo = NewRect("Track", sbGo.transform);
+                Stretch(trackGo.GetComponent<RectTransform>());
+                AddShapeGraphic(trackGo, c.scrollTrackShape, ctx); // render-only
+            }
             var slideGo = NewRect("Sliding Area", sbGo.transform);
             Stretch(slideGo.GetComponent<RectTransform>());
             var handleGo = NewRect("Handle", slideGo.transform);
             var handleRt = handleGo.GetComponent<RectTransform>();
             handleRt.anchorMin = Vector2.zero; handleRt.anchorMax = Vector2.one;
             handleRt.offsetMin = Vector2.zero; handleRt.offsetMax = Vector2.zero;
+            if (handleGo.GetComponent<CanvasRenderer>() == null) handleGo.AddComponent<CanvasRenderer>();
+            var handleHit = handleGo.AddComponent<Image>();
+            handleHit.color = new Color(0, 0, 0, 0);
+            handleHit.raycastTarget = true; // thumb drag surface
+            var thumbGo = NewRect("Thumb", handleGo.transform);
+            Stretch(thumbGo.GetComponent<RectTransform>());
             var thumbShape = c.scrollThumbShape ?? new CanonicalShape
             { cornerRadius = sbWFig * 0.5f, fill = new float[] { 0.55f, 0.56f, 0.6f, 0.55f } };
-            var sbHandle = AddShapeGraphic(handleGo, thumbShape, ctx);
-            MakeClickTarget(sbHandle, ctx); // thumb drag
+            var thumbVisual = AddShapeGraphic(thumbGo, thumbShape, ctx); // render-only
             var sbar = sbGo.AddComponent<Scrollbar>();
             sbar.transition = Selectable.Transition.None;
+            sbar.interactable = true;
             sbar.direction = Scrollbar.Direction.BottomToTop;
             sbar.handleRect = handleRt;
-            sbar.targetGraphic = sbHandle;
+            sbar.targetGraphic = handleHit;
+            sbar.value = 1f; // start at the top
             scroll.verticalScrollbar = sbar;
             scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+            // Thumb hover/press tint: captured ThumbRollover/Pressed colours, or a brighter
+            // version of the regular fill so hover feedback always exists.
+            var thumbReg = thumbShape.fill != null && thumbShape.fill.Length >= 4
+                ? ToColor(thumbShape.fill) : new Color(0.55f, 0.56f, 0.6f, 0.55f);
+            var sbStates = sbGo.AddComponent<FigForgeScrollbarStates>();
+            sbStates.bound = thumbVisual;
+            sbStates.regular = FigForgeFill.Solid(thumbReg);
+            sbStates.rollover = FigForgeFill.Solid(c.scrollThumbRollover != null
+                ? ToColor(c.scrollThumbRollover)
+                : new Color(thumbReg.r, thumbReg.g, thumbReg.b, Mathf.Clamp01(thumbReg.a * 1.4f)));
+            sbStates.pressed = FigForgeFill.Solid(c.scrollThumbPressed != null
+                ? ToColor(c.scrollThumbPressed)
+                : new Color(thumbReg.r * 0.85f, thumbReg.g * 0.85f, thumbReg.b * 0.85f, Mathf.Clamp01(thumbReg.a * 1.6f)));
+            sbStates.hasRollover = true;
+            sbStates.hasPressed = true;
 
             float rowH = (c.itemHeight > 0.01f ? c.itemHeight : 44f) * sf;
             int count = c.count > 0 ? c.count : 5;
@@ -2446,7 +2479,10 @@ namespace FigForge
         //      the captured 'Scrollbar' layer (auto-hides when rows fit).
         // v36: first/last list rows take the container's corner radii (top pair zeroed
         //      under a Header), so header-less lists keep their rounded corners.
-        internal const int CanonicalSchema = 36;
+        // v37: scrollbar interaction via plain transparent Images (bar + handle) with the
+        //      SDF shapes as render-only children; thumb hover/press tint from the captured
+        //      ThumbRollover/ThumbPressed layers (FigForgeScrollbarStates).
+        internal const int CanonicalSchema = 37;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

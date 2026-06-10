@@ -223,6 +223,8 @@ export interface CanonicalRef {
   scrollbarWidth?: number;  // list: scrollbar width in Figma px (from the 'Scrollbar' layer)
   scrollTrackShape?: ButtonShape; // list: scrollbar track styling ('Scrollbar/Track', or the layer itself)
   scrollThumbShape?: ButtonShape; // list: scrollbar thumb styling ('Scrollbar/Thumb')
+  scrollThumbRollover?: RGBA; // list: thumb hover colour ('Scrollbar/ThumbRollover', hidden layer)
+  scrollThumbPressed?: RGBA;  // list: thumb pressed colour ('Scrollbar/ThumbPressed', hidden layer)
   // dropdown: the option row is its own component (DropdownOption) with states; these
   // drive the TMP_Dropdown item template (options[] above are the option texts)
   optionShape?: ButtonShape; // DropdownOption Regular shape (corner/fill/border)

@@ -1055,29 +1055,52 @@ function ensureListRoundedClip(comp: ComponentNode): void {
   if (r > 0) { (comp as unknown as { cornerRadius: number }).cornerRadius = r; comp.clipsContent = true; }
 }
 
-// Add a skinnable 'Scrollbar' layer (Track + Thumb) to a List master that lacks one.
-// The exporter captures its width + shapes so Unity styles the real uGUI Scrollbar;
-// in Figma the layer is a static preview (the canonical instance is rebuilt in Unity).
+// Add a skinnable 'Scrollbar' layer (Track + Thumb + hidden ThumbRollover/ThumbPressed
+// state colours) to a List master that lacks one — and retrofit the state layers into
+// an existing Scrollbar frame. The exporter captures width/shapes/state colours so
+// Unity styles the real uGUI Scrollbar; in Figma the layer is a static preview.
 function ensureListScrollbar(comp: ComponentNode): void {
   if (!('children' in comp)) return;
-  if ((comp as ChildrenMixin).children.some((c) => c.name === 'Scrollbar')) return;
-  const W = comp.width, H = comp.height;
-  const header = (comp as ChildrenMixin).children.find((c) => c.name === 'Header');
-  const HEADER = header ? (header as unknown as { height: number }).height : 0;
-  const SB = 6, PAD = 3;
+  let sb = (comp as ChildrenMixin).children.find((c) => c.name === 'Scrollbar') as FrameNode | undefined;
+  if (!sb) {
+    const W = comp.width, H = comp.height;
+    const header = (comp as ChildrenMixin).children.find((c) => c.name === 'Header');
+    const HEADER = header ? (header as unknown as { height: number }).height : 0;
+    const SB = 6, PAD = 3;
 
-  const sb = figma.createFrame();
-  sb.name = 'Scrollbar'; sb.fills = [];
-  sb.resize(SB, Math.max(24, H - HEADER - PAD * 2));
-  sb.x = W - SB - PAD; sb.y = HEADER + PAD;
-  sb.constraints = { horizontal: 'MAX', vertical: 'STRETCH' };
-  comp.appendChild(sb);
+    sb = figma.createFrame();
+    sb.name = 'Scrollbar'; sb.fills = [];
+    sb.resize(SB, Math.max(24, H - HEADER - PAD * 2));
+    sb.x = W - SB - PAD; sb.y = HEADER + PAD;
+    sb.constraints = { horizontal: 'MAX', vertical: 'STRETCH' };
+    comp.appendChild(sb);
 
-  const track = solidRect('Track', SB, sb.height, SB / 2, { r: 0, g: 0, b: 0 }, 0.06);
-  track.x = 0; track.y = 0; track.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
-  sb.appendChild(track);
+    const track = solidRect('Track', SB, sb.height, SB / 2, { r: 0, g: 0, b: 0 }, 0.06);
+    track.x = 0; track.y = 0; track.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+    sb.appendChild(track);
 
-  const thumb = solidRect('Thumb', SB, Math.max(24, Math.round(sb.height * 0.4)), SB / 2, { r: 0.55, g: 0.56, b: 0.6 }, 0.55);
-  thumb.x = 0; thumb.y = 0; thumb.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
-  sb.appendChild(thumb);
+    const thumb = solidRect('Thumb', SB, Math.max(24, Math.round(sb.height * 0.4)), SB / 2, { r: 0.55, g: 0.56, b: 0.6 }, 0.55);
+    thumb.x = 0; thumb.y = 0; thumb.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    sb.appendChild(thumb);
+  }
+
+  // Hidden hover/press colour layers for the thumb (same convention as row states).
+  const kids = (sb as ChildrenMixin).children as SceneNode[];
+  const thumbNode = kids.find((c) => c.name === 'Thumb');
+  const tw = thumbNode ? (thumbNode as unknown as { width: number }).width : 6;
+  const th = thumbNode ? (thumbNode as unknown as { height: number }).height : 24;
+  const tcr = thumbNode && typeof (thumbNode as unknown as { cornerRadius?: unknown }).cornerRadius === 'number'
+    ? (thumbNode as unknown as { cornerRadius: number }).cornerRadius : tw / 2;
+  if (!kids.some((c) => c.name === 'ThumbRollover')) {
+    const roll = solidRect('ThumbRollover', tw, th, tcr, { r: 0.42, g: 0.43, b: 0.48 }, 0.75);
+    roll.visible = false; roll.x = 0; roll.y = 0;
+    roll.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    sb.appendChild(roll);
+  }
+  if (!kids.some((c) => c.name === 'ThumbPressed')) {
+    const press = solidRect('ThumbPressed', tw, th, tcr, { r: 0.3, g: 0.31, b: 0.36 }, 0.85);
+    press.visible = false; press.x = 0; press.y = 0;
+    press.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    sb.appendChild(press);
+  }
 }

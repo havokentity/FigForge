@@ -1396,11 +1396,16 @@ export async function exportDesign(
     const scrollbarWidth = sbNode ? ((sbNode as unknown as { width?: number }).width ?? undefined) : undefined;
     const scrollTrackShape = sbTrackNode ? (shapeOf(sbTrackNode) ?? undefined) : undefined;
     const scrollThumbShape = sbThumbNode ? (shapeOf(sbThumbNode) ?? undefined) : undefined;
+    // Hidden hover/press colour layers for the thumb (same convention as row states).
+    const sbThumbRoll = sbNode ? childByName(sbNode, 'ThumbRollover') : undefined;
+    const sbThumbPress = sbNode ? childByName(sbNode, 'ThumbPressed') : undefined;
+    const scrollThumbRollover = sbThumbRoll ? (stateSolid(sbThumbRoll) ?? undefined) : undefined;
+    const scrollThumbPressed = sbThumbPress ? (stateSolid(sbThumbPress) ?? undefined) : undefined;
 
     return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
       itemHeight, headerHeight, label: rowLabel,
       listItems: listItems.length ? listItems : undefined,
-      scrollbarWidth, scrollTrackShape, scrollThumbShape,
+      scrollbarWidth, scrollTrackShape, scrollThumbShape, scrollThumbRollover, scrollThumbPressed,
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       parts: partsOf(master, ['Background']) };
   }

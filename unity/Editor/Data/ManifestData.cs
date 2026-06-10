@@ -199,6 +199,8 @@ namespace FigForge
         public float scrollbarWidth;      // list: scrollbar width in Figma px (0 = default)
         public CanonicalShape scrollTrackShape; // list: scrollbar track styling ('Scrollbar/Track')
         public CanonicalShape scrollThumbShape; // list: scrollbar thumb styling ('Scrollbar/Thumb')
+        public float[] scrollThumbRollover; // list: thumb hover colour ('Scrollbar/ThumbRollover')
+        public float[] scrollThumbPressed;  // list: thumb pressed colour ('Scrollbar/ThumbPressed')
         public CanonicalShape optionShape; // dropdown: option row Regular shape
         public CanonicalShape popupShape;  // dropdown popup shell/background (Options frame)
         public CanonicalShape optionRolloverShape; // dropdown: option row Rollover full shape
