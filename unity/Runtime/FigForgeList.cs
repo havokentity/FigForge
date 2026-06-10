@@ -116,9 +116,21 @@ namespace FigForge
         public void Rebuild()
         {
             if (content == null) return;
+            HealContentLayout();
             ClearRows();
             for (int i = 0; i < _items.Count; i++)
                 CreateRow(i, _items[i]);
+        }
+
+        // Rows size themselves via LayoutElement preferredHeight, which a layout group only
+        // honours on a CONTROLLED axis. Scenes imported before the fix have a content
+        // VerticalLayoutGroup with childControlHeight=false — there a stretch-anchored
+        // template clone (sizeDelta.y = 0) lays out zero-height and the viewport mask hides
+        // every row. Repair the flag here so SetItems works without a re-import.
+        void HealContentLayout()
+        {
+            var vlg = content.GetComponent<VerticalLayoutGroup>();
+            if (vlg != null && !vlg.childControlHeight) vlg.childControlHeight = true;
         }
 
         public void ClearRows()

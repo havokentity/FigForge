@@ -2108,7 +2108,12 @@ namespace FigForge
             var crt = content.GetComponent<RectTransform>();
             crt.anchorMin = new Vector2(0, 1); crt.anchorMax = new Vector2(1, 1); crt.pivot = new Vector2(0.5f, 1); crt.sizeDelta = Vector2.zero;
             var vlg = content.AddComponent<VerticalLayoutGroup>();
-            vlg.childControlWidth = true; vlg.childControlHeight = false; vlg.childForceExpandWidth = true; vlg.childForceExpandHeight = false; vlg.spacing = 0;
+            // childControlHeight MUST be true: rows carry LayoutElement preferredHeight =
+            // rowHeight, and a layout group only honours LayoutElement on a controlled axis.
+            // With false it uses each child's raw sizeDelta.y instead — and a cloned
+            // RowTemplate is stretch-anchored (sizeDelta.y = 0), so every row laid out
+            // zero-height and the viewport mask hid the whole list.
+            vlg.childControlWidth = true; vlg.childControlHeight = true; vlg.childForceExpandWidth = true; vlg.childForceExpandHeight = false; vlg.spacing = 0;
             content.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             scroll.content = crt;
 
@@ -2384,7 +2389,9 @@ namespace FigForge
         //      (was MidlineLeft in a text-height-hugging box, which sat high).
         // v32: same vertical-middle treatment for dropdown caption + input placeholder/
         //      text; dropdown/input Background kept procedural (SDF) when shape covers it.
-        internal const int CanonicalSchema = 32;
+        // v33: list content VerticalLayoutGroup controls child height, so rows honour their
+        //      LayoutElement rowHeight (stretch-anchored template clones laid out 0-high).
+        internal const int CanonicalSchema = 33;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
