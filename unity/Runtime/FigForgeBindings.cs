@@ -56,7 +56,10 @@ namespace FigForge
             var slider = control as Slider;
             if (slider != null && float.TryParse(value, out var v)) slider.value = v;
 
-            if (valueText != null && !string.IsNullOrEmpty(value)) valueText.text = value;
+            // A slider owns its read-out formatting (FigForgeSlider rewrites it on the
+            // value assignment above — integer by default); stamping the raw manifest
+            // string here would override that, showing '0.5' on an integer read-out.
+            if (valueText != null && !string.IsNullOrEmpty(value) && slider == null) valueText.text = value;
 
             if (optionsTarget != null && options != null && options.Count > 0)
             {

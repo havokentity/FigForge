@@ -2496,7 +2496,13 @@ namespace FigForge
             TextMeshProUGUI valueText = null;
             if (c.parts != null && c.parts.ContainsKey("Value"))
             {
-                valueText = AddControlLabel(go, "Value", c.value, c.parts, "Value", ctx, TextAlignmentOptions.Right);
+                // Initial text formatted like the runtime default (whole numbers) so the
+                // prefab preview matches what FigForgeSlider will render.
+                string initialReadout = float.TryParse(c.value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var iv)
+                    ? iv.ToString("0", System.Globalization.CultureInfo.InvariantCulture)
+                    : c.value;
+                valueText = AddControlLabel(go, "Value", initialReadout, c.parts, "Value", ctx, TextAlignmentOptions.Right);
                 var vrt = valueText.GetComponent<RectTransform>();
                 vrt.anchorMin = new Vector2(0f, vrt.anchorMin.y);
             }

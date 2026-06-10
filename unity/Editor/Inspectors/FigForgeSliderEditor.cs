@@ -20,6 +20,7 @@ namespace FigForge
             serializedObject.Update();
             EditorGUILayout.PropertyField(serializedObject.FindProperty("tmpTxt_label"));
             EditorGUILayout.PropertyField(serializedObject.FindProperty("tmpTxt_value"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("m_ValueTextDecimals"));
             EditorGUILayout.PropertyField(serializedObject.FindProperty("m_Slots"));
             serializedObject.ApplyModifiedProperties();
         }

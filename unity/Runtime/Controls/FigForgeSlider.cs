@@ -30,6 +30,22 @@ namespace FigForge
         [Tooltip("Live value read-out (wired by the importer when the Figma component has a 'Value' layer). Rewritten on every value change. May be null.")]
         public TMP_Text tmpTxt_value;
 
+        [Tooltip("Decimal places the value read-out shows (0 = whole numbers). Display-only — the value itself stays a float.")]
+        [SerializeField] int m_ValueTextDecimals; // default 0 — integer read-out
+
+        /// <summary>Decimal places the value read-out shows — `slider.ValueTextDecimals = 2`
+        /// → "0.50". Default 0: whole numbers. Display-only rounding; `value` stays the
+        /// exact float. Setting it reformats the read-out immediately.</summary>
+        public int ValueTextDecimals
+        {
+            get => m_ValueTextDecimals;
+            set
+            {
+                m_ValueTextDecimals = Mathf.Clamp(value, 0, 7);
+                UpdateValueText();
+            }
+        }
+
         [Tooltip("Discrete slot count (0/1 = continuous). Values snap to this many evenly spaced positions across [minValue..maxValue], including both ends — drags, track clicks, and code-assigned values alike.")]
         [SerializeField, FormerlySerializedAs("slots")] int m_Slots;
 
@@ -98,8 +114,10 @@ namespace FigForge
         void UpdateValueText()
         {
             if (tmpTxt_value == null) return;
-            // Compact: '25', '0.731' — matches the exporter's value formatting.
-            tmpTxt_value.text = value.ToString("0.###", CultureInfo.InvariantCulture);
+            // Whole numbers by default ('25'); ValueTextDecimals > 0 gives fixed
+            // decimals ('0.50') so the read-out width stays stable while dragging.
+            string fmt = m_ValueTextDecimals <= 0 ? "0" : "F" + m_ValueTextDecimals;
+            tmpTxt_value.text = value.ToString(fmt, CultureInfo.InvariantCulture);
         }
     }
 }
