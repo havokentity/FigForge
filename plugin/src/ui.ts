@@ -142,6 +142,7 @@ for (const [id, kind] of [
   ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
   ['createInputBtn', 'input'],
   ['createDropdownBtn', 'dropdown'],
+  ['createSliderBtn', 'slider'],
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
     setStatus(`Creating ${kind} component…`);

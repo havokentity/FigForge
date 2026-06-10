@@ -569,7 +569,7 @@ function enclosingScreenFrame(nodes: readonly SceneNode[]): FrameNode | undefine
 }
 
 // Canonical master component names FigForge knows how to create.
-const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'List', 'ListItem'];
+const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'Slider', 'List', 'ListItem'];
 
 // Find an existing canonical master by name ANYWHERE in the document (masters no
 // longer need to live on a dedicated page — they can sit loose on any design page,
@@ -619,6 +619,7 @@ async function createCanonical(kind: string, listOpts?: Partial<ListOptions>): P
     case 'radio': return createToggleLike('radio', 'Radio', true);
     case 'input': return createInputField();
     case 'dropdown': return createDropdown();
+    case 'slider': return createSlider();
     case 'list': return createList({ ...LIST_DEFAULTS, ...(listOpts ?? {}) });
     default: throw new Error(`unknown canonical kind '${kind}'`);
   }
@@ -856,6 +857,68 @@ async function createDropdown(): Promise<ComponentNode> {
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'dropdown', ref: 'Dropdown', value: 'Option 1' }));
   parkMaster(comp);
   hideInstanceOptions(placeInstance(comp));
+  return comp;
+}
+
+// Slider: a Track (the rail) + Fill (the filled portion — its width ÷ the Track's
+// width IS the initial value; resize it to set the default) + Thumb (+ hidden
+// ThumbRollover/ThumbPressed state-colour layers, same convention as the list
+// scrollbar) + HitArea (the slider row's click/drag surface) + Label above. In
+// Unity it becomes a real uGUI Slider; skin any layer here and instances update.
+async function createSlider(): Promise<ComponentNode> {
+  const reuse = findMaster('Slider');
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const W = 240, LABEL_H = 20, ROW = 28, H = LABEL_H + ROW, TRACK = 6, THUMB = 18, VALUE = 0.5;
+  const trackY = LABEL_H + (ROW - TRACK) / 2;
+
+  const comp = figma.createComponent();
+  comp.name = 'Slider'; comp.resize(W, H); comp.fills = [];
+
+  const track = solidRect('Track', W, TRACK, TRACK / 2, { r: 0.85, g: 0.86, b: 0.9 });
+  track.x = 0; track.y = trackY; track.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+  comp.appendChild(track);
+
+  const fill = solidRect('Fill', W * VALUE, TRACK, TRACK / 2, { r: 0.49, g: 0.36, b: 1 });
+  fill.x = 0; fill.y = trackY; fill.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+  comp.appendChild(fill);
+
+  const thumb = solidRect('Thumb', THUMB, THUMB, THUMB / 2, { r: 1, g: 1, b: 1 });
+  thumb.strokes = [{ type: 'SOLID', color: { r: 0.49, g: 0.36, b: 1 } }];
+  thumb.strokeWeight = 2;
+  thumb.x = W * VALUE - THUMB / 2; thumb.y = LABEL_H + (ROW - THUMB) / 2;
+  thumb.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+  comp.appendChild(thumb);
+
+  // Hidden hover/press colour layers for the thumb (same convention as the list
+  // scrollbar's ThumbRollover/ThumbPressed) — Unity recolours per pointer state.
+  const roll = solidRect('ThumbRollover', THUMB, THUMB, THUMB / 2, { r: 0.95, g: 0.94, b: 1 });
+  roll.visible = false; roll.x = thumb.x; roll.y = thumb.y;
+  roll.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+  comp.appendChild(roll);
+  const press = solidRect('ThumbPressed', THUMB, THUMB, THUMB / 2, { r: 0.88, g: 0.86, b: 1 });
+  press.visible = false; press.x = thumb.x; press.y = thumb.y;
+  press.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+  comp.appendChild(press);
+
+  // Click/drag surface — just the slider ROW (not the Label strip), so a click on
+  // the label text doesn't jump the value.
+  const hit = solidRect('HitArea', W, ROW, 0, { r: 0, g: 0, b: 0 }, 0);
+  hit.x = 0; hit.y = LABEL_H; hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(hit);
+
+  const label = figma.createText();
+  label.fontName = font; label.name = 'Label'; label.characters = 'Slider';
+  label.fontSize = 13; label.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+  comp.appendChild(label);
+  label.x = 0; label.y = (LABEL_H - label.height) / 2;
+  label.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+
+  comp.setSharedPluginData('figforge', 'canonical',
+    JSON.stringify({ kind: 'slider', ref: 'Slider', value: String(VALUE) }));
+  parkMaster(comp);
+  placeInstance(comp);
   return comp;
 }
 
