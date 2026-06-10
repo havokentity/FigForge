@@ -141,13 +141,29 @@ $('#createBtnBtn').addEventListener('click', () => {
 for (const [id, kind] of [
   ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
   ['createInputBtn', 'input'],
-  ['createDropdownBtn', 'dropdown'], ['createListBtn', 'list'],
+  ['createDropdownBtn', 'dropdown'],
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
     setStatus(`Creating ${kind} component…`);
     post({ type: 'create-canonical', kind, componentsPage: compPageOn() });
   });
 }
+
+// List variants: the List button reveals part toggles (header/icons/subtitles);
+// 'Add List' creates that combination (each combo is its own master).
+const listOptsEl = document.getElementById('listOpts') as HTMLElement | null;
+$('#createListBtn').addEventListener('click', () => {
+  if (listOptsEl) listOptsEl.style.display = listOptsEl.style.display === 'none' ? '' : 'none';
+});
+$('#listOptsCreate').addEventListener('click', () => {
+  const on = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.checked !== false;
+  if (listOptsEl) listOptsEl.style.display = 'none';
+  setStatus('Creating list component…');
+  post({
+    type: 'create-canonical', kind: 'list', componentsPage: compPageOn(),
+    listOpts: { header: on('listOptHeader'), icon: on('listOptIcon'), subtitle: on('listOptSubtitle') },
+  });
+});
 
 // option chips
 function wireChip(id: string) {

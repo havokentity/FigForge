@@ -196,6 +196,9 @@ namespace FigForge
         public float itemHeight;          // list: row height in Figma px (drives Unity row sizing)
         public float headerHeight;        // list: header height in Figma px (0 = no header)
         public int count;                 // list: number of rows to generate
+        public float scrollbarWidth;      // list: scrollbar width in Figma px (0 = default)
+        public CanonicalShape scrollTrackShape; // list: scrollbar track styling ('Scrollbar/Track')
+        public CanonicalShape scrollThumbShape; // list: scrollbar thumb styling ('Scrollbar/Thumb')
         public CanonicalShape optionShape; // dropdown: option row Regular shape
         public CanonicalShape popupShape;  // dropdown popup shell/background (Options frame)
         public CanonicalShape optionRolloverShape; // dropdown: option row Rollover full shape

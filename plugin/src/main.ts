@@ -205,7 +205,8 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
     case 'create-canonical': {
       try {
         useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
-        const comp = await createCanonical(String((msg as { kind?: string }).kind || ''));
+        const comp = await createCanonical(String((msg as { kind?: string }).kind || ''),
+          (msg as { listOpts?: Partial<ListOptions> }).listOpts);
         const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
         figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group radios under one frame).` });
       } catch (e) {
@@ -612,13 +613,13 @@ function solidRect(name: string, w: number, h: number, r: number, color: RGB, al
 }
 
 // Dispatch a "+Toggle / +Radio / +Dropdown / +List" create request to its builder.
-async function createCanonical(kind: string): Promise<ComponentNode> {
+async function createCanonical(kind: string, listOpts?: Partial<ListOptions>): Promise<ComponentNode> {
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
     case 'input': return createInputField();
     case 'dropdown': return createDropdown();
-    case 'list': return createList();
+    case 'list': return createList({ ...LIST_DEFAULTS, ...(listOpts ?? {}) });
     default: throw new Error(`unknown canonical kind '${kind}'`);
   }
 }
@@ -871,11 +872,34 @@ async function loadBoldFont(base: FontName): Promise<FontName> {
 // preview stays in sync when you skin it once. Rich form: full-bleed state layers
 // (Regular/Rollover/Pressed/Selected), a leading Icon, two-line Title + Subtitle, a
 // trailing Accessory chevron, a bottom Divider, and a transparent HitArea on top.
-async function ensureListItem(font: FontName, titleFont: FontName, W: number, ROW: number): Promise<ComponentNode> {
-  const found = findMaster('ListItem');
+// Which optional pieces a List variant includes. One '+List' button, many shapes:
+// no header section, icon-less rows, subtitle-less rows — any combination. Each
+// combination is its own master/canonical ref so variants coexist and reuse cleanly.
+export type ListOptions = { header: boolean; icon: boolean; subtitle: boolean };
+const LIST_DEFAULTS: ListOptions = { header: true, icon: true, subtitle: true };
+
+function listItemVariantName(o: ListOptions): string {
+  const p: string[] = [];
+  if (!o.icon) p.push('NoIcon');
+  if (!o.subtitle) p.push('NoSubtitle');
+  return 'ListItem' + (p.length ? ' ' + p.join(' ') : '');
+}
+
+function listVariantName(o: ListOptions): string {
+  const p: string[] = [];
+  if (!o.header) p.push('NoHeader');
+  if (!o.icon) p.push('NoIcon');
+  if (!o.subtitle) p.push('NoSubtitle');
+  return 'List' + (p.length ? ' ' + p.join(' ') : '');
+}
+
+async function ensureListItem(font: FontName, titleFont: FontName, W: number, ROW: number,
+                              opts: ListOptions): Promise<ComponentNode> {
+  const itemName = listItemVariantName(opts);
+  const found = findMaster(itemName);
   if (found) return found;
   const item = figma.createComponent();
-  item.name = 'ListItem'; item.resize(W, ROW); item.fills = []; item.clipsContent = true;
+  item.name = itemName; item.resize(W, ROW); item.fills = []; item.clipsContent = true;
 
   // Pointer/selection state backgrounds (full-bleed). Only Regular shows by default;
   // Unity swaps these on hover/press and keeps Selected on the chosen row.
@@ -906,8 +930,10 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
   item.appendChild(content);
 
   // Leading icon slot — fixed size; delete it and the text reflows left.
-  const icon = solidRect('Icon', ICON, ICON, 10, { r: 0.49, g: 0.36, b: 1 });
-  content.appendChild(icon); icon.layoutGrow = 0;
+  if (opts.icon) {
+    const icon = solidRect('Icon', ICON, ICON, 10, { r: 0.49, g: 0.36, b: 1 });
+    content.appendChild(icon); icon.layoutGrow = 0;
+  }
 
   // Title + Subtitle in a vertical column that grows to fill the remaining width.
   const textCol = figma.createFrame();
@@ -924,10 +950,12 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
   title.fontName = titleFont; title.name = 'Title'; title.characters = 'Title'; title.fontSize = 15;
   title.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
   textCol.appendChild(title); title.textAutoResize = 'HEIGHT'; title.layoutAlign = 'STRETCH';
-  const sub = figma.createText();
-  sub.fontName = font; sub.name = 'Subtitle'; sub.characters = 'Subtitle'; sub.fontSize = 12;
-  sub.fills = [{ type: 'SOLID', color: { r: 0.5, g: 0.5, b: 0.55 } }];
-  textCol.appendChild(sub); sub.textAutoResize = 'HEIGHT'; sub.layoutAlign = 'STRETCH';
+  if (opts.subtitle) {
+    const sub = figma.createText();
+    sub.fontName = font; sub.name = 'Subtitle'; sub.characters = 'Subtitle'; sub.fontSize = 12;
+    sub.fills = [{ type: 'SOLID', color: { r: 0.5, g: 0.5, b: 0.55 } }];
+    textCol.appendChild(sub); sub.textAutoResize = 'HEIGHT'; sub.layoutAlign = 'STRETCH';
+  }
 
   // Trailing accessory — a chevron-right vector (skin/replace freely); fixed size.
   const svg = figma.createNodeFromSvg(
@@ -953,17 +981,19 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
 // page). Skin the one ListItem master (Regular/Rollover/Pressed/Selected states, Icon,
 // Title, Subtitle, Accessory, Divider) and every row updates. In Unity the row is
 // repeated `count` times (count = (list height − header) ÷ row height) with state swaps.
-async function createList(): Promise<ComponentNode> {
-  const reuse = findMaster('List');
-  if (reuse) { placeInstance(reuse); return reuse; }
+async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentNode> {
+  const name = listVariantName(opts);
+  const reuse = findMaster(name);
+  if (reuse) { ensureListScrollbar(reuse); placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const titleFont = await loadBoldFont(font);
-  const W = 320, ROW = 64, HEADER = 44, ROWS = 4, H = HEADER + ROW * ROWS, R = 14;
-  const itemComp = await ensureListItem(font, titleFont, W, ROW);
+  // Subtitle-less rows are shorter (single text line); header-less lists drop the section strip.
+  const W = 320, ROW = opts.subtitle ? 64 : 48, HEADER = opts.header ? 44 : 0, ROWS = 4, H = HEADER + ROW * ROWS, R = 14;
+  const itemComp = await ensureListItem(font, titleFont, W, ROW, opts);
 
   const comp = figma.createComponent();
-  comp.name = 'List'; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
+  comp.name = name; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
 
   const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
   bg.strokes = [{ type: 'SOLID', color: { r: 0.82, g: 0.83, b: 0.88 } }]; bg.strokeWeight = 1;
@@ -971,18 +1001,20 @@ async function createList(): Promise<ComponentNode> {
   comp.appendChild(bg);
 
   // Header — a section title row pinned to the top (above the scrollable rows in Unity).
-  const header = figma.createFrame();
-  header.name = 'Header'; header.resize(W, HEADER); header.fills = []; header.x = 0; header.y = 0;
-  header.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
-  comp.appendChild(header);
-  const ht = figma.createText();
-  ht.fontName = titleFont; ht.name = 'Title'; ht.characters = 'Section'; ht.fontSize = 13;
-  ht.fills = [{ type: 'SOLID', color: { r: 0.45, g: 0.45, b: 0.5 } }]; ht.textAlignVertical = 'CENTER';
-  header.appendChild(ht); ht.x = 14; ht.y = Math.round((HEADER - ht.height) / 2);
-  ht.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
-  const hdiv = solidRect('Divider', W, 1, 0, { r: 0.88, g: 0.88, b: 0.92 });
-  hdiv.x = 0; hdiv.y = HEADER - 1; hdiv.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
-  header.appendChild(hdiv);
+  if (opts.header) {
+    const header = figma.createFrame();
+    header.name = 'Header'; header.resize(W, HEADER); header.fills = []; header.x = 0; header.y = 0;
+    header.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    comp.appendChild(header);
+    const ht = figma.createText();
+    ht.fontName = titleFont; ht.name = 'Title'; ht.characters = 'Section'; ht.fontSize = 13;
+    ht.fills = [{ type: 'SOLID', color: { r: 0.45, g: 0.45, b: 0.5 } }]; ht.textAlignVertical = 'CENTER';
+    header.appendChild(ht); ht.x = 14; ht.y = Math.round((HEADER - ht.height) / 2);
+    ht.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+    const hdiv = solidRect('Divider', W, 1, 0, { r: 0.88, g: 0.88, b: 0.92 });
+    hdiv.x = 0; hdiv.y = HEADER - 1; hdiv.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
+    header.appendChild(hdiv);
+  }
 
   // Composited preview: ROWS instances of the single ListItem master (the first is the
   // 'Item' the importer reads; all stay in sync when you skin the master). Row text is
@@ -1003,8 +1035,36 @@ async function createList(): Promise<ComponentNode> {
     }
   }
 
-  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: 'List' }));
+  ensureListScrollbar(comp);
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: name }));
   parkMaster(comp);
   placeInstance(comp);
   return comp;
+}
+
+// Add a skinnable 'Scrollbar' layer (Track + Thumb) to a List master that lacks one.
+// The exporter captures its width + shapes so Unity styles the real uGUI Scrollbar;
+// in Figma the layer is a static preview (the canonical instance is rebuilt in Unity).
+function ensureListScrollbar(comp: ComponentNode): void {
+  if (!('children' in comp)) return;
+  if ((comp as ChildrenMixin).children.some((c) => c.name === 'Scrollbar')) return;
+  const W = comp.width, H = comp.height;
+  const header = (comp as ChildrenMixin).children.find((c) => c.name === 'Header');
+  const HEADER = header ? (header as unknown as { height: number }).height : 0;
+  const SB = 6, PAD = 3;
+
+  const sb = figma.createFrame();
+  sb.name = 'Scrollbar'; sb.fills = [];
+  sb.resize(SB, Math.max(24, H - HEADER - PAD * 2));
+  sb.x = W - SB - PAD; sb.y = HEADER + PAD;
+  sb.constraints = { horizontal: 'MAX', vertical: 'STRETCH' };
+  comp.appendChild(sb);
+
+  const track = solidRect('Track', SB, sb.height, SB / 2, { r: 0, g: 0, b: 0 }, 0.06);
+  track.x = 0; track.y = 0; track.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  sb.appendChild(track);
+
+  const thumb = solidRect('Thumb', SB, Math.max(24, Math.round(sb.height * 0.4)), SB / 2, { r: 0.55, g: 0.56, b: 0.6 }, 0.55);
+  thumb.x = 0; thumb.y = 0; thumb.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+  sb.appendChild(thumb);
 }

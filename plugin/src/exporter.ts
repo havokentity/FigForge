@@ -1387,9 +1387,20 @@ export async function exportDesign(
     const headerTree = await captureSubtree(headerNode, headerNode ? collectStructural(headerNode) : undefined);
     if (headerTree) partTrees.Header = headerTree;
 
+    // Scrollbar styling — the 'Scrollbar' layer (Track + Thumb) skins the real uGUI
+    // Scrollbar Unity builds; the Figma layer itself is just a static preview. Shapes
+    // are captured procedurally (simple rects → SDF); absent layer → Unity defaults.
+    const sbNode = childByName(master, 'Scrollbar');
+    const sbTrackNode = sbNode ? (childByName(sbNode, 'Track') ?? sbNode) : undefined;
+    const sbThumbNode = sbNode ? childByName(sbNode, 'Thumb') : undefined;
+    const scrollbarWidth = sbNode ? ((sbNode as unknown as { width?: number }).width ?? undefined) : undefined;
+    const scrollTrackShape = sbTrackNode ? (shapeOf(sbTrackNode) ?? undefined) : undefined;
+    const scrollThumbShape = sbThumbNode ? (shapeOf(sbThumbNode) ?? undefined) : undefined;
+
     return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
       itemHeight, headerHeight, label: rowLabel,
       listItems: listItems.length ? listItems : undefined,
+      scrollbarWidth, scrollTrackShape, scrollThumbShape,
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       parts: partsOf(master, ['Background']) };
   }

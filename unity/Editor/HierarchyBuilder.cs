@@ -2095,13 +2095,23 @@ namespace FigForge
             scroll.horizontal = false; scroll.vertical = true;
             scroll.movementType = ScrollRect.MovementType.Elastic; scroll.scrollSensitivity = 20f;
 
+            // The viewport is the MASK: a box matching the Background's INTERIOR — inset
+            // past the background stroke plus 1px of SDF anti-aliasing so row edges can
+            // never appear to poke outside the rounded background at fractional canvas
+            // scales — and excluding the Header strip at the top.
+            float bgStrokeW = c.shape != null && c.shape.stroke != null ? Mathf.Max(0f, c.shape.stroke.weight) : 0f;
+            float maskInset = (bgStrokeW + 1f) * sf;
             var viewport = NewRect("Viewport", go.transform);
             var vrt = viewport.GetComponent<RectTransform>();
             vrt.anchorMin = Vector2.zero; vrt.anchorMax = Vector2.one;
-            vrt.offsetMin = Vector2.zero; vrt.offsetMax = new Vector2(0, -headerH); // inset below the header
+            vrt.offsetMin = new Vector2(maskInset, maskInset);
+            vrt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH : maskInset));
             if (viewport.GetComponent<CanvasRenderer>() == null) viewport.AddComponent<CanvasRenderer>();
             viewport.AddComponent<Image>().color = new Color(1, 1, 1, 0.004f); // near-invisible drag/clip target
-            viewport.AddComponent<RectMask2D>();
+            var mask = viewport.AddComponent<RectMask2D>();
+            // Feather the clip edge ~1px so hard row edges blend like the AA'd background edge.
+            int soft = Mathf.Max(1, Mathf.RoundToInt(sf));
+            mask.softness = new Vector2Int(soft, soft);
             scroll.viewport = vrt;
 
             var content = NewRect("Content", viewport.transform);
@@ -2116,6 +2126,36 @@ namespace FigForge
             vlg.childControlWidth = true; vlg.childControlHeight = true; vlg.childForceExpandWidth = true; vlg.childForceExpandHeight = false; vlg.spacing = 0;
             content.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
             scroll.content = crt;
+
+            // Scrollbar — a real uGUI Scrollbar on the right edge, styled from the captured
+            // 'Scrollbar' layer (Track/Thumb shapes); a neutral rounded thumb when the design
+            // has none. Overlay style: floats over the rows and auto-hides when they fit.
+            float sbWFig = c.scrollbarWidth > 0.01f ? c.scrollbarWidth : 6f;
+            float sbW = sbWFig * sf;
+            var sbGo = NewRect("Scrollbar", go.transform);
+            var srt = sbGo.GetComponent<RectTransform>();
+            srt.anchorMin = new Vector2(1f, 0f); srt.anchorMax = Vector2.one; srt.pivot = new Vector2(1f, 0.5f);
+            srt.offsetMin = new Vector2(-(sbW + maskInset), maskInset);
+            srt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH + maskInset : maskInset));
+            var sbTrack = AddShapeGraphic(sbGo, c.scrollTrackShape, ctx); // null → transparent Image
+            MakeClickTarget(sbTrack, ctx); // track click pages the list
+            var slideGo = NewRect("Sliding Area", sbGo.transform);
+            Stretch(slideGo.GetComponent<RectTransform>());
+            var handleGo = NewRect("Handle", slideGo.transform);
+            var hrt = handleGo.GetComponent<RectTransform>();
+            hrt.anchorMin = Vector2.zero; hrt.anchorMax = Vector2.one;
+            hrt.offsetMin = Vector2.zero; hrt.offsetMax = Vector2.zero;
+            var thumbShape = c.scrollThumbShape ?? new CanonicalShape
+            { cornerRadius = sbWFig * 0.5f, fill = new float[] { 0.55f, 0.56f, 0.6f, 0.55f } };
+            var sbHandle = AddShapeGraphic(handleGo, thumbShape, ctx);
+            MakeClickTarget(sbHandle, ctx); // thumb drag
+            var sbar = sbGo.AddComponent<Scrollbar>();
+            sbar.transition = Selectable.Transition.None;
+            sbar.direction = Scrollbar.Direction.BottomToTop;
+            sbar.handleRect = hrt;
+            sbar.targetGraphic = sbHandle;
+            scroll.verticalScrollbar = sbar;
+            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
 
             float rowH = (c.itemHeight > 0.01f ? c.itemHeight : 44f) * sf;
             int count = c.count > 0 ? c.count : 5;
@@ -2394,7 +2434,10 @@ namespace FigForge
         // v34: list rows find Title/Subtitle/Regular/HitArea case-insensitively (captured
         //      subtree names are sanitized lowercase), always get a raycastable hit surface,
         //      and serialize the state-colour binding (was lost entering play mode).
-        internal const int CanonicalSchema = 34;
+        // v35: list viewport masks the background INTERIOR (inset past stroke + 1px AA, so
+        //      rows can't visually bleed at fractional scales) + styled uGUI Scrollbar from
+        //      the captured 'Scrollbar' layer (auto-hides when rows fit).
+        internal const int CanonicalSchema = 35;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

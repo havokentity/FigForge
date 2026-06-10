@@ -220,6 +220,9 @@ export interface CanonicalRef {
   itemHeight?: number;      // list: row height in Figma px (drives Unity row sizing)
   headerHeight?: number;    // list: header height in Figma px (0/absent = no header)
   count?: number;           // list: number of rows to generate (derived from list height ÷ row height)
+  scrollbarWidth?: number;  // list: scrollbar width in Figma px (from the 'Scrollbar' layer)
+  scrollTrackShape?: ButtonShape; // list: scrollbar track styling ('Scrollbar/Track', or the layer itself)
+  scrollThumbShape?: ButtonShape; // list: scrollbar thumb styling ('Scrollbar/Thumb')
   // dropdown: the option row is its own component (DropdownOption) with states; these
   // drive the TMP_Dropdown item template (options[] above are the option texts)
   optionShape?: ButtonShape; // DropdownOption Regular shape (corner/fill/border)
