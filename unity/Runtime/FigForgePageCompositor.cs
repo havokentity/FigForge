@@ -443,6 +443,60 @@ namespace FigForge
             if (Application.isPlaying) Destroy(material);
             else DestroyImmediate(material);
         }
+
+#if UNITY_EDITOR
+        // Verifies the capture pass in isolation: saves the page as the compositor
+        // will see it as a backdrop — Tier-2 (destination-reading) sources hidden,
+        // everything else (foreign uGUI included) rendered through the page camera.
+        // Selects sources by blend tier directly, NOT RequiresPageCompositor, so the
+        // pass is testable while the compositor routing is still disabled.
+        [ContextMenu("Save Debug Page Capture (Tier-2 Hidden)")]
+        void SaveDebugPageCapture()
+        {
+            var canvas = GetComponentInParent<Canvas>();
+            var cam = FigForgePageCapture.ResolveCamera(canvas);
+            if (cam == null)
+            {
+                Debug.LogWarning("[FigForge] Page capture needs a Screen Space - Camera canvas with a camera assigned.", this);
+                return;
+            }
+
+            var sources = new List<IFigForgeCompositorSource>();
+            GetComponentsInChildren(false, sources);
+            var culled = new List<CanvasRenderer>();
+            for (int i = 0; i < sources.Count; i++)
+            {
+                var source = sources[i];
+                if (source == null || FigForgeLayeredRect.BlendTier(source.CompositorBlendMode) != 2) continue;
+                var cr = source.transform.GetComponent<CanvasRenderer>();
+                if (cr == null || cr.cull) continue;
+                cr.cull = true;
+                culled.Add(cr);
+            }
+
+            var rt = FigForgePageCapture.CaptureTemporary(cam);
+            for (int i = 0; i < culled.Count; i++) culled[i].cull = false;
+            if (rt == null)
+            {
+                Debug.LogWarning("[FigForge] Page capture failed — SRP without render-request support?", this);
+                return;
+            }
+
+            var prev = RenderTexture.active;
+            var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
+            RenderTexture.active = rt;
+            tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+            tex.Apply(false);
+            RenderTexture.active = prev;
+            RenderTexture.ReleaseTemporary(rt);
+
+            string path = System.IO.Path.GetFullPath(
+                System.IO.Path.Combine(Application.dataPath, "..", "FigForgePageCapture.png"));
+            System.IO.File.WriteAllBytes(path, tex.EncodeToPNG());
+            DestroyImmediate(tex);
+            Debug.Log("[FigForge] Page capture saved (" + culled.Count + " Tier-2 source(s) hidden): " + path, this);
+        }
+#endif
     }
 
     [RequireComponent(typeof(CanvasRenderer))]
