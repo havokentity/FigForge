@@ -2142,9 +2142,9 @@ namespace FigForge
             var slideGo = NewRect("Sliding Area", sbGo.transform);
             Stretch(slideGo.GetComponent<RectTransform>());
             var handleGo = NewRect("Handle", slideGo.transform);
-            var hrt = handleGo.GetComponent<RectTransform>();
-            hrt.anchorMin = Vector2.zero; hrt.anchorMax = Vector2.one;
-            hrt.offsetMin = Vector2.zero; hrt.offsetMax = Vector2.zero;
+            var handleRt = handleGo.GetComponent<RectTransform>();
+            handleRt.anchorMin = Vector2.zero; handleRt.anchorMax = Vector2.one;
+            handleRt.offsetMin = Vector2.zero; handleRt.offsetMax = Vector2.zero;
             var thumbShape = c.scrollThumbShape ?? new CanonicalShape
             { cornerRadius = sbWFig * 0.5f, fill = new float[] { 0.55f, 0.56f, 0.6f, 0.55f } };
             var sbHandle = AddShapeGraphic(handleGo, thumbShape, ctx);
@@ -2152,7 +2152,7 @@ namespace FigForge
             var sbar = sbGo.AddComponent<Scrollbar>();
             sbar.transition = Selectable.Transition.None;
             sbar.direction = Scrollbar.Direction.BottomToTop;
-            sbar.handleRect = hrt;
+            sbar.handleRect = handleRt;
             sbar.targetGraphic = sbHandle;
             scroll.verticalScrollbar = sbar;
             scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
