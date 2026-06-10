@@ -142,7 +142,8 @@ namespace FigForge
     {
         public string asset;              // PNG fallback for vector/icon shapes whose path geometry is not a rounded rect
         public VectorDrawing vector;      // procedural vector mesh (preferred over `asset` when present)
-        public float cornerRadius;
+        public float cornerRadius;        // uniform (or max when corners are mixed)
+        public float[] corners;           // tl,tr,br,bl — per-corner detail (null = uniform cornerRadius)
         public float opacity = 1f;
         public string blendMode;
         public float[] fill;              // solid colour, or legacy gradient stop 0

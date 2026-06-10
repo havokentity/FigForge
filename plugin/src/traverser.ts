@@ -95,6 +95,20 @@ export function hasMeaningfulFill(node: SceneNode): boolean {
   return paints(node, 'fills').some((f) => !isEmptyPaint(f));
 }
 
+function hasImageFill(node: SceneNode): boolean {
+  return paints(node, 'fills').some((f) => f.type === 'IMAGE' && !isEmptyPaint(f));
+}
+
+/**
+ * A non-normal Figma blend mode must be rebuilt procedurally: Unity blends it
+ * live against the page (FigForgeLayeredRect → page compositor), while a baked
+ * PNG can only ever composite as plain alpha — the blend silently vanishes.
+ */
+function hasLiveBlend(node: SceneNode): boolean {
+  const bm = (node as unknown as { blendMode?: string }).blendMode;
+  return !!bm && bm !== 'NORMAL' && bm !== 'PASS_THROUGH';
+}
+
 export function hasVisibleStroke(node: SceneNode): boolean {
   const w = (node as unknown as { strokeWeight?: number }).strokeWeight;
   if (typeof w === 'number' && w <= 0) return false;
@@ -133,9 +147,13 @@ export function isExportable(node: SceneNode): boolean {
   if (isIconContainer(node)) return true; // all-vector children → single icon
   if (CONTAINER_TYPES.has(node.type)) {
     if (hasChildren(node) && node.children.some(isVisible)) return false; // structural container
+    // A blend-mode panel must stay procedural for live blending — unless an
+    // image fill forces rasterization (then the blend is lost; Unity warns).
+    if (hasLiveBlend(node) && !hasImageFill(node)) return false;
     return hasMeaningfulFill(node) || hasVisibleStroke(node);
   }
   if (node.type === 'RECTANGLE') {
+    if (hasLiveBlend(node) && !hasImageFill(node)) return false;
     return hasMeaningfulFill(node) || hasVisibleStroke(node);
   }
   return false;

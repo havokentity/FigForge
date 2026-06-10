@@ -349,8 +349,9 @@ namespace FigForge
             }
 
             // Procedural SDF for rounded/bordered solid panels (crisp at any size,
-            // per-corner). Gradients stay on the baked path; images are textures;
-            // flat un-bordered solids stay a cheap plain Image.
+            // per-corner) and ANY panel with a live blend mode (the Image path can
+            // only composite as normal alpha). Plain flat solids stay a cheap Image;
+            // image fills are textures.
             if (!hasAsset && UseSdf(style)) { BuildSdfPanel(go, e, ctx); return; }
 
             var img = go.AddComponent<Image>();
@@ -358,6 +359,10 @@ namespace FigForge
 
             if (hasAsset)
             {
+                if (NonNormalBlend(style != null ? style.blendMode : null))
+                    ctx.log($"'{e.name}' has blend mode '{style.blendMode}' but was rasterized to a PNG — " +
+                            "baked images composite as normal alpha, so the blend is lost. Remove the image " +
+                            "fill / PNG override to keep it procedural for live blending.");
                 img.sprite = ctx.sprites[e.asset];
                 // Auto-9-slice when the sprite was imported with a border (rounded /
                 // bordered panel) so it scales without smearing the corners.
@@ -394,7 +399,9 @@ namespace FigForge
             bool border = s.stroke != null || (s.strokes != null && s.strokes.Count > 0);
             bool hasShadow = s.effects != null && s.effects.Count > 0;
             bool layeredPaint = (s.fills != null && s.fills.Count > 1) || (s.strokes != null && s.strokes.Count > 1);
-            return rounded || border || hasShadow || layeredPaint;
+            // Live blend modes need a FigForge graphic even on a flat solid — the
+            // plain-Image path would silently drop the blend.
+            return rounded || border || hasShadow || layeredPaint || NonNormalBlend(s.blendMode);
         }
 
         // Apply a captured Figma drop shadow to the SDF graphic. Figma offset is +y
@@ -505,6 +512,14 @@ namespace FigForge
             }
         }
 
+        // A blend mode that must be composited live against the page (anything but
+        // normal/pass-through) — these need a FigForge graphic, never a baked Image.
+        static bool NonNormalBlend(string mode)
+        {
+            if (string.IsNullOrEmpty(mode)) return false;
+            return mode != "normal" && mode != "passThrough";
+        }
+
         static FigForgeBlendMode BlendModeFromManifest(string mode)
         {
             switch (mode)
@@ -538,15 +553,6 @@ namespace FigForge
         const float OutlineThickenPx = 1f;
         static float StrokePx(float weight, float sf)
             => weight > 0.001f ? Mathf.Max(1f, (weight + OutlineThickenPx) * sf) : 0f;
-
-        // Per-corner radii (tl,tr,br,bl) in scaled px, from style.corners or the uniform radius.
-        static Vector4 CornerRadii(StyleData s, float sf)
-        {
-            if (s.corners != null && s.corners.Length >= 4)
-                return new Vector4(s.corners[0], s.corners[1], s.corners[2], s.corners[3]) * sf;
-            float r = s.cornerRadius * sf;
-            return new Vector4(r, r, r, r);
-        }
 
         // The SDF shader is found via Shader.Find, which works in the editor but
         // not in a player build unless the shader is "always included". Register it
@@ -598,6 +604,7 @@ namespace FigForge
             return new CanonicalShape
             {
                 cornerRadius = s.cornerRadius,
+                corners = s.corners,
                 opacity = s.opacity,
                 blendMode = s.blendMode,
                 fill = s.fill != null && s.fill.kind == "solid" ? s.fill.color : null,
@@ -1411,8 +1418,19 @@ namespace FigForge
             stroke = strokes.Count > 0
                 ? StrokeFromManifest(strokes[0], sf)
                 : FigForgeStroke.None;
-            float br = sh.cornerRadius * sf;
-            corners = new Vector4(br, br, br, br);
+            corners = ShapeCorners(sh, sf);
+        }
+
+        // Per-corner radii (tl,tr,br,bl) in scaled px. `cornerRadius` alone is the MAX
+        // corner when Figma corners are mixed, so flattening to it rounds EVERY corner
+        // at the largest radius — use the per-corner detail whenever present.
+        static Vector4 ShapeCorners(CanonicalShape sh, float sf)
+        {
+            if (sh == null) return Vector4.zero;
+            if (sh.corners != null && sh.corners.Length >= 4)
+                return new Vector4(sh.corners[0], sh.corners[1], sh.corners[2], sh.corners[3]) * sf;
+            float r = sh.cornerRadius * sf;
+            return new Vector4(r, r, r, r);
         }
 
         static FigForgeShapeStyle ShapeStyle(CanonicalShape sh, BuildContext ctx)
