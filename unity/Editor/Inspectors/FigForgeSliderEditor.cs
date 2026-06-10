@@ -19,6 +19,7 @@ namespace FigForge
             EditorGUILayout.Space();
             serializedObject.Update();
             EditorGUILayout.PropertyField(serializedObject.FindProperty("tmpTxt_label"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("tmpTxt_value"));
             EditorGUILayout.PropertyField(serializedObject.FindProperty("slots"));
             serializedObject.ApplyModifiedProperties();
         }

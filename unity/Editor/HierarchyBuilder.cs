@@ -2489,6 +2489,18 @@ namespace FigForge
                 lrt.anchorMax = new Vector2(1f, lrt.anchorMax.y);
             }
 
+            // Live value read-out — the captured 'Value' layer. FigForgeSlider rewrites
+            // the text on every value change; right-aligned, with the box extended to
+            // the control's LEFT edge so longer values ('0.875') never clip (the
+            // captured box hugs the short authored preview).
+            TextMeshProUGUI valueText = null;
+            if (c.parts != null && c.parts.ContainsKey("Value"))
+            {
+                valueText = AddControlLabel(go, "Value", c.value, c.parts, "Value", ctx, TextAlignmentOptions.Right);
+                var vrt = valueText.GetComponent<RectTransform>();
+                vrt.anchorMin = new Vector2(0f, vrt.anchorMin.y);
+            }
+
             // Click/drag surface: the captured 'HitArea' layer (the slider ROW, so a
             // click on the Label strip doesn't jump the value), else full-bleed. Added
             // last so it sits on top, like toggle/radio — the Slider reads the press
@@ -2496,13 +2508,14 @@ namespace FigForge
             var hit = AddHitArea(go.transform, c.parts);
             slider.targetGraphic = hit;
             slider.tmpTxt_label = label;
+            slider.tmpTxt_value = valueText;
 
             // Leave value at the default (0): FigForgeBindings.Apply sets the
             // per-instance initial value, so the shared prefab doesn't bake one
             // instance's position (the toggle isOn lesson).
 
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.control = slider; bind.label = label; bind.background = track;
+            bind.control = slider; bind.label = label; bind.valueText = valueText; bind.background = track;
             return go;
         }
 
@@ -2774,7 +2787,10 @@ namespace FigForge
         // v45: slider variants — authored [minValue..maxValue] range (value now RAW,
         //      not a 0..1 ratio), slot snapping (FigForgeSlider.slots overrides
         //      Slider.Set), and the 'Ticks' layer rendered as a render-only subtree.
-        internal const int CanonicalSchema = 45;
+        // v46: slider live value read-out — the 'Value' layer becomes a TMP wired to
+        //      FigForgeSlider.tmpTxt_value (rewritten on every value change) and
+        //      FigForgeBindings.valueText.
+        internal const int CanonicalSchema = 46;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

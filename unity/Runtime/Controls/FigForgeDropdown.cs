@@ -23,5 +23,14 @@ namespace FigForge
             get => captionText != null ? captionText.text : null;
             set { if (captionText != null) captionText.text = value; }
         }
+
+        /// <summary>Show/hide the whole control — `dropdown.Visible = false`. Drives
+        /// GameObject.SetActive, so a hidden control stops rendering, receiving input,
+        /// and contributing to layout.</summary>
+        public bool Visible
+        {
+            get => gameObject.activeSelf;
+            set => gameObject.SetActive(value);
+        }
     }
 }
