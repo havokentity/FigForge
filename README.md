@@ -280,8 +280,10 @@ control behaviours. PRs welcome.
 plugin/   Figma plugin          — TypeScript / esbuild
 server/   MCP bridge            — TypeScript
 unity/    Unity importer (UPM)  — C#, Editor + Runtime
-docs/     Guides
+docs/     Guides                — incl. how releases are cut: docs/releasing.md
 ```
+
+Releases are cut from `vX.Y.Z` tags by CI → [`docs/releasing.md`](docs/releasing.md).
 
 <div align="center">
 
