@@ -2391,7 +2391,10 @@ namespace FigForge
         //      text; dropdown/input Background kept procedural (SDF) when shape covers it.
         // v33: list content VerticalLayoutGroup controls child height, so rows honour their
         //      LayoutElement rowHeight (stretch-anchored template clones laid out 0-high).
-        internal const int CanonicalSchema = 33;
+        // v34: list rows find Title/Subtitle/Regular/HitArea case-insensitively (captured
+        //      subtree names are sanitized lowercase), always get a raycastable hit surface,
+        //      and serialize the state-colour binding (was lost entering play mode).
+        internal const int CanonicalSchema = 34;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

@@ -25,9 +25,9 @@ namespace FigForge
         public FigForgeFill selected = FigForgeFill.Solid(Color.white);
         public bool hasRollover, hasPressed, hasSelected;
 
-        FigForgeRoundedRect _rr;
-        FigForgeLayeredRect _layered;
-        Graphic _plain; // flat (non-SDF) row background — tinted via Graphic.color
+        // SERIALIZED: rows are usually built in the editor at import, and a private cache
+        // is lost on entering play mode — every state change would then silently no-op.
+        public Graphic boundGraphic;
         bool _over, _down;
         public bool IsSelected { get; private set; }
 
@@ -35,9 +35,7 @@ namespace FigForge
         // layer is an SDF rect when rounded/bordered, else a flat Image we tint.
         public void Bind(Graphic bg)
         {
-            _rr = bg as FigForgeRoundedRect;
-            _layered = bg as FigForgeLayeredRect;
-            _plain = (_rr == null && _layered == null) ? bg : null;
+            boundGraphic = bg;
             Apply();
         }
 
@@ -57,9 +55,9 @@ namespace FigForge
                 : (_down && hasPressed) ? pressed
                 : (_over && hasRollover) ? rollover
                 : regular;
-            if (_layered != null) _layered.SetPrimaryFill(f);
-            else if (_rr != null) _rr.SetFill(f);
-            else if (_plain != null) _plain.color = f.color; // flat bg: tint to the state's solid colour
+            if (boundGraphic is FigForgeLayeredRect layered) layered.SetPrimaryFill(f);
+            else if (boundGraphic is FigForgeRoundedRect rr) rr.SetFill(f);
+            else if (boundGraphic != null) boundGraphic.color = f.color; // flat bg: tint to the state's solid colour
         }
     }
 }

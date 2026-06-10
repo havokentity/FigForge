@@ -113,6 +113,14 @@ namespace FigForge
             hasItemRollover = hasRollover;
         }
 
+        // Play-mode safety net: scenes imported before the childControlHeight fix never
+        // call Rebuild when runtime code doesn't SetItems, leaving their serialized rows
+        // zero-height (invisible). Healing on enable makes them lay out correctly.
+        void OnEnable()
+        {
+            if (content != null) HealContentLayout();
+        }
+
         public void Rebuild()
         {
             if (content == null) return;
@@ -188,8 +196,18 @@ namespace FigForge
             var subT = FindByName(row.transform, "Subtitle");
             if (subT != null) { var tmp = subT.GetComponent<TMP_Text>(); if (tmp != null) tmp.text = item.subtitle ?? ""; }
 
+            // Pointer events need a raycastable graphic on the row: the cloned subtree is
+            // built render-only (raycasts stripped). Re-enable the HitArea when the design
+            // has one; otherwise add a transparent full-bleed Image as the hit surface.
             var hitT = FindByName(row.transform, "HitArea");
-            if (hitT != null) { var hg = hitT.GetComponent<Graphic>(); if (hg != null) hg.raycastTarget = true; }
+            var hit = hitT != null ? hitT.GetComponent<Graphic>() : null;
+            if (hit != null) hit.raycastTarget = true;
+            else
+            {
+                var img = row.GetComponent<Image>() ?? row.AddComponent<Image>();
+                img.color = new Color(0, 0, 0, 0);
+                img.raycastTarget = true;
+            }
 
             var bgT = FindByName(row.transform, "Regular");
             var bg = bgT != null ? bgT.GetComponent<Graphic>() : null;
@@ -201,9 +219,12 @@ namespace FigForge
             if (bg != null) fr.Bind(bg);
         }
 
+        // Case-insensitive: the exporter sanitizes captured subtree names to lowercase
+        // ("Title" → "title"), so an exact match against the design-side casing never hits.
         static Transform FindByName(Transform t, string name)
         {
-            foreach (var rt in t.GetComponentsInChildren<Transform>(true)) if (rt.name == name) return rt;
+            foreach (var rt in t.GetComponentsInChildren<Transform>(true))
+                if (string.Equals(rt.name, name, System.StringComparison.OrdinalIgnoreCase)) return rt;
             return null;
         }
 
