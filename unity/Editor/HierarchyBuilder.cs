@@ -2168,24 +2168,15 @@ namespace FigForge
             // are render-only children, so dragging never depends on SDF raycast geometry.
             float sbWFig = c.scrollbarWidth > 0.01f ? c.scrollbarWidth : 10f;
             float sbW = sbWFig * sf;
-            var sbGo = NewRect("Scrollbar", go.transform);
+            // INSIDE the viewport, so the (possibly rounded) mask clips the bar exactly
+            // like the rows. It's a static sibling of `content` (only content scrolls),
+            // added after it so the bar draws on top and wins raycasts.
+            var sbGo = NewRect("Scrollbar", viewport.transform);
             var srt = sbGo.GetComponent<RectTransform>();
             srt.pivot = new Vector2(1f, 0.5f);
-            if (hasMaskPart)
-            {
-                // Hug the right edge of the designer's clip region.
-                var mp = c.parts["Mask"]; // [minX, minY, maxX, maxY] normalized
-                srt.anchorMin = new Vector2(mp[2], mp[1]);
-                srt.anchorMax = new Vector2(mp[2], mp[3]);
-                srt.offsetMin = new Vector2(-sbW, 0f);
-                srt.offsetMax = Vector2.zero;
-            }
-            else
-            {
-                srt.anchorMin = new Vector2(1f, 0f); srt.anchorMax = Vector2.one;
-                srt.offsetMin = new Vector2(-(sbW + maskInset), maskInset);
-                srt.offsetMax = new Vector2(-maskInset, -(headerH > 0f ? headerH + maskInset : maskInset));
-            }
+            srt.anchorMin = new Vector2(1f, 0f); srt.anchorMax = Vector2.one;
+            srt.offsetMin = new Vector2(-sbW, 0f);
+            srt.offsetMax = Vector2.zero;
             if (sbGo.GetComponent<CanvasRenderer>() == null) sbGo.AddComponent<CanvasRenderer>();
             var sbHit = sbGo.AddComponent<Image>();
             sbHit.color = new Color(0, 0, 0, 0);
@@ -2531,7 +2522,9 @@ namespace FigForge
         //      correct at every scroll position); background-corner-derived row rounding
         //      removed — the clip shape is entirely designer-owned.
         // v40: default scrollbar width 6 -> 10 px (manifests without a captured width).
-        internal const int CanonicalSchema = 40;
+        // v41: scrollbar lives INSIDE the viewport so the (rounded) mask clips it with
+        //      the rows.
+        internal const int CanonicalSchema = 41;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

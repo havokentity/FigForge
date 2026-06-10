@@ -1062,7 +1062,6 @@ async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentN
 function ensureListMask(comp: ComponentNode): void {
   if (!('children' in comp)) return;
   const kids = (comp as ChildrenMixin).children as SceneNode[];
-  if (kids.some((c) => c.name === 'Mask')) return;
   const W = comp.width, H = comp.height;
   const header = kids.find((c) => c.name === 'Header');
   const HEADER = header ? (header as unknown as { height: number }).height : 0;
@@ -1072,6 +1071,18 @@ function ensureListMask(comp: ComponentNode): void {
   const bgRadius = bg && typeof (bg as unknown as { cornerRadius?: unknown }).cornerRadius === 'number'
     ? (bg as unknown as { cornerRadius: number }).cornerRadius : 0;
   const inset = strokeW + 1;
+
+  const existing = kids.find((c) => c.name === 'Mask');
+  if (existing) {
+    // Repair masks created by the interim retrofit, which defaulted to radius 0 —
+    // a square clip lets row fills poke past the rounded Background at the corners.
+    // Only a radius of EXACTLY 0 is touched; any designer-set rounding is kept.
+    const er = typeof (existing as unknown as { cornerRadius?: unknown }).cornerRadius === 'number'
+      ? (existing as unknown as { cornerRadius: number }).cornerRadius : -1;
+    if (er === 0 && bgRadius > 0)
+      (existing as unknown as { cornerRadius: number }).cornerRadius = Math.max(0, bgRadius - inset);
+    return;
+  }
 
   // The Mask's OWN corner radius defines the clip rounding in Unity (rounded stencil
   // mask) — default it to the Background's radius so rows follow the container curve.
