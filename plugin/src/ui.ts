@@ -142,7 +142,6 @@ for (const [id, kind] of [
   ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
   ['createInputBtn', 'input'],
   ['createDropdownBtn', 'dropdown'],
-  ['createSliderBtn', 'slider'],
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
     setStatus(`Creating ${kind} component…`);
@@ -150,47 +149,84 @@ for (const [id, kind] of [
   });
 }
 
-// List variants: the ＋List chip opens a floating popover of part toggles
-// (header/icons/subtitles); 'Add List' creates that combination (each combo is
-// its own master). Anchored under the chip; closes on outside click or Escape.
-const listOptsEl = document.getElementById('listOpts') as HTMLElement | null;
-const listBtnEl = $('#createListBtn') as HTMLElement;
-// Hide = play the reverse spring (.closing → list-pop-out), THEN set hidden when it
-// ends. Keyed by animation name so a reopen mid-close never strands the popover.
-function hideListOpts() {
-  if (!listOptsEl || listOptsEl.hasAttribute('hidden') || listOptsEl.classList.contains('closing')) return;
-  listOptsEl.classList.add('closing');
+// Floating options popover (＋List, ＋Slider): the chip toggles it, anchored under
+// the chip; closes on outside click or Escape; 'Add …' creates that combination
+// (each combo is its own master). Hide = play the reverse spring (.closing →
+// list-pop-out), THEN set hidden when it ends — keyed by animation name so a
+// reopen mid-close never strands the popover.
+const popoverHiders: (() => void)[] = [];
+function wirePopover(btn: HTMLElement, pop: HTMLElement | null): { hide: () => void } {
+  function hide() {
+    if (!pop || pop.hasAttribute('hidden') || pop.classList.contains('closing')) return;
+    pop.classList.add('closing');
+  }
+  popoverHiders.push(hide);
+  pop?.addEventListener('animationend', (e) => {
+    if ((e as AnimationEvent).animationName !== 'list-pop-out' || !pop) return;
+    pop.classList.remove('closing');
+    pop.setAttribute('hidden', '');
+  });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!pop) return;
+    if (!pop.hasAttribute('hidden') && !pop.classList.contains('closing')) { hide(); return; }
+    for (const h of popoverHiders) if (h !== hide) h(); // one popover at a time
+    pop.classList.remove('closing'); // reopening mid-close: cancel the out-animation
+    pop.removeAttribute('hidden');
+    // Anchor below the chip (offsets are relative to .create-group, the positioned
+    // ancestor), clamped so the popover never overflows the group's right edge.
+    const group = pop.offsetParent as HTMLElement | null;
+    const maxLeft = group ? Math.max(0, group.clientWidth - pop.offsetWidth - 4) : 0;
+    pop.style.left = Math.min(btn.offsetLeft, maxLeft) + 'px';
+    pop.style.top = btn.offsetTop + btn.offsetHeight + 6 + 'px';
+  });
+  pop?.addEventListener('click', (e) => e.stopPropagation()); // clicks inside don't close it
+  document.addEventListener('click', hide);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+  return { hide };
 }
-listOptsEl?.addEventListener('animationend', (e) => {
-  if ((e as AnimationEvent).animationName !== 'list-pop-out' || !listOptsEl) return;
-  listOptsEl.classList.remove('closing');
-  listOptsEl.setAttribute('hidden', '');
-});
-listBtnEl.addEventListener('click', (e) => {
-  e.stopPropagation();
-  if (!listOptsEl) return;
-  if (!listOptsEl.hasAttribute('hidden') && !listOptsEl.classList.contains('closing')) { hideListOpts(); return; }
-  listOptsEl.classList.remove('closing'); // reopening mid-close: cancel the out-animation
-  listOptsEl.removeAttribute('hidden');
-  // Anchor below the chip (offsets are relative to .create-group, the positioned
-  // ancestor), clamped so the popover never overflows the group's right edge.
-  const group = listOptsEl.offsetParent as HTMLElement | null;
-  const maxLeft = group ? Math.max(0, group.clientWidth - listOptsEl.offsetWidth - 4) : 0;
-  listOptsEl.style.left = Math.min(listBtnEl.offsetLeft, maxLeft) + 'px';
-  listOptsEl.style.top = listBtnEl.offsetTop + listBtnEl.offsetHeight + 6 + 'px';
-});
-listOptsEl?.addEventListener('click', (e) => e.stopPropagation()); // clicks inside don't close it
-document.addEventListener('click', hideListOpts);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideListOpts(); });
+
+// List variants: part toggles (header/icons/subtitles) + scrollbar width.
+const listPop = wirePopover($('#createListBtn') as HTMLElement, document.getElementById('listOpts'));
 $('#listOptsCreate').addEventListener('click', () => {
   const on = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.checked !== false;
   const sbRaw = parseInt((document.getElementById('listOptSbWidth') as HTMLInputElement | null)?.value ?? '10', 10);
   const scrollbarWidth = isNaN(sbRaw) ? 10 : Math.min(40, Math.max(2, sbRaw));
-  hideListOpts();
+  listPop.hide();
   setStatus('Creating list component…');
   post({
     type: 'create-canonical', kind: 'list', componentsPage: compPageOn(),
     listOpts: { header: on('listOptHeader'), icon: on('listOptIcon'), subtitle: on('listOptSubtitle'), scrollbarWidth },
+  });
+});
+
+// Slider variants: custom value range (start/end) and/or slotted snapping (slot
+// count). The Start/End/Slots inputs enable with their checkbox so the defaults
+// (0..1, continuous) stay obvious.
+const sliderPop = wirePopover($('#createSliderBtn') as HTMLElement, document.getElementById('sliderOpts'));
+const sliderChecked = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.checked === true;
+function syncSliderOptInputs() {
+  const range = sliderChecked('sliderOptRange'), slotted = sliderChecked('sliderOptSlotted');
+  for (const [id, en] of [['sliderOptMin', range], ['sliderOptMax', range], ['sliderOptSlots', slotted]] as const) {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (el) el.disabled = !en;
+  }
+}
+document.getElementById('sliderOptRange')?.addEventListener('change', syncSliderOptInputs);
+document.getElementById('sliderOptSlotted')?.addEventListener('change', syncSliderOptInputs);
+$('#sliderOptsCreate').addEventListener('click', () => {
+  const num = (id: string, def: number) => {
+    const v = parseFloat((document.getElementById(id) as HTMLInputElement | null)?.value ?? '');
+    return isNaN(v) ? def : v;
+  };
+  sliderPop.hide();
+  setStatus('Creating slider component…');
+  post({
+    type: 'create-canonical', kind: 'slider', componentsPage: compPageOn(),
+    sliderOpts: {
+      range: sliderChecked('sliderOptRange'), min: num('sliderOptMin', 0), max: num('sliderOptMax', 100),
+      slotted: sliderChecked('sliderOptSlotted'), slots: Math.round(num('sliderOptSlots', 5)),
+    },
   });
 });
 

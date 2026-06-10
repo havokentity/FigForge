@@ -37,7 +37,7 @@ import {
 } from './types';
 import { generateFileName, sanitize } from './naming';
 import {
-  canonicalTagValue,
+  canonicalTagData,
   detectCanonical,
   hasMeaningfulFill,
   hasVisibleStroke,
@@ -1451,22 +1451,45 @@ export async function exportDesign(
   // designer sets by resizing the Fill. Read per NODE: a stretched instance
   // (STRETCH track, fixed-width fill) shows a different fraction than its master,
   // and what it shows is what exports.
-  function sliderRatioOf(node: SceneNode): string | undefined {
+  function sliderRatioOf(node: SceneNode): number | undefined {
     const track = childByName(node, 'Track');
     const fillN = childByName(node, 'Fill');
     const tw = track ? ((track as unknown as { width?: number }).width ?? 0) : 0;
     const fw = fillN ? ((fillN as unknown as { width?: number }).width ?? 0) : 0;
     if (!fillN || tw <= 0) return undefined;
-    return Math.min(1, Math.max(0, fw / tw)).toFixed(3);
+    return Math.min(1, Math.max(0, fw / tw));
+  }
+
+  // Snap a 0..1 ratio to `slots` evenly spaced positions (identity when continuous).
+  function snapSliderRatio(ratio: number, slots?: number): number {
+    if (!slots || slots < 2) return ratio;
+    return Math.round(ratio * (slots - 1)) / (slots - 1);
+  }
+
+  function fmtSliderValue(n: number): string {
+    return String(+n.toFixed(3));
+  }
+
+  // A node's slider value: the Fill÷Track ratio mapped into [min..max], snapped to
+  // the slot grid when slotted. undefined when the node has no readable ratio.
+  function sliderRawOf(node: SceneNode, min: number, max: number, slots?: number): number | undefined {
+    const r = sliderRatioOf(node);
+    return r === undefined ? undefined : min + (max - min) * snapSliderRatio(r, slots);
   }
 
   // Capture a slider: Track + Fill + Thumb shapes (procedural via shapeOf — simple
   // SDF-safe rects), thumb hover/press colours from the hidden ThumbRollover/
-  // ThumbPressed layers (the list-scrollbar convention), the initial value (the
-  // Fill÷Track width ratio, else the canonical tag's authored value), and parts.
-  function captureSlider(master: SceneNode, tagValue?: string) {
+  // ThumbPressed layers (the list-scrollbar convention), the range + slot count
+  // from the canonical tag, the slot Ticks layer as a render-only subtree, and the
+  // initial value (the Fill÷Track ratio mapped into the range, else the tag's
+  // authored value). `value` is RAW — within [minValue..maxValue], not 0..1.
+  async function captureSlider(master: SceneNode, tag: ReturnType<typeof canonicalTagData>) {
     const trackNode = childByName(master, 'Track');
     if (!trackNode) return null;
+    let minValue = tag.minValue ?? 0;
+    let maxValue = tag.maxValue ?? 1;
+    if (!(maxValue > minValue)) { minValue = 0; maxValue = 1; } // malformed tag → legacy 0..1
+    const slots = tag.slots !== undefined && tag.slots >= 2 ? tag.slots : undefined;
     const trackShape = shapeOf(trackNode) ?? undefined;
     const fillNode = childByName(master, 'Fill');
     const fillShape = fillNode ? (shapeOf(fillNode) ?? undefined) : undefined;
@@ -1476,12 +1499,22 @@ export async function exportDesign(
     const thumbPress = childByName(master, 'ThumbPressed');
     const thumbRollover = thumbRoll ? (stateSolid(thumbRoll) ?? undefined) : undefined;
     const thumbPressed = thumbPress ? (stateSolid(thumbPress) ?? undefined) : undefined;
-    const value = sliderRatioOf(master) ?? tagValue ?? '0.5';
-    return { trackShape, fillShape, thumbShape, thumbRollover, thumbPressed, value,
+    const tagRaw = tag.value !== undefined && isFinite(parseFloat(tag.value))
+      ? Math.min(maxValue, Math.max(minValue, parseFloat(tag.value)))
+      : undefined;
+    const raw = sliderRawOf(master, minValue, maxValue, slots)
+      ?? tagRaw
+      ?? (minValue + maxValue) / 2;
+    // Slot tick marks — a full render-only subtree (any notch styling survives).
+    const ticksTree = await captureSubtree(childByName(master, 'Ticks'));
+    return { trackShape, fillShape, thumbShape, thumbRollover, thumbPressed,
+      minValue, maxValue, slots,
+      value: fmtSliderValue(raw),
       label: textOf(childByName(master, 'Label')),
+      partTrees: ticksTree ? { Ticks: ticksTree } : undefined,
       // 'HitArea' (optional): the captured layer bounds the click/drag surface;
       // absent → the whole component frame is the surface.
-      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'HitArea', 'Label']) };
+      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'Ticks', 'HitArea', 'Label']) };
   }
 
   const stateByNode = new Map<string, CanonicalStates>();
@@ -1595,13 +1628,14 @@ export async function exportDesign(
         controlByNode.set(p.node.id, { ...l, itemHeight: ih, count });
       }
     } else if (ref.kind === 'slider') {
-      const s = captureSlider(master, canonicalTagValue(master));
+      const s = await captureSlider(master, canonicalTagData(master));
       if (s) {
         // THIS instance's Fill÷Track ratio wins (a stretched instance shows a
-        // different fraction than the master — export what it shows). Spread the
-        // rest verbatim (the maskShape lesson: never hand-pick fields here).
-        const instValue = sliderRatioOf(p.node);
-        controlByNode.set(p.node.id, { ...s, value: instValue ?? s.value });
+        // different fraction than the master — export what it shows), mapped into
+        // the range and snapped to the slot grid. Spread the rest verbatim (the
+        // maskShape lesson: never hand-pick fields here).
+        const instRaw = sliderRawOf(p.node, s.minValue, s.maxValue, s.slots);
+        controlByNode.set(p.node.id, { ...s, value: instRaw !== undefined ? fmtSliderValue(instRaw) : s.value });
       }
     }
   }

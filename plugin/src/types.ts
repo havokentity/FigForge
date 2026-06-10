@@ -227,12 +227,17 @@ export interface CanonicalRef {
   scrollThumbPressed?: RGBA;  // list: thumb pressed colour ('Scrollbar/ThumbPressed', hidden layer)
   maskShape?: ButtonShape;    // list: the 'Mask' layer's styling — its cornerRadius rounds the clip
   // slider: Track/Fill/Thumb styling + thumb state colours. `value` above is the
-  // initial value 0..1 (the Fill÷Track width ratio, else the canonical tag value).
+  // RAW initial value within [minValue..maxValue] (derived from the Fill÷Track
+  // width ratio, else the canonical tag value); legacy manifests omit the range
+  // (→ 0..1, where value was the plain ratio).
   trackShape?: ButtonShape;   // slider: the rail ('Track')
   fillShape?: ButtonShape;    // slider: the filled portion ('Fill')
   thumbShape?: ButtonShape;   // slider: the draggable thumb ('Thumb')
   thumbRollover?: RGBA;       // slider: thumb hover colour ('ThumbRollover', hidden layer)
   thumbPressed?: RGBA;        // slider: thumb pressed colour ('ThumbPressed', hidden layer)
+  minValue?: number;          // slider: range start (absent = 0)
+  maxValue?: number;          // slider: range end (absent = 1)
+  slots?: number;             // slider: discrete slot count (≥2 snaps + 'Ticks' notches; absent = continuous)
   // dropdown: the option row is its own component (DropdownOption) with states; these
   // drive the TMP_Dropdown item template (options[] above are the option texts)
   optionShape?: ButtonShape; // DropdownOption Regular shape (corner/fill/border)

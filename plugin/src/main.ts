@@ -206,7 +206,8 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       try {
         useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
         const comp = await createCanonical(String((msg as { kind?: string }).kind || ''),
-          (msg as { listOpts?: Partial<ListOptions> }).listOpts);
+          (msg as { listOpts?: Partial<ListOptions> }).listOpts,
+          (msg as { sliderOpts?: Partial<SliderOptions> }).sliderOpts);
         const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
         figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group radios under one frame).` });
       } catch (e) {
@@ -597,7 +598,11 @@ function parkMaster(comp: ComponentNode): void {
   page.appendChild(comp);
   let y = 0;
   for (const n of page.children) {
-    if (n !== comp && n.type === 'COMPONENT' && FIGFORGE_MASTERS.includes(n.name)) {
+    // Variant masters ('List NoHeader', 'Slider 0to100 S5') stack too — match the
+    // base name with a space-delimited suffix, not just the exact defaults.
+    const isMaster = n !== comp && n.type === 'COMPONENT'
+      && FIGFORGE_MASTERS.some((m) => n.name === m || n.name.startsWith(m + ' '));
+    if (isMaster) {
       y = Math.max(y, (n as ComponentNode).y + (n as ComponentNode).height + 40);
     }
   }
@@ -612,14 +617,15 @@ function solidRect(name: string, w: number, h: number, r: number, color: RGB, al
   return rect;
 }
 
-// Dispatch a "+Toggle / +Radio / +Dropdown / +List" create request to its builder.
-async function createCanonical(kind: string, listOpts?: Partial<ListOptions>): Promise<ComponentNode> {
+// Dispatch a "+Toggle / +Radio / +Dropdown / +Slider / +List" create request to its builder.
+async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
+                               sliderOpts?: Partial<SliderOptions>): Promise<ComponentNode> {
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
     case 'input': return createInputField();
     case 'dropdown': return createDropdown();
-    case 'slider': return createSlider();
+    case 'slider': return createSlider(sliderOpts);
     case 'list': return createList({ ...LIST_DEFAULTS, ...(listOpts ?? {}) });
     default: throw new Error(`unknown canonical kind '${kind}'`);
   }
@@ -860,34 +866,90 @@ async function createDropdown(): Promise<ComponentNode> {
   return comp;
 }
 
+// Which numeric behaviour a Slider variant has. One '+Slider' chip, many shapes:
+// a custom [min..max] value range, discrete slots (tick marks + snapping), or
+// both. Each combination is its own master/canonical ref (range and slot count
+// become part of the name, e.g. 'Slider 0to100 S5') so variants coexist and
+// reuse cleanly — the List variants convention.
+export type SliderOptions = { range: boolean; min: number; max: number; slotted: boolean; slots: number };
+const SLIDER_DEFAULTS: SliderOptions = { range: false, min: 0, max: 1, slotted: false, slots: 5 };
+
+function normalizeSliderOptions(o: Partial<SliderOptions> | undefined): SliderOptions {
+  const s = { ...SLIDER_DEFAULTS, ...(o ?? {}) };
+  if (!isFinite(s.min)) s.min = 0;
+  if (!isFinite(s.max)) s.max = 1;
+  if (!s.range) { s.min = 0; s.max = 1; }
+  if (s.max <= s.min) s.max = s.min + 1; // degenerate range — keep it draggable
+  s.slots = s.slotted ? Math.min(100, Math.max(2, Math.round(s.slots || 0))) : 0;
+  return s;
+}
+
+// Compact number for variant names/tag values ('0.5', '100', '-10').
+function fmtSliderNum(n: number): string {
+  return String(+n.toFixed(3));
+}
+
+function sliderVariantName(o: SliderOptions): string {
+  const p: string[] = [];
+  if (o.range && !(o.min === 0 && o.max === 1)) p.push(`${fmtSliderNum(o.min)}to${fmtSliderNum(o.max)}`);
+  if (o.slots >= 2) p.push('S' + o.slots);
+  return 'Slider' + (p.length ? ' ' + p.join(' ') : '');
+}
+
 // Slider: a Track (the rail) + Fill (the filled portion — its width ÷ the Track's
-// width IS the initial value; resize it to set the default) + Thumb (+ hidden
-// ThumbRollover/ThumbPressed state-colour layers, same convention as the list
-// scrollbar) + HitArea (the slider row's click/drag surface) + Label above. In
-// Unity it becomes a real uGUI Slider; skin any layer here and instances update.
-async function createSlider(): Promise<ComponentNode> {
-  const reuse = findMaster('Slider');
+// width IS the initial value as a fraction of the range; resize it to set the
+// default) + optional Ticks (slotted variants: one notch per slot, snapping in
+// Unity) + Thumb (+ hidden ThumbRollover/ThumbPressed state-colour layers, same
+// convention as the list scrollbar) + HitArea (the slider row's click/drag
+// surface) + Label above. In Unity it becomes a real uGUI Slider; skin any layer
+// here and instances update.
+async function createSlider(optsIn?: Partial<SliderOptions>): Promise<ComponentNode> {
+  const opts = normalizeSliderOptions(optsIn);
+  const name = sliderVariantName(opts);
+  const reuse = findMaster(name);
   if (reuse) { placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
-  const W = 240, LABEL_H = 20, ROW = 28, H = LABEL_H + ROW, TRACK = 6, THUMB = 18, VALUE = 0.5;
+  const W = 240, LABEL_H = 20, ROW = 28, H = LABEL_H + ROW, TRACK = 6, THUMB = 18;
+  // Initial position: mid-range, snapped to the nearest slot when slotted (so the
+  // preview Fill/Thumb sit exactly on a notch and export a slot-aligned value).
+  const ratio = opts.slots >= 2 ? Math.round(0.5 * (opts.slots - 1)) / (opts.slots - 1) : 0.5;
   const trackY = LABEL_H + (ROW - TRACK) / 2;
 
   const comp = figma.createComponent();
-  comp.name = 'Slider'; comp.resize(W, H); comp.fills = [];
+  comp.name = name; comp.resize(W, H); comp.fills = [];
 
   const track = solidRect('Track', W, TRACK, TRACK / 2, { r: 0.85, g: 0.86, b: 0.9 });
   track.x = 0; track.y = trackY; track.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
   comp.appendChild(track);
 
-  const fill = solidRect('Fill', W * VALUE, TRACK, TRACK / 2, { r: 0.49, g: 0.36, b: 1 });
+  const fill = solidRect('Fill', W * ratio, TRACK, TRACK / 2, { r: 0.49, g: 0.36, b: 1 });
   fill.x = 0; fill.y = trackY; fill.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
   comp.appendChild(fill);
+
+  // Slot tick marks — one notch per slot across the track, over the fill (skin or
+  // delete freely; Unity renders the layer as-is and snaps values to the slots).
+  if (opts.slots >= 2) {
+    const TICK_W = 2, TICK_H = TRACK + 6;
+    const ticks = figma.createFrame();
+    ticks.name = 'Ticks'; ticks.fills = [];
+    ticks.resize(W, TICK_H);
+    ticks.x = 0; ticks.y = trackY - (TICK_H - TRACK) / 2;
+    ticks.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+    comp.appendChild(ticks);
+    for (let i = 0; i < opts.slots; i++) {
+      const t = solidRect('Tick', TICK_W, TICK_H, 1, { r: 0.98, g: 0.98, b: 1 }, 0.9);
+      t.x = Math.min(W - TICK_W, Math.max(0, (W * i) / (opts.slots - 1) - TICK_W / 2));
+      t.y = 0;
+      t.constraints = { horizontal: 'SCALE', vertical: 'STRETCH' };
+      ticks.appendChild(t);
+    }
+  }
 
   const thumb = solidRect('Thumb', THUMB, THUMB, THUMB / 2, { r: 1, g: 1, b: 1 });
   thumb.strokes = [{ type: 'SOLID', color: { r: 0.49, g: 0.36, b: 1 } }];
   thumb.strokeWeight = 2;
-  thumb.x = W * VALUE - THUMB / 2; thumb.y = LABEL_H + (ROW - THUMB) / 2;
+  thumb.x = W * ratio - THUMB / 2; thumb.y = LABEL_H + (ROW - THUMB) / 2;
   thumb.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
   comp.appendChild(thumb);
 
@@ -915,8 +977,14 @@ async function createSlider(): Promise<ComponentNode> {
   label.x = 0; label.y = (LABEL_H - label.height) / 2;
   label.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
 
-  comp.setSharedPluginData('figforge', 'canonical',
-    JSON.stringify({ kind: 'slider', ref: 'Slider', value: String(VALUE) }));
+  // Tag carries the numeric behaviour: range + slot count (identity-level config,
+  // like the ref) and the authored initial value (raw, within [min..max]).
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({
+    kind: 'slider', ref: name,
+    value: fmtSliderNum(opts.min + (opts.max - opts.min) * ratio),
+    minValue: opts.min, maxValue: opts.max,
+    slots: opts.slots >= 2 ? opts.slots : undefined,
+  }));
   parkMaster(comp);
   placeInstance(comp);
   return comp;

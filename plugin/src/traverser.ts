@@ -41,18 +41,35 @@ function resolveRef(tagRef: string, comp: BaseNode | null): string {
   return stored || tagRef;
 }
 
+/** Non-identity payload of a FigForge canonical tag (a slider's authored initial
+ *  value, range, and slot count). */
+export interface CanonicalTagData {
+  value?: string;
+  minValue?: number;
+  maxValue?: number;
+  slots?: number;
+}
+
 /**
- * The `value` stored in a node's FigForge canonical tag (e.g. a slider's authored
- * initial value). Deliberately NOT folded into detectCanonical: a toggle's tag
- * carries a stale creation-time 'off' that must keep losing to the master's
- * live checkmark visibility. Returns undefined when untagged or valueless.
+ * The numeric payload stored in a node's FigForge canonical tag. Deliberately NOT
+ * folded into detectCanonical: a toggle's tag carries a stale creation-time 'off'
+ * that must keep losing to the master's live checkmark visibility — only kinds
+ * that opt in (slider) read the tag payload, at capture time.
  */
-export function canonicalTagValue(node: SceneNode): string | undefined {
+export function canonicalTagData(node: SceneNode): CanonicalTagData {
   try {
     const t = JSON.parse(node.getSharedPluginData(PLUGIN_DATA_NS, PLUGIN_DATA_KEY) || 'null');
-    return t && t.value !== undefined && t.value !== null ? String(t.value) : undefined;
+    if (!t) return {};
+    const num = (v: unknown): number | undefined =>
+      typeof v === 'number' && isFinite(v) ? v : undefined;
+    return {
+      value: t.value !== undefined && t.value !== null ? String(t.value) : undefined,
+      minValue: num(t.minValue),
+      maxValue: num(t.maxValue),
+      slots: num(t.slots) !== undefined ? Math.round(t.slots as number) : undefined,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
