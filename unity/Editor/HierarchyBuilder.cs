@@ -209,6 +209,10 @@ namespace FigForge
                 {
                     inst = BuildDropdown(e, parent, ctx);
                 }
+                else if (canonicalKind == "slider")
+                {
+                    inst = BuildSlider(e, parent, ctx);
+                }
                 else if (canonicalKind == "list")
                 {
                     inst = BuildList(e, parent, ctx);
@@ -2364,6 +2368,129 @@ namespace FigForge
             return go;
         }
 
+        // Slider: Track (SDF rail) + Fill Area/Fill + Handle Slide Area/Handle wired per
+        // Unity's stock slider hierarchy, with the SDF visuals as render-only children.
+        // INTERACTION uses plain transparent Images (the scrollbar lesson — dragging
+        // never depends on SDF raycast geometry): a full-row HitArea is the
+        // targetGraphic/click surface, and the handle carries its own transparent
+        // Image so grabbing the thumb drags from the grab point. The thumb recolours
+        // on hover/press via FigForgeScrollbarStates (the list-scrollbar pattern).
+        static GameObject BuildSlider(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Slider" : e.name, parent);
+            var slider = go.AddComponent<FigForgeSlider>();
+            slider.transition = Selectable.Transition.None;
+            slider.direction = Slider.Direction.LeftToRight;
+            slider.minValue = 0f; slider.maxValue = 1f; slider.wholeNumbers = false;
+
+            float[] full = { 0f, 0f, 1f, 1f };
+            float[] trackBox = c.parts != null && c.parts.TryGetValue("Track", out var tb) && tb != null && tb.Length >= 4 ? tb : full;
+            float[] fillBox = c.parts != null && c.parts.TryGetValue("Fill", out var fb) && fb != null && fb.Length >= 4 ? fb : trackBox;
+            float[] thumbBox = c.parts != null && c.parts.TryGetValue("Thumb", out var hb) && hb != null && hb.Length >= 4 ? hb : null;
+            float ctrlW = e.rect != null ? e.rect.w * sf : 0f;
+            float ctrlH = e.rect != null ? e.rect.h * sf : 0f;
+            float thumbW = thumbBox != null && ctrlW > 0f ? (thumbBox[2] - thumbBox[0]) * ctrlW : 18f * sf;
+            float thumbH = thumbBox != null && ctrlH > 0f ? (thumbBox[3] - thumbBox[1]) * ctrlH : 18f * sf;
+
+            // Track — the decorative rail, anchored to the captured part box.
+            var trackGo = NewRect("Track", go.transform);
+            AnchorPart(trackGo.GetComponent<RectTransform>(), c.parts, "Track");
+            var track = AddShapeGraphic(trackGo, c.trackShape, ctx);
+
+            // Fill — the stock Fill Area/Fill pair. The area spans the TRACK
+            // horizontally (whatever partial width the Figma preview showed, the fill
+            // must be able to grow across the whole rail) and keeps the Fill layer's
+            // own vertical band; the Slider drives the child's anchorMax.x from value.
+            if (c.fillShape != null)
+            {
+                var fillAreaGo = NewRect("Fill Area", go.transform);
+                var fart = fillAreaGo.GetComponent<RectTransform>();
+                fart.anchorMin = new Vector2(trackBox[0], fillBox[1]);
+                fart.anchorMax = new Vector2(trackBox[2], fillBox[3]);
+                fart.offsetMin = Vector2.zero; fart.offsetMax = Vector2.zero;
+                var fillGo = NewRect("Fill", fillAreaGo.transform);
+                // Start in the value-0 anchor state (anchorMax.x = 0), NOT stretched:
+                // Slider.Set early-outs when the applied value equals the current one,
+                // so a bound value of exactly 0 would never run UpdateVisuals and a
+                // stretch-anchored fill would stay painted full-width.
+                var fillRt = fillGo.GetComponent<RectTransform>();
+                fillRt.anchorMin = Vector2.zero; fillRt.anchorMax = new Vector2(0f, 1f);
+                fillRt.offsetMin = Vector2.zero; fillRt.offsetMax = Vector2.zero;
+                AddShapeGraphic(fillGo, c.fillShape, ctx); // render-only
+                slider.fillRect = fillRt;
+            }
+
+            // Handle — the stock Handle Slide Area/Handle pair. The slide area spans
+            // the track inset half a thumb on each side (stock uGUI layout), so the
+            // thumb's EDGES stay inside the rail at values 0 and 1; the Slider anchors
+            // the handle's x to the value and keeps our sizeDelta.
+            var slideGo = NewRect("Handle Slide Area", go.transform);
+            var srt = slideGo.GetComponent<RectTransform>();
+            srt.anchorMin = new Vector2(trackBox[0], thumbBox != null ? thumbBox[1] : 0f);
+            srt.anchorMax = new Vector2(trackBox[2], thumbBox != null ? thumbBox[3] : 1f);
+            srt.offsetMin = new Vector2(thumbW * 0.5f, 0f);
+            srt.offsetMax = new Vector2(-thumbW * 0.5f, 0f);
+            var handleGo = NewRect("Handle", slideGo.transform);
+            var hrt = handleGo.GetComponent<RectTransform>();
+            hrt.anchorMin = new Vector2(0f, 0f); hrt.anchorMax = new Vector2(0f, 1f);
+            hrt.sizeDelta = new Vector2(thumbW, 0f); hrt.anchoredPosition = Vector2.zero;
+            if (handleGo.GetComponent<CanvasRenderer>() == null) handleGo.AddComponent<CanvasRenderer>();
+            var handleHit = handleGo.AddComponent<Image>();
+            handleHit.color = new Color(0, 0, 0, 0);
+            handleHit.raycastTarget = true; // pressing ON the thumb drags from the grab point (no jump)
+            var thumbGo = NewRect("Thumb", handleGo.transform);
+            Stretch(thumbGo.GetComponent<RectTransform>());
+            var thumbShape = c.thumbShape ?? new CanonicalShape
+            { cornerRadius = sf > 0f ? thumbW * 0.5f / sf : 9f, fill = new float[] { 1f, 1f, 1f, 1f } };
+            var thumbVisual = AddShapeGraphic(thumbGo, thumbShape, ctx); // render-only
+            slider.handleRect = hrt;
+
+            // Thumb hover/press tint: captured ThumbRollover/ThumbPressed colours, or a
+            // derived darkening of the regular fill so hover feedback always exists. On
+            // the slider ROOT, so hovering anywhere on the control lights the thumb.
+            var thumbReg = thumbShape.fill != null && thumbShape.fill.Length >= 4
+                ? ToColor(thumbShape.fill) : Color.white;
+            var states = go.AddComponent<FigForgeScrollbarStates>();
+            states.bound = thumbVisual;
+            states.regular = FigForgeFill.Solid(thumbReg);
+            states.rollover = FigForgeFill.Solid(c.thumbRollover != null
+                ? ToColor(c.thumbRollover)
+                : new Color(thumbReg.r * 0.96f, thumbReg.g * 0.96f, thumbReg.b * 0.98f, thumbReg.a));
+            states.pressed = FigForgeFill.Solid(c.thumbPressed != null
+                ? ToColor(c.thumbPressed)
+                : new Color(thumbReg.r * 0.88f, thumbReg.g * 0.88f, thumbReg.b * 0.92f, thumbReg.a));
+            states.hasRollover = true;
+            states.hasPressed = true;
+
+            TextMeshProUGUI label = null;
+            if ((c.parts != null && c.parts.ContainsKey("Label")) || !string.IsNullOrEmpty(c.label))
+            {
+                label = AddControlLabel(go, "Label", c.label, c.parts, "Label", ctx, TextAlignmentOptions.Left);
+                // Keep the captured band but extend to the control's right edge — the
+                // box hugs the authored text, so a longer bound label would clip.
+                var lrt = label.GetComponent<RectTransform>();
+                lrt.anchorMax = new Vector2(1f, lrt.anchorMax.y);
+            }
+
+            // Click/drag surface: the captured 'HitArea' layer (the slider ROW, so a
+            // click on the Label strip doesn't jump the value), else full-bleed. Added
+            // last so it sits on top, like toggle/radio — the Slider reads the press
+            // POSITION against the slide area, so the hit graphic only routes events.
+            var hit = AddHitArea(go.transform, c.parts);
+            slider.targetGraphic = hit;
+            slider.tmpTxt_label = label;
+
+            // Leave value at the default (0): FigForgeBindings.Apply sets the
+            // per-instance initial value, so the shared prefab doesn't bake one
+            // instance's position (the toggle isOn lesson).
+
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.control = slider; bind.label = label; bind.background = track;
+            return go;
+        }
+
         static FigForgeListRowStyle ToListRowStyle(CanonicalShape sh, float sf)
         {
             var style = new FigForgeListRowStyle { enabled = sh != null };
@@ -2518,6 +2645,7 @@ namespace FigForge
                 : ((kind == "toggle" || kind == "radio") && e.canonical.shape != null) ? BuildToggle(e, null, ctx)
                 : (kind == "input") ? BuildInputField(e, null, ctx)
                 : (kind == "dropdown") ? BuildDropdown(e, null, ctx)
+                : (kind == "slider") ? BuildSlider(e, null, ctx)
                 : (kind == "list") ? BuildList(e, null, ctx)
                 : BuildPlaceholderButton(e, null, ctx);
             if (temp == null) return candidate; // generation failed — keep whatever we had
@@ -2624,7 +2752,11 @@ namespace FigForge
         // v43: scrollbar hides when rows fit the viewport within a tolerance (mask insets
         //      made AutoHide show a useless bar for a few px of overflow) + correct initial
         //      state in edit mode.
-        internal const int CanonicalSchema = 43;
+        // v44: canonical Slider — Track/Fill/Thumb per the stock uGUI slider hierarchy
+        //      (SDF visuals render-only, transparent-Image interaction), thumb hover/
+        //      press via FigForgeScrollbarStates, full-row HitArea targetGraphic,
+        //      optional Label; per-instance initial value via FigForgeBindings.
+        internal const int CanonicalSchema = 44;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
@@ -2715,6 +2847,12 @@ namespace FigForge
             // instances share one visual prefab instead of thrash-regenerating it.
             sb.Append(";iro=").Append(SigF(c.itemRollover)).Append(";ipr=").Append(SigF(c.itemPressed)).Append(";isel=").Append(SigF(c.itemSelected));
             sb.Append(";hh=").Append(c.headerHeight.ToString("0.###"));
+            // Slider visuals. `value` is deliberately NOT folded — it's per-instance
+            // (applied by FigForgeBindings), not part of the shared prefab's look.
+            AppendShapeSig(sb, "trk", c.trackShape);
+            AppendShapeSig(sb, "sfl", c.fillShape);
+            AppendShapeSig(sb, "thm", c.thumbShape);
+            sb.Append(";thr=").Append(SigF(c.thumbRollover)).Append(";thp=").Append(SigF(c.thumbPressed));
             if (c.parts != null && c.parts.Count > 0)
             {
                 var keys = new List<string>(c.parts.Keys);
