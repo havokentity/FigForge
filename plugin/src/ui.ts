@@ -226,6 +226,7 @@ $('#sliderOptsCreate').addEventListener('click', () => {
     sliderOpts: {
       range: sliderChecked('sliderOptRange'), min: num('sliderOptMin', 0), max: num('sliderOptMax', 100),
       slotted: sliderChecked('sliderOptSlotted'), slots: Math.round(num('sliderOptSlots', 5)),
+      value: sliderChecked('sliderOptValue'),
     },
   });
 });

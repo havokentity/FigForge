@@ -867,12 +867,16 @@ async function createDropdown(): Promise<ComponentNode> {
 }
 
 // Which numeric behaviour a Slider variant has. One '+Slider' chip, many shapes:
-// a custom [min..max] value range, discrete slots (tick marks + snapping), or
-// both. Each combination is its own master/canonical ref (range and slot count
-// become part of the name, e.g. 'Slider 0to100 S5') so variants coexist and
-// reuse cleanly — the List variants convention.
-export type SliderOptions = { range: boolean; min: number; max: number; slotted: boolean; slots: number };
-const SLIDER_DEFAULTS: SliderOptions = { range: false, min: 0, max: 1, slotted: false, slots: 5 };
+// a custom [min..max] value range, discrete slots (tick marks + snapping), a live
+// value read-out, or any combination. Each combination is its own master/
+// canonical ref (the options become part of the name, e.g. 'Slider 0to100 S5 V')
+// so variants coexist and reuse cleanly — the List variants convention.
+export type SliderOptions = {
+  range: boolean; min: number; max: number;
+  slotted: boolean; slots: number;
+  value: boolean; // show a 'Value' read-out text (top-right, live in Unity)
+};
+const SLIDER_DEFAULTS: SliderOptions = { range: false, min: 0, max: 1, slotted: false, slots: 5, value: false };
 
 function normalizeSliderOptions(o: Partial<SliderOptions> | undefined): SliderOptions {
   const s = { ...SLIDER_DEFAULTS, ...(o ?? {}) };
@@ -893,6 +897,7 @@ function sliderVariantName(o: SliderOptions): string {
   const p: string[] = [];
   if (o.range && !(o.min === 0 && o.max === 1)) p.push(`${fmtSliderNum(o.min)}to${fmtSliderNum(o.max)}`);
   if (o.slots >= 2) p.push('S' + o.slots);
+  if (o.value) p.push('V');
   return 'Slider' + (p.length ? ' ' + p.join(' ') : '');
 }
 
@@ -976,6 +981,20 @@ async function createSlider(optsIn?: Partial<SliderOptions>): Promise<ComponentN
   comp.appendChild(label);
   label.x = 0; label.y = (LABEL_H - label.height) / 2;
   label.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+
+  // Live value read-out — a right-aligned text in the label strip. The shown text
+  // is just the initial-value preview; Unity rewrites it on every value change.
+  // Appended AFTER Label so the instance-label capture (first text) stays the Label.
+  if (opts.value) {
+    const val = figma.createText();
+    val.fontName = font; val.name = 'Value';
+    val.characters = fmtSliderNum(opts.min + (opts.max - opts.min) * ratio);
+    val.fontSize = 13; val.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+    val.textAlignHorizontal = 'RIGHT';
+    comp.appendChild(val);
+    val.x = W - val.width; val.y = (LABEL_H - val.height) / 2;
+    val.constraints = { horizontal: 'MAX', vertical: 'MIN' };
+  }
 
   // Tag carries the numeric behaviour: range + slot count (identity-level config,
   // like the ref) and the authored initial value (raw, within [min..max]).

@@ -1513,8 +1513,9 @@ export async function exportDesign(
       label: textOf(childByName(master, 'Label')),
       partTrees: ticksTree ? { Ticks: ticksTree } : undefined,
       // 'HitArea' (optional): the captured layer bounds the click/drag surface;
-      // absent → the whole component frame is the surface.
-      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'Ticks', 'HitArea', 'Label']) };
+      // absent → the whole component frame is the surface. 'Value' (optional): a
+      // live read-out text — Unity rewrites it on every value change.
+      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'Ticks', 'HitArea', 'Label', 'Value']) };
   }
 
   const stateByNode = new Map<string, CanonicalStates>();

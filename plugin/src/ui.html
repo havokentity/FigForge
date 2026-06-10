@@ -194,7 +194,8 @@
   .list-pop-row input { accent-color: var(--brand); margin: 0; }
   .list-pop-row span { flex: 1; }
   .list-pop-row input[type="number"] {
-    width: 40px; background: var(--bg); border: 1px solid var(--border);
+    /* Wide enough for real values ('100', '-12.5') — 40px clipped past ~2 digits. */
+    width: 64px; background: var(--bg); border: 1px solid var(--border);
     border-radius: 4px; color: var(--text); padding: 1px 4px; min-height: 16px;
   }
   .list-pop-row input[type="number"]:focus { outline: none; border-color: var(--brand); }
@@ -436,6 +437,7 @@
             <label class="list-pop-row" title="Range end value"><span>End</span><input type="number" id="sliderOptMax" value="100" step="any" disabled /></label>
             <label class="list-pop-row" title="Snap to evenly spaced slots (tick marks on the track)"><input type="checkbox" id="sliderOptSlotted" /><span>Slotted</span></label>
             <label class="list-pop-row" title="Number of slots (tick positions) across the range, including both ends"><span>Slots</span><input type="number" id="sliderOptSlots" value="5" min="2" max="100" disabled /></label>
+            <label class="list-pop-row" title="Show a live read-out of the current value, right of the label"><input type="checkbox" id="sliderOptValue" /><span>Show value</span></label>
             <button class="list-pop-create" id="sliderOptsCreate" title="Create this Slider variant">＋ Add Slider</button>
           </div>
         </div>
