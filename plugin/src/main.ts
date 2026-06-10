@@ -873,10 +873,17 @@ async function loadBoldFont(base: FontName): Promise<FontName> {
 // (Regular/Rollover/Pressed/Selected), a leading Icon, two-line Title + Subtitle, a
 // trailing Accessory chevron, a bottom Divider, and a transparent HitArea on top.
 // Which optional pieces a List variant includes. One '+List' button, many shapes:
-// no header section, icon-less rows, subtitle-less rows — any combination. Each
-// combination is its own master/canonical ref so variants coexist and reuse cleanly.
-export type ListOptions = { header: boolean; icon: boolean; subtitle: boolean };
-const LIST_DEFAULTS: ListOptions = { header: true, icon: true, subtitle: true };
+// no header section, icon-less rows, subtitle-less rows, scrollbar thickness — any
+// combination. Each combination is its own master/canonical ref so variants coexist
+// and reuse cleanly (a non-default scrollbar width becomes part of the name).
+export type ListOptions = { header: boolean; icon: boolean; subtitle: boolean; scrollbarWidth: number };
+const DEFAULT_SCROLLBAR_WIDTH = 10;
+const LIST_DEFAULTS: ListOptions = { header: true, icon: true, subtitle: true, scrollbarWidth: DEFAULT_SCROLLBAR_WIDTH };
+
+function clampScrollbarWidth(w: unknown): number {
+  const n = typeof w === 'number' && isFinite(w) ? Math.round(w) : DEFAULT_SCROLLBAR_WIDTH;
+  return Math.min(40, Math.max(2, n));
+}
 
 function listItemVariantName(o: ListOptions): string {
   const p: string[] = [];
@@ -890,6 +897,8 @@ function listVariantName(o: ListOptions): string {
   if (!o.header) p.push('NoHeader');
   if (!o.icon) p.push('NoIcon');
   if (!o.subtitle) p.push('NoSubtitle');
+  const sb = clampScrollbarWidth(o.scrollbarWidth);
+  if (sb !== DEFAULT_SCROLLBAR_WIDTH) p.push('SB' + sb);
   return 'List' + (p.length ? ' ' + p.join(' ') : '');
 }
 
@@ -983,8 +992,9 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
 // repeated `count` times (count = (list height − header) ÷ row height) with state swaps.
 async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentNode> {
   const name = listVariantName(opts);
+  const sbWidth = clampScrollbarWidth(opts.scrollbarWidth);
   const reuse = findMaster(name);
-  if (reuse) { ensureListScrollbar(reuse); ensureListRoundedClip(reuse); ensureListMask(reuse); placeInstance(reuse); return reuse; }
+  if (reuse) { ensureListScrollbar(reuse, sbWidth); ensureListRoundedClip(reuse); ensureListMask(reuse); placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const titleFont = await loadBoldFont(font);
@@ -1035,7 +1045,7 @@ async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentN
     }
   }
 
-  ensureListScrollbar(comp);
+  ensureListScrollbar(comp, sbWidth);
   ensureListRoundedClip(comp);
   ensureListMask(comp);
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: name }));
@@ -1089,14 +1099,14 @@ function ensureListRoundedClip(comp: ComponentNode): void {
 // state colours) to a List master that lacks one — and retrofit the state layers into
 // an existing Scrollbar frame. The exporter captures width/shapes/state colours so
 // Unity styles the real uGUI Scrollbar; in Figma the layer is a static preview.
-function ensureListScrollbar(comp: ComponentNode): void {
+function ensureListScrollbar(comp: ComponentNode, width: number = DEFAULT_SCROLLBAR_WIDTH): void {
   if (!('children' in comp)) return;
   let sb = (comp as ChildrenMixin).children.find((c) => c.name === 'Scrollbar') as FrameNode | undefined;
   if (!sb) {
     const W = comp.width, H = comp.height;
     const header = (comp as ChildrenMixin).children.find((c) => c.name === 'Header');
     const HEADER = header ? (header as unknown as { height: number }).height : 0;
-    const SB = 6, PAD = 3;
+    const SB = clampScrollbarWidth(width), PAD = 3;
 
     sb = figma.createFrame();
     sb.name = 'Scrollbar'; sb.fills = [];

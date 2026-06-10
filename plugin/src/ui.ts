@@ -183,11 +183,13 @@ document.addEventListener('click', hideListOpts);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideListOpts(); });
 $('#listOptsCreate').addEventListener('click', () => {
   const on = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.checked !== false;
+  const sbRaw = parseInt((document.getElementById('listOptSbWidth') as HTMLInputElement | null)?.value ?? '10', 10);
+  const scrollbarWidth = isNaN(sbRaw) ? 10 : Math.min(40, Math.max(2, sbRaw));
   hideListOpts();
   setStatus('Creating list component…');
   post({
     type: 'create-canonical', kind: 'list', componentsPage: compPageOn(),
-    listOpts: { header: on('listOptHeader'), icon: on('listOptIcon'), subtitle: on('listOptSubtitle') },
+    listOpts: { header: on('listOptHeader'), icon: on('listOptIcon'), subtitle: on('listOptSubtitle'), scrollbarWidth },
   });
 });
 

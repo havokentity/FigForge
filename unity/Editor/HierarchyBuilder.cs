@@ -2166,7 +2166,7 @@ namespace FigForge
             // the rows and auto-hides when they fit. INTERACTION uses plain transparent
             // Images on the bar + handle (the stock uGUI raycast pattern) — the SDF shapes
             // are render-only children, so dragging never depends on SDF raycast geometry.
-            float sbWFig = c.scrollbarWidth > 0.01f ? c.scrollbarWidth : 6f;
+            float sbWFig = c.scrollbarWidth > 0.01f ? c.scrollbarWidth : 10f;
             float sbW = sbWFig * sf;
             var sbGo = NewRect("Scrollbar", go.transform);
             var srt = sbGo.GetComponent<RectTransform>();
@@ -2530,7 +2530,8 @@ namespace FigForge
         // v39: the Mask layer's own corner radius rounds the clip (rounded stencil mask,
         //      correct at every scroll position); background-corner-derived row rounding
         //      removed — the clip shape is entirely designer-owned.
-        internal const int CanonicalSchema = 39;
+        // v40: default scrollbar width 6 -> 10 px (manifests without a captured width).
+        internal const int CanonicalSchema = 40;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
