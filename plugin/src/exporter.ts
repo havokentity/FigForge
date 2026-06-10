@@ -1524,9 +1524,10 @@ export async function exportDesign(
         const count = l.listItems && l.listItems.length
           ? l.listItems.length
           : Math.max(1, Math.round((instH - (l.headerHeight || 0)) / ih));
-        controlByNode.set(p.node.id, { shape: l.shape, itemShape: l.itemShape, itemRollover: l.itemRollover,
-          itemPressed: l.itemPressed, itemSelected: l.itemSelected, itemHeight: ih, headerHeight: l.headerHeight,
-          count, label: l.label, listItems: l.listItems, partTrees: l.partTrees, parts: l.parts });
+        // Spread EVERYTHING captureList captured — a hand-picked field list here silently
+        // dropped newer fields (maskShape, scrollbarWidth, thumb states) on the floor,
+        // so Unity saw a radius-0 mask and clipped square no matter what Figma said.
+        controlByNode.set(p.node.id, { ...l, itemHeight: ih, count });
       }
     }
   }
