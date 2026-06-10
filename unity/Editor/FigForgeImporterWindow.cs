@@ -466,6 +466,7 @@ namespace FigForge
                 var ctx = new BuildContext
                 {
                     scaleFactor = sf,
+                    exportScale = _manifest.screen.exportScale,
                     sprites = sprites,
                     canonical = _canonicalLibrary,
                     disableRaycasts = _disableRaycasts,
@@ -518,6 +519,7 @@ namespace FigForge
             return new BuildContext
             {
                 scaleFactor = sf, sprites = sprites, canonical = _canonicalLibrary, disableRaycasts = _disableRaycasts,
+                exportScale = m.screen != null ? m.screen.exportScale : 1f,
                 resolveFont = ResolveFontAsset,
                 log = mm => Log(mm, MessageType.Warning),
             };

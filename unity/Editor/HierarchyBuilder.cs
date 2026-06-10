@@ -22,6 +22,10 @@ namespace FigForge
     public class BuildContext
     {
         public float scaleFactor = 1f;
+        // PNG export scale (screen-level; manifest.screen.exportScale). Sliced
+        // sprites must compensate exportScale/scaleFactor or their corner cells
+        // render at sprite-pixel size — @2x exports double every baked radius.
+        public float exportScale = 1f;
         public Dictionary<string, Sprite> sprites = new Dictionary<string, Sprite>();
         public Func<string, string, TMP_FontAsset> resolveFont;
         public CanonicalLibrary canonical;
@@ -370,9 +374,15 @@ namespace FigForge
                     go.AddComponent<FigForgeImageBlend>().Configure(BlendModeFromManifest(style.blendMode));
                 }
                 // Auto-9-slice when the sprite was imported with a border (rounded /
-                // bordered panel) so it scales without smearing the corners.
+                // bordered panel) so it scales without smearing the corners. Sliced
+                // corner cells render at sprite-pixel size, but the PNG is baked at
+                // exportScale× the Figma px while the rect is laid out at
+                // scaleFactor× — compensate, or an @2x export doubles every radius.
                 else if (img.sprite != null && img.sprite.border.sqrMagnitude > 0.01f)
-                { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
+                {
+                    img.type = Image.Type.Sliced;
+                    img.pixelsPerUnitMultiplier = SlicedPpuMultiplier(AssetExportScale(e, ctx), ctx);
+                }
                 ApplyOpacity(go, e, Color.white, opacityBaked: true);
             }
             else if (style?.fill != null)
@@ -800,9 +810,9 @@ namespace FigForge
             var hi = SpriteByFile(st.highlighted, ctx) ?? normal;
             var pr = SpriteByFile(st.pressed, ctx) ?? hi ?? normal;
 
-            var regularGo = AddSpriteStateChild(go.transform, "Regular", normal, true);
-            var rollGo = AddSpriteStateChild(go.transform, "RollOver", hi, false);
-            var pressGo = AddSpriteStateChild(go.transform, "Pressed", pr, false);
+            var regularGo = AddSpriteStateChild(go.transform, "Regular", normal, true, ctx);
+            var rollGo = AddSpriteStateChild(go.transform, "RollOver", hi, false, ctx);
+            var pressGo = AddSpriteStateChild(go.transform, "Pressed", pr, false, ctx);
             var hit = AddHitArea(go.transform, e.canonical.parts);
 
             var btn = go.AddComponent<FigForgeButton>();
@@ -880,7 +890,7 @@ namespace FigForge
             return go;
         }
 
-        static GameObject AddSpriteStateChild(Transform parent, string name, Sprite sprite, bool active)
+        static GameObject AddSpriteStateChild(Transform parent, string name, Sprite sprite, bool active, BuildContext ctx)
         {
             var child = NewRect(name, parent);
             Stretch(child.GetComponent<RectTransform>());
@@ -889,9 +899,39 @@ namespace FigForge
             if (sprite != null) img.sprite = sprite;
             else img.color = new Color(0.45f, 0.36f, 1f, 1f);
             if (sprite != null && sprite.border.sqrMagnitude > 0.01f)
-            { img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 1f; }
+            {
+                img.type = Image.Type.Sliced;
+                img.pixelsPerUnitMultiplier = SlicedPpuMultiplier(ctx.exportScale, ctx);
+            }
             child.SetActive(active);
             return child;
+        }
+
+        // Corner-true 9-slicing for EXPORTED PNGs: a sliced corner cell renders at
+        // border÷(PPU×multiplier)×referencePPU local px — sprite-pixel size at the
+        // default multiplier 1. The PNG is baked at exportScale× the Figma px while
+        // the rect is laid out at scaleFactor×, so the corrective multiplier is
+        // exportScale/scaleFactor (an @2x export at native layout otherwise renders
+        // every baked radius twice the design size). Procedurally generated sprites
+        // (RoundedRectSpriteCache etc.) are built at final scale — they keep 1.
+        static float SlicedPpuMultiplier(float exportScale, BuildContext ctx)
+        {
+            float sf = Mathf.Max(0.0001f, ctx.scaleFactor);
+            return Mathf.Max(0.01f, Mathf.Max(0.0001f, exportScale) / sf);
+        }
+
+        // Per-asset export scale: assetBounds carries it per element; older
+        // manifests fall back to pixel-vs-rect derivation, then the screen-level
+        // scale from the manifest header.
+        static float AssetExportScale(ElementData e, BuildContext ctx)
+        {
+            if (e.assetBounds != null)
+            {
+                if (e.assetBounds.exportScale > 0.0001f) return e.assetBounds.exportScale;
+                if (e.assetBounds.pixelWidth > 0 && e.assetBounds.w > 0.0001f)
+                    return e.assetBounds.pixelWidth / e.assetBounds.w;
+            }
+            return ctx.exportScale > 0.0001f ? ctx.exportScale : 1f;
         }
 
         static GameObject AddShapeStateChild(Transform parent, string name, CanonicalShape shape, Dictionary<string, float[]> parts, BuildContext ctx, bool active)
