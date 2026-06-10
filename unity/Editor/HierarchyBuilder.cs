@@ -2122,6 +2122,10 @@ namespace FigForge
             if (viewport.GetComponent<CanvasRenderer>() == null) viewport.AddComponent<CanvasRenderer>();
             float maskR = (c.maskShape != null ? c.maskShape.cornerRadius : 0f) * sf;
             bool listClips = e.clipsContent || hasMaskPart;
+            if (hasMaskPart && maskR <= 0.5f)
+                Debug.LogWarning($"[FigForge] List '{e.name}': the Mask layer has corner radius 0, so the clip is SQUARE — " +
+                                 "row fills will poke past the rounded Background at the corners. Give the Mask layer a corner " +
+                                 "radius in Figma (clicking +List once repairs un-touched default masks), then re-export.");
             if (listClips && maskR > 0.5f)
             {
                 // ROUNDED clip, designer-defined by the Mask layer's own corner radius.
