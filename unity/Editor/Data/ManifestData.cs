@@ -203,6 +203,13 @@ namespace FigForge
         public float[] scrollThumbRollover; // list: thumb hover colour ('Scrollbar/ThumbRollover')
         public float[] scrollThumbPressed;  // list: thumb pressed colour ('Scrollbar/ThumbPressed')
         public CanonicalShape maskShape;    // list: the 'Mask' layer's styling — cornerRadius rounds the clip
+        // slider: Track/Fill/Thumb styling + thumb state colours. `value` above is the
+        // initial value 0..1 (the Fill÷Track width ratio, else the canonical tag value).
+        public CanonicalShape trackShape;   // slider: the rail ('Track')
+        public CanonicalShape fillShape;    // slider: the filled portion ('Fill')
+        public CanonicalShape thumbShape;   // slider: the draggable thumb ('Thumb')
+        public float[] thumbRollover;       // slider: thumb hover colour ('ThumbRollover', hidden layer)
+        public float[] thumbPressed;        // slider: thumb pressed colour ('ThumbPressed', hidden layer)
         public CanonicalShape optionShape; // dropdown: option row Regular shape
         public CanonicalShape popupShape;  // dropdown popup shell/background (Options frame)
         public CanonicalShape optionRolloverShape; // dropdown: option row Rollover full shape

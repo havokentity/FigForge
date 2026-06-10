@@ -37,6 +37,7 @@ import {
 } from './types';
 import { generateFileName, sanitize } from './naming';
 import {
+  canonicalTagValue,
   detectCanonical,
   hasMeaningfulFill,
   hasVisibleStroke,
@@ -1446,6 +1447,43 @@ export async function exportDesign(
       parts: partsOf(master, ['Background', 'Mask']) };
   }
 
+  // Width ratio of a slider's Fill over its Track (0..1) — the "how full" a
+  // designer sets by resizing the Fill. Read per NODE: a stretched instance
+  // (STRETCH track, fixed-width fill) shows a different fraction than its master,
+  // and what it shows is what exports.
+  function sliderRatioOf(node: SceneNode): string | undefined {
+    const track = childByName(node, 'Track');
+    const fillN = childByName(node, 'Fill');
+    const tw = track ? ((track as unknown as { width?: number }).width ?? 0) : 0;
+    const fw = fillN ? ((fillN as unknown as { width?: number }).width ?? 0) : 0;
+    if (!fillN || tw <= 0) return undefined;
+    return Math.min(1, Math.max(0, fw / tw)).toFixed(3);
+  }
+
+  // Capture a slider: Track + Fill + Thumb shapes (procedural via shapeOf — simple
+  // SDF-safe rects), thumb hover/press colours from the hidden ThumbRollover/
+  // ThumbPressed layers (the list-scrollbar convention), the initial value (the
+  // Fill÷Track width ratio, else the canonical tag's authored value), and parts.
+  function captureSlider(master: SceneNode, tagValue?: string) {
+    const trackNode = childByName(master, 'Track');
+    if (!trackNode) return null;
+    const trackShape = shapeOf(trackNode) ?? undefined;
+    const fillNode = childByName(master, 'Fill');
+    const fillShape = fillNode ? (shapeOf(fillNode) ?? undefined) : undefined;
+    const thumbNode = childByName(master, 'Thumb');
+    const thumbShape = thumbNode ? (shapeOf(thumbNode) ?? undefined) : undefined;
+    const thumbRoll = childByName(master, 'ThumbRollover');
+    const thumbPress = childByName(master, 'ThumbPressed');
+    const thumbRollover = thumbRoll ? (stateSolid(thumbRoll) ?? undefined) : undefined;
+    const thumbPressed = thumbPress ? (stateSolid(thumbPress) ?? undefined) : undefined;
+    const value = sliderRatioOf(master) ?? tagValue ?? '0.5';
+    return { trackShape, fillShape, thumbShape, thumbRollover, thumbPressed, value,
+      label: textOf(childByName(master, 'Label')),
+      // 'HitArea' (optional): the captured layer bounds the click/drag surface;
+      // absent → the whole component frame is the surface.
+      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'HitArea', 'Label']) };
+  }
+
   const stateByNode = new Map<string, CanonicalStates>();
   const shapeByNode = new Map<string, Awaited<ReturnType<typeof captureButtonShape>>>();
   const instShapeByNode = new Map<string, ButtonShape>(); // per-instance shape override (differs from component)
@@ -1556,6 +1594,15 @@ export async function exportDesign(
         // so Unity saw a radius-0 mask and clipped square no matter what Figma said.
         controlByNode.set(p.node.id, { ...l, itemHeight: ih, count });
       }
+    } else if (ref.kind === 'slider') {
+      const s = captureSlider(master, canonicalTagValue(master));
+      if (s) {
+        // THIS instance's Fill÷Track ratio wins (a stretched instance shows a
+        // different fraction than the master — export what it shows). Spread the
+        // rest verbatim (the maskShape lesson: never hand-pick fields here).
+        const instValue = sliderRatioOf(p.node);
+        controlByNode.set(p.node.id, { ...s, value: instValue ?? s.value });
+      }
     }
   }
   if (stateDiag.length) {
@@ -1648,6 +1695,7 @@ export async function exportDesign(
       const instanceInputLabel = canonical.kind === 'input' ? canonical.label : undefined;
       const instanceInputPlaceholder = canonical.kind === 'input' ? canonical.placeholder : undefined;
       const instanceInputValue = canonical.kind === 'input' ? canonical.value : undefined;
+      const instanceSliderLabel = canonical.kind === 'slider' ? canonical.label : undefined;
       Object.assign(canonical, controlByNode.get(node.id));
       if (canonical.kind === 'dropdown') {
         if (instanceDropdownLabel !== undefined) canonical.label = instanceDropdownLabel;
@@ -1656,6 +1704,10 @@ export async function exportDesign(
         if (instanceInputLabel !== undefined) canonical.label = instanceInputLabel;
         if (instanceInputPlaceholder !== undefined) canonical.placeholder = instanceInputPlaceholder;
         if (instanceInputValue !== undefined) canonical.value = instanceInputValue;
+      } else if (canonical.kind === 'slider') {
+        // The instance's own Label text (possibly overridden in Figma) wins over the
+        // master's; the captured per-instance value is already correct from dispatch.
+        if (instanceSliderLabel !== undefined) canonical.label = instanceSliderLabel;
       }
     }
     const nav = navFor(node);

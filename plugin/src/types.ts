@@ -226,6 +226,13 @@ export interface CanonicalRef {
   scrollThumbRollover?: RGBA; // list: thumb hover colour ('Scrollbar/ThumbRollover', hidden layer)
   scrollThumbPressed?: RGBA;  // list: thumb pressed colour ('Scrollbar/ThumbPressed', hidden layer)
   maskShape?: ButtonShape;    // list: the 'Mask' layer's styling — its cornerRadius rounds the clip
+  // slider: Track/Fill/Thumb styling + thumb state colours. `value` above is the
+  // initial value 0..1 (the Fill÷Track width ratio, else the canonical tag value).
+  trackShape?: ButtonShape;   // slider: the rail ('Track')
+  fillShape?: ButtonShape;    // slider: the filled portion ('Fill')
+  thumbShape?: ButtonShape;   // slider: the draggable thumb ('Thumb')
+  thumbRollover?: RGBA;       // slider: thumb hover colour ('ThumbRollover', hidden layer)
+  thumbPressed?: RGBA;        // slider: thumb pressed colour ('ThumbPressed', hidden layer)
   // dropdown: the option row is its own component (DropdownOption) with states; these
   // drive the TMP_Dropdown item template (options[] above are the option texts)
   optionShape?: ButtonShape; // DropdownOption Regular shape (corner/fill/border)

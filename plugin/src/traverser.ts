@@ -42,6 +42,21 @@ function resolveRef(tagRef: string, comp: BaseNode | null): string {
 }
 
 /**
+ * The `value` stored in a node's FigForge canonical tag (e.g. a slider's authored
+ * initial value). Deliberately NOT folded into detectCanonical: a toggle's tag
+ * carries a stale creation-time 'off' that must keep losing to the master's
+ * live checkmark visibility. Returns undefined when untagged or valueless.
+ */
+export function canonicalTagValue(node: SceneNode): string | undefined {
+  try {
+    const t = JSON.parse(node.getSharedPluginData(PLUGIN_DATA_NS, PLUGIN_DATA_KEY) || 'null');
+    return t && t.value !== undefined && t.value !== null ? String(t.value) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Resolve an element's canonical binding. Priority:
  *   1. an INSTANCE of a FigForge-tagged master Component (robust — survives
  *      skinning/renaming),
