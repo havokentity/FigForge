@@ -280,6 +280,15 @@ namespace FigForge
             Push();
         }
 
+        // Per-corner radii px (tl, tr, br, bl) — e.g. list rows matching their container's
+        // rounded corners. Keeps fill/stroke/shadow untouched.
+        public void SetCorners(Vector4 cornerRadii)
+        {
+            if (corners == cornerRadii) return;
+            corners = cornerRadii;
+            Push();
+        }
+
         public void Configure(FigForgeFill fill, FigForgeStroke stroke, Vector4 cornerRadii, bool strokeUsesFillGradient = false)
         {
             SetShapeFields(fill, stroke, cornerRadii, strokeUsesFillGradient);

@@ -984,7 +984,7 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
 async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentNode> {
   const name = listVariantName(opts);
   const reuse = findMaster(name);
-  if (reuse) { ensureListScrollbar(reuse); placeInstance(reuse); return reuse; }
+  if (reuse) { ensureListScrollbar(reuse); ensureListRoundedClip(reuse); placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const titleFont = await loadBoldFont(font);
@@ -1036,10 +1036,23 @@ async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentN
   }
 
   ensureListScrollbar(comp);
+  ensureListRoundedClip(comp);
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: name }));
   parkMaster(comp);
   placeInstance(comp);
   return comp;
+}
+
+// Round the List COMPONENT FRAME to the Background's radius so clipsContent clips
+// the square rows to the rounded shape — without this a header-less list's first
+// row paints square corners over the Background's rounded top. (Unity mirrors this
+// by rounding the first/last row backgrounds.)
+function ensureListRoundedClip(comp: ComponentNode): void {
+  if (!('children' in comp)) return;
+  const bg = (comp as ChildrenMixin).children.find((c) => c.name === 'Background');
+  const r = bg && 'cornerRadius' in bg && typeof (bg as unknown as { cornerRadius?: unknown }).cornerRadius === 'number'
+    ? (bg as unknown as { cornerRadius: number }).cornerRadius : 0;
+  if (r > 0) { (comp as unknown as { cornerRadius: number }).cornerRadius = r; comp.clipsContent = true; }
 }
 
 // Add a skinnable 'Scrollbar' layer (Track + Thumb) to a List master that lacks one.

@@ -163,12 +163,24 @@
     box-shadow: 0 1px 2px rgba(0,0,0,.25), 0 10px 28px rgba(0,0,0,.45);
     padding: 8px;
     display: flex; flex-direction: column; gap: 2px;
-    animation: list-pop-in .12s ease-out;
+    transform-origin: 18px -6px; /* spring from the anchor chip */
+    animation: list-pop-in .34s cubic-bezier(.34, 1.3, .5, 1) both;
   }
+  /* Springy entrance: overshoot, settle back, tiny rotational wobble. */
   @keyframes list-pop-in {
-    from { opacity: 0; transform: translateY(-4px) scale(.98); }
-    to   { opacity: 1; transform: none; }
+    0%   { opacity: 0; transform: scale(.55) translateY(-10px); }
+    45%  { opacity: 1; transform: scale(1.06) translateY(2px) rotate(.4deg); }
+    65%  { transform: scale(.97) translateY(-1px) rotate(-.35deg); }
+    82%  { transform: scale(1.015) rotate(.2deg); }
+    100% { opacity: 1; transform: none; }
   }
+  /* Reverse on close: a little anticipation wobble, then shrink + fade away. */
+  @keyframes list-pop-out {
+    0%   { opacity: 1; transform: none; }
+    25%  { transform: scale(1.05) translateY(1px) rotate(.35deg); }
+    100% { opacity: 0; transform: scale(.55) translateY(-10px); }
+  }
+  .list-pop.closing { animation: list-pop-out .22s cubic-bezier(.55, 0, .8, .4) both; pointer-events: none; }
   .list-pop[hidden] { display: none; }
   .list-pop-title {
     font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;

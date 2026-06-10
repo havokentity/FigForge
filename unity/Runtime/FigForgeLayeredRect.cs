@@ -309,6 +309,18 @@ namespace FigForge
             SetMaterialDirty();
         }
 
+        // Per-corner radii px (tl, tr, br, bl) — e.g. list rows matching their container's
+        // rounded corners. Keeps fills/strokes/effects untouched.
+        public void SetCorners(Vector4 cornerRadii)
+        {
+            if (corners == cornerRadii) return;
+            corners = cornerRadii;
+            ReleaseCachedSurface();
+            MarkPageCompositorDirty();
+            SetVerticesDirty();
+            SetMaterialDirty();
+        }
+
         public void SetStyle(FigForgeShapeStyle style)
         {
             var nextFills = new List<FigForgeFill>();

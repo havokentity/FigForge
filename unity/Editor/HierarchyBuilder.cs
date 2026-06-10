@@ -2164,6 +2164,13 @@ namespace FigForge
             string labelTmpl = string.IsNullOrEmpty(c.label) ? "Item" : c.label;
             var list = go.AddComponent<FigForgeList>();
             list.Configure(crt, rowH, labelTmpl, ToListRowStyle(c.itemShape, sf), hover, hasHover);
+            // Rows follow the container's rounded corners (first row top pair, last row
+            // bottom pair) so square row fills can't paint over the Background's curves.
+            // A Header strip already covers the top corners, so zero the top pair then.
+            float listCr = Mathf.Max(0f, (c.shape != null ? c.shape.cornerRadius : 0f) * sf - maskInset);
+            list.containerCorners = headerH > 0f
+                ? new Vector4(0f, 0f, listCr, listCr)
+                : new Vector4(listCr, listCr, listCr, listCr);
 
             // Rich rows: build the captured Item subtree once as a hidden template that
             // FigForgeList clones per row (icon/title/subtitle/accessory/divider), with
@@ -2437,7 +2444,9 @@ namespace FigForge
         // v35: list viewport masks the background INTERIOR (inset past stroke + 1px AA, so
         //      rows can't visually bleed at fractional scales) + styled uGUI Scrollbar from
         //      the captured 'Scrollbar' layer (auto-hides when rows fit).
-        internal const int CanonicalSchema = 35;
+        // v36: first/last list rows take the container's corner radii (top pair zeroed
+        //      under a Header), so header-less lists keep their rounded corners.
+        internal const int CanonicalSchema = 36;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

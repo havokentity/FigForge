@@ -154,11 +154,22 @@ for (const [id, kind] of [
 // its own master). Anchored under the chip; closes on outside click or Escape.
 const listOptsEl = document.getElementById('listOpts') as HTMLElement | null;
 const listBtnEl = $('#createListBtn') as HTMLElement;
-function hideListOpts() { listOptsEl?.setAttribute('hidden', ''); }
+// Hide = play the reverse spring (.closing → list-pop-out), THEN set hidden when it
+// ends. Keyed by animation name so a reopen mid-close never strands the popover.
+function hideListOpts() {
+  if (!listOptsEl || listOptsEl.hasAttribute('hidden') || listOptsEl.classList.contains('closing')) return;
+  listOptsEl.classList.add('closing');
+}
+listOptsEl?.addEventListener('animationend', (e) => {
+  if ((e as AnimationEvent).animationName !== 'list-pop-out' || !listOptsEl) return;
+  listOptsEl.classList.remove('closing');
+  listOptsEl.setAttribute('hidden', '');
+});
 listBtnEl.addEventListener('click', (e) => {
   e.stopPropagation();
   if (!listOptsEl) return;
-  if (!listOptsEl.hasAttribute('hidden')) { hideListOpts(); return; }
+  if (!listOptsEl.hasAttribute('hidden') && !listOptsEl.classList.contains('closing')) { hideListOpts(); return; }
+  listOptsEl.classList.remove('closing'); // reopening mid-close: cancel the out-animation
   listOptsEl.removeAttribute('hidden');
   // Anchor below the chip (offsets are relative to .create-group, the positioned
   // ancestor), clamped so the popover never overflows the group's right edge.

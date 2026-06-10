@@ -47,6 +47,12 @@ namespace FigForge
         public Color itemRollover = Color.white;
         public bool hasItemRollover;
 
+        // Container corner radii px (tl, tr, br, bl), already canvas-scaled and inset to the
+        // mask box. The FIRST row inherits the top pair and the LAST row the bottom pair, so
+        // square row fills can't paint over the rounded container corners (the importer
+        // zeroes the top pair when a Header strip covers the top corners).
+        public Vector4 containerCorners = Vector4.zero;
+
         // Rich-row mode: a cloned template (the captured Item subtree) + per-state row fills.
         public GameObject rowTemplate;
         public FigForgeFill rowRegular = FigForgeFill.Solid(Color.white);
@@ -127,7 +133,7 @@ namespace FigForge
             HealContentLayout();
             ClearRows();
             for (int i = 0; i < _items.Count; i++)
-                CreateRow(i, _items[i]);
+                CreateRow(i, _items[i], _items.Count);
         }
 
         // Rows size themselves via LayoutElement preferredHeight, which a layout group only
@@ -158,7 +164,7 @@ namespace FigForge
             ClearRows();
             count = Mathf.Max(0, count);
             for (int i = 0; i < count; i++)
-                CreateRow(i, new FigForgeListItem(labelPrefix + " " + (i + 1)));
+                CreateRow(i, new FigForgeListItem(labelPrefix + " " + (i + 1)), count);
         }
 
         // Single-select: mark `index` selected, clear the rest.
@@ -175,15 +181,29 @@ namespace FigForge
 
         public int SelectedIndex => _selected;
 
-        void CreateRow(int index, FigForgeListItem item)
+        void CreateRow(int index, FigForgeListItem item, int count)
         {
-            if (rowTemplate != null) { CreateTemplateRow(index, item); return; }
-            CreateStyledRow(index, item);
+            if (rowTemplate != null) { CreateTemplateRow(index, item, count); return; }
+            CreateStyledRow(index, item, count);
+        }
+
+        // First row takes the container's top corner radii, last row the bottom pair —
+        // so square row fills follow the rounded container instead of painting over it.
+        void ApplyRowCorners(Graphic g, int index, int count)
+        {
+            if (g == null) return;
+            var cc = new Vector4(
+                index == 0 ? containerCorners.x : 0f,
+                index == 0 ? containerCorners.y : 0f,
+                index == count - 1 ? containerCorners.z : 0f,
+                index == count - 1 ? containerCorners.w : 0f);
+            if (g is FigForgeLayeredRect lr) lr.SetCorners(cc);
+            else if (g is FigForgeRoundedRect rr) rr.SetCorners(cc);
         }
 
         // Rich row: clone the captured Item subtree, bind Title + Subtitle, wire state
         // colours + single-select via FigForgeListRow, re-enable the HitArea click target.
-        void CreateTemplateRow(int index, FigForgeListItem item)
+        void CreateTemplateRow(int index, FigForgeListItem item, int count)
         {
             var row = Instantiate(rowTemplate, content);
             row.name = "Item " + (index + 1);
@@ -217,6 +237,7 @@ namespace FigForge
             fr.regular = rowRegular; fr.rollover = rowRollover; fr.pressed = rowPressed; fr.selected = rowSelected;
             fr.hasRollover = rowHasRollover; fr.hasPressed = rowHasPressed; fr.hasSelected = rowHasSelected;
             if (bg != null) fr.Bind(bg);
+            ApplyRowCorners(bg, index, count);
         }
 
         // Case-insensitive: the exporter sanitizes captured subtree names to lowercase
@@ -228,7 +249,7 @@ namespace FigForge
             return null;
         }
 
-        void CreateStyledRow(int index, FigForgeListItem item)
+        void CreateStyledRow(int index, FigForgeListItem item, int count)
         {
             var row = NewRect("Item " + (index + 1), content);
             var le = row.AddComponent<LayoutElement>();
@@ -257,6 +278,7 @@ namespace FigForge
                 rowBg = img;
             }
             btn.targetGraphic = rowBg;
+            ApplyRowCorners(rowBg, index, count);
 
             var lblGo = NewRect("Label", row.transform);
             var lrt = lblGo.GetComponent<RectTransform>();
