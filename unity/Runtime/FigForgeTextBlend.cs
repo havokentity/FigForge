@@ -198,6 +198,9 @@ namespace FigForge
             int w = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.width + 2f * pad) * scale), 1, limit);
             int h = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.height + 2f * pad) * scale), 1, limit);
             int hash = ComputeBakeHash(w, h, pad, scale);
+            // A lost hardware resource (device reset, aggressive editor reloads) keeps
+            // the RT object but blanks its contents — treat as needing a rebake.
+            if (_surface != null && !_surface.IsCreated()) _bakeDirty = true;
             if (_surface != null && _surface.width == w && _surface.height == h && hash == _bakeHash && !_bakeDirty)
                 return;
 
@@ -210,7 +213,14 @@ namespace FigForge
             }
             Bake(w, h, pad, scale, rect);
             _bakeHash = hash;
-            _bakeDirty = false;
+            // Baking before TMP has generated its mesh (scene load, domain reload,
+            // canvas-update ordering) yields an empty surface — the text would vanish
+            // and STAY gone if the matching TEXT_CHANGED never reaches us. Keep the
+            // bake dirty until a non-empty mesh arrives (unless the text really is
+            // empty), so the next canvas update retries.
+            bool bakedEmpty = (_text.mesh == null || _text.mesh.vertexCount == 0)
+                && !string.IsNullOrEmpty(_text.text);
+            _bakeDirty = bakedEmpty;
             MarkPageCompositorDirty();
         }
 
@@ -262,6 +272,9 @@ namespace FigForge
             _bakeDirty = true;
         }
 
+        // TEXT_CHANGED drives most rebakes; the hash is the belt-and-braces layer for
+        // changes that can slip past the event (same-length text swaps settle through
+        // the event, but colour/material edits and missed events land here).
         int ComputeBakeHash(int width, int height, float pad, float scale)
         {
             unchecked
@@ -271,10 +284,36 @@ namespace FigForge
                 h = h * 31 + height;
                 h = h * 31 + Mathf.RoundToInt(pad * 100f);
                 h = h * 31 + Mathf.RoundToInt(scale * 100f);
-                h = h * 31 + (_text != null && _text.mesh != null ? _text.mesh.vertexCount : 0);
+                if (_text != null)
+                {
+                    h = h * 31 + (_text.mesh != null ? _text.mesh.vertexCount : 0);
+                    h = h * 31 + (_text.text != null ? _text.text.GetHashCode() : 0);
+                    Color32 c = _text.color;
+                    h = h * 31 + (c.r | (c.g << 8) | (c.b << 16) | (c.a << 24));
+                    h = h * 31 + (_text.fontSharedMaterial != null ? _text.fontSharedMaterial.GetInstanceID() : 0);
+                }
                 return h;
             }
         }
+
+#if UNITY_EDITOR
+        [ContextMenu("Log Text Blend State")]
+        void LogTextBlendState()
+        {
+            var comp = _pageCompositor != null ? _pageCompositor : GetComponentInParent<FigForgePageCompositor>();
+            var blended = BlendedSurfaceOrNull();
+            Debug.Log("[FigForge] TextBlend '" + name + "': blend=" + blendMode
+                + " active=" + ActiveBlend
+                + " tmpMeshVerts=" + (_text != null && _text.mesh != null ? _text.mesh.vertexCount : -1)
+                + " tmpCulled=" + (_text != null && _text.canvasRenderer != null ? _text.canvasRenderer.cull.ToString() : "?")
+                + " surface=" + (_surface != null ? _surface.width + "x" + _surface.height + " created=" + _surface.IsCreated() : "null")
+                + " bakeDirty=" + _bakeDirty
+                + " compositor=" + (comp != null ? comp.name + " owns=" + comp.ShouldRenderLayer(this) : "none")
+                + " blendedRT=" + (blended != null ? blended.width + "x" + blended.height : "null")
+                + " present=" + (_present != null ? "enabled=" + _present.enabled + " tex=" + (_present.mainTexture != null ? _present.mainTexture.name : "null") : "null"),
+                this);
+        }
+#endif
 
         // Pad covering glyph overflow beyond the rect (ascenders/descenders, TMP
         // material effects pushing mesh bounds out, auto-size overshoot) + AA margin.

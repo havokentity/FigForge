@@ -47,6 +47,7 @@ namespace FigForge
         Material _compositeMaterial;
         bool _dirty = true;
         bool _inRebuild;
+        bool _warnedCaptureFailed;
         int _layoutHash;
 
         public bool IsActive => isActiveAndEnabled && ActiveAdvancedCount() > 0;
@@ -192,7 +193,20 @@ namespace FigForge
                 CullAtOrAbove(layer);
                 var capture = FigForgePageCapture.CaptureTemporary(cam);
                 RestoreCulled();
-                if (capture == null) { complete = false; break; }
+                if (capture == null)
+                {
+                    // Without a capture the layer's blended target is left unwritten —
+                    // its quad would present stale/garbage pixels. Say so, loudly once.
+                    if (!_warnedCaptureFailed)
+                    {
+                        _warnedCaptureFailed = true;
+                        Debug.LogWarning("[FigForge] Page capture failed — Tier-2 blends on this page are stale. " +
+                                         "Camera: " + (cam != null ? cam.name : "null"), this);
+                    }
+                    complete = false;
+                    break;
+                }
+                _warnedCaptureFailed = false;
 
                 _compositeMaterial.SetTexture("_Backdrop", capture);
                 _compositeMaterial.SetVector("_BackdropRect", BackdropRect(layer, cam));
