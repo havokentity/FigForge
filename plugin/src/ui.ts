@@ -149,15 +149,30 @@ for (const [id, kind] of [
   });
 }
 
-// List variants: the List button reveals part toggles (header/icons/subtitles);
-// 'Add List' creates that combination (each combo is its own master).
+// List variants: the ＋List chip opens a floating popover of part toggles
+// (header/icons/subtitles); 'Add List' creates that combination (each combo is
+// its own master). Anchored under the chip; closes on outside click or Escape.
 const listOptsEl = document.getElementById('listOpts') as HTMLElement | null;
-$('#createListBtn').addEventListener('click', () => {
-  if (listOptsEl) listOptsEl.style.display = listOptsEl.style.display === 'none' ? '' : 'none';
+const listBtnEl = $('#createListBtn') as HTMLElement;
+function hideListOpts() { listOptsEl?.setAttribute('hidden', ''); }
+listBtnEl.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!listOptsEl) return;
+  if (!listOptsEl.hasAttribute('hidden')) { hideListOpts(); return; }
+  listOptsEl.removeAttribute('hidden');
+  // Anchor below the chip (offsets are relative to .create-group, the positioned
+  // ancestor), clamped so the popover never overflows the group's right edge.
+  const group = listOptsEl.offsetParent as HTMLElement | null;
+  const maxLeft = group ? Math.max(0, group.clientWidth - listOptsEl.offsetWidth - 4) : 0;
+  listOptsEl.style.left = Math.min(listBtnEl.offsetLeft, maxLeft) + 'px';
+  listOptsEl.style.top = listBtnEl.offsetTop + listBtnEl.offsetHeight + 6 + 'px';
 });
+listOptsEl?.addEventListener('click', (e) => e.stopPropagation()); // clicks inside don't close it
+document.addEventListener('click', hideListOpts);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideListOpts(); });
 $('#listOptsCreate').addEventListener('click', () => {
   const on = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.checked !== false;
-  if (listOptsEl) listOptsEl.style.display = 'none';
+  hideListOpts();
   setStatus('Creating list component…');
   post({
     type: 'create-canonical', kind: 'list', componentsPage: compPageOn(),

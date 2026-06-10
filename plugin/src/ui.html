@@ -133,7 +133,7 @@
     padding: 8px 10px; border-bottom: 1px solid var(--border);
     background: var(--bg-secondary);
   }
-  .create-group { min-width: 0; }
+  .create-group { min-width: 0; position: relative; /* anchor for the List variants popover */ }
   .create-head {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     margin-bottom: 6px;
@@ -153,6 +153,39 @@
   }
   .font-chip input { width: 42px; }
   .port-chip input:focus, .font-chip input:focus { outline: none; }
+
+  /* ---- List variants popover (floats under the ＋List chip) ---- */
+  .list-pop {
+    position: absolute; z-index: 60; min-width: 168px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: 0 1px 2px rgba(0,0,0,.25), 0 10px 28px rgba(0,0,0,.45);
+    padding: 8px;
+    display: flex; flex-direction: column; gap: 2px;
+    animation: list-pop-in .12s ease-out;
+  }
+  @keyframes list-pop-in {
+    from { opacity: 0; transform: translateY(-4px) scale(.98); }
+    to   { opacity: 1; transform: none; }
+  }
+  .list-pop[hidden] { display: none; }
+  .list-pop-title {
+    font-size: 9px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--text-tertiary); padding: 2px 4px 6px;
+  }
+  .list-pop-row {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 5px 6px; border-radius: var(--radius-sm); color: var(--text-secondary);
+  }
+  .list-pop-row:hover { background: var(--bg-hover); color: var(--text); }
+  .list-pop-row input { accent-color: var(--brand); margin: 0; }
+  .list-pop-create {
+    margin-top: 8px; padding: 6px 10px; cursor: pointer;
+    background: var(--brand); color: #fff; font-weight: 600;
+    border: none; border-radius: var(--radius-sm);
+  }
+  .list-pop-create:hover { background: var(--brand-strong); }
 
   /* ---- split ---- */
   .split { flex: 1; display: flex; overflow: hidden; }
@@ -365,13 +398,14 @@
             <button class="chip" id="createDropdownBtn" title="Create a canonical Dropdown component">＋ Dropdown</button>
             <button class="chip" id="createListBtn" title="Create a canonical scrollable List component — click to pick which parts the list has">＋ List</button>
           </div>
-          <!-- List variant options — revealed by the List button; combinations become
+          <!-- List variants popover — floats under the ＋List chip; combinations become
                separate masters (List, List NoHeader, List NoIcon NoSubtitle, …). -->
-          <div class="create-grid" id="listOpts" style="display:none">
-            <label class="chip" title="Include the section title strip pinned above the rows"><input type="checkbox" id="listOptHeader" checked />Header</label>
-            <label class="chip" title="Rows include a leading icon slot"><input type="checkbox" id="listOptIcon" checked />Icons</label>
-            <label class="chip" title="Rows include a second line under the title"><input type="checkbox" id="listOptSubtitle" checked />Subtitles</label>
-            <button class="chip" id="listOptsCreate" title="Create this List variant">Add List</button>
+          <div class="list-pop" id="listOpts" hidden>
+            <div class="list-pop-title">List parts</div>
+            <label class="list-pop-row" title="Include the section title strip pinned above the rows"><input type="checkbox" id="listOptHeader" checked /><span>Header section</span></label>
+            <label class="list-pop-row" title="Rows include a leading icon slot"><input type="checkbox" id="listOptIcon" checked /><span>Row icons</span></label>
+            <label class="list-pop-row" title="Rows include a second line under the title"><input type="checkbox" id="listOptSubtitle" checked /><span>Row subtitles</span></label>
+            <button class="list-pop-create" id="listOptsCreate" title="Create this List variant">＋ Add List</button>
           </div>
         </div>
         <div class="create-settings">
