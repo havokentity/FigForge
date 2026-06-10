@@ -168,9 +168,14 @@ namespace FigForge
                         el = $"<ui:DropdownField name=\"{name}\" label=\"{label}\" class=\"{classes}\" />"; // choices set in code
                         break;
                     case "slider":
-                        // Canonical slider value is a 0..1 ratio — scale to this element's 0..100 range.
-                        el = $"<ui:Slider name=\"{name}\" label=\"{label}\" low-value=\"0\" high-value=\"100\"{(float.TryParse(val, out var sv) ? $" value=\"{F(Mathf.Clamp01(sv) * 100f)}\"" : "")} class=\"{classes}\" />";
+                    {
+                        // Canonical slider value is RAW within the authored range; legacy
+                        // manifests carry no range (both 0) → the original 0..1 ratio.
+                        float lo = e.canonical.minValue, hi = e.canonical.maxValue;
+                        if (hi <= lo) { lo = 0f; hi = 1f; }
+                        el = $"<ui:Slider name=\"{name}\" label=\"{label}\" low-value=\"{F(lo)}\" high-value=\"{F(hi)}\"{(float.TryParse(val, out var sv) ? $" value=\"{F(Mathf.Clamp(sv, lo, hi))}\"" : "")} class=\"{classes}\" />";
                         break;
+                    }
                     default:
                         el = $"<ui:Button name=\"{name}\" text=\"{label}\" class=\"{classes}\" />";
                         break;

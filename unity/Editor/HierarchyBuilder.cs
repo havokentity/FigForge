@@ -2383,7 +2383,13 @@ namespace FigForge
             var slider = go.AddComponent<FigForgeSlider>();
             slider.transition = Selectable.Transition.None;
             slider.direction = Slider.Direction.LeftToRight;
-            slider.minValue = 0f; slider.maxValue = 1f; slider.wholeNumbers = false;
+            // Authored value range from the Figma component (the canonical tag);
+            // legacy manifests carry no range (both 0) → the original 0..1 ratio.
+            bool hasRange = c.maxValue > c.minValue;
+            slider.minValue = hasRange ? c.minValue : 0f;
+            slider.maxValue = hasRange ? c.maxValue : 1f;
+            slider.wholeNumbers = false; // slot snapping (below) covers discrete sliders
+            slider.slots = c.slots >= 2 ? c.slots : 0;
 
             float[] full = { 0f, 0f, 1f, 1f };
             float[] trackBox = c.parts != null && c.parts.TryGetValue("Track", out var tb) && tb != null && tb.Length >= 4 ? tb : full;
@@ -2420,6 +2426,15 @@ namespace FigForge
                 fillRt.offsetMin = Vector2.zero; fillRt.offsetMax = Vector2.zero;
                 AddShapeGraphic(fillGo, c.fillShape, ctx); // render-only
                 slider.fillRect = fillRt;
+            }
+
+            // Slot tick marks — the captured 'Ticks' layer as a render-only subtree,
+            // over the track/fill (mirrors the Figma layer order), under the thumb.
+            if (HasPartTree(c, "Ticks"))
+            {
+                var ticksGo = NewRect("Ticks", go.transform);
+                AnchorPart(ticksGo.GetComponent<RectTransform>(), c.parts, "Ticks");
+                BuildPartSubtree(ticksGo, c.partTrees["Ticks"], ctx);
             }
 
             // Handle — the stock Handle Slide Area/Handle pair. The slide area spans
@@ -2756,7 +2771,10 @@ namespace FigForge
         //      (SDF visuals render-only, transparent-Image interaction), thumb hover/
         //      press via FigForgeScrollbarStates, full-row HitArea targetGraphic,
         //      optional Label; per-instance initial value via FigForgeBindings.
-        internal const int CanonicalSchema = 44;
+        // v45: slider variants — authored [minValue..maxValue] range (value now RAW,
+        //      not a 0..1 ratio), slot snapping (FigForgeSlider.slots overrides
+        //      Slider.Set), and the 'Ticks' layer rendered as a render-only subtree.
+        internal const int CanonicalSchema = 45;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
@@ -2847,12 +2865,14 @@ namespace FigForge
             // instances share one visual prefab instead of thrash-regenerating it.
             sb.Append(";iro=").Append(SigF(c.itemRollover)).Append(";ipr=").Append(SigF(c.itemPressed)).Append(";isel=").Append(SigF(c.itemSelected));
             sb.Append(";hh=").Append(c.headerHeight.ToString("0.###"));
-            // Slider visuals. `value` is deliberately NOT folded — it's per-instance
-            // (applied by FigForgeBindings), not part of the shared prefab's look.
+            // Slider visuals + numeric behaviour (range/slots are baked into the
+            // prefab's Slider fields). `value` is deliberately NOT folded — it's
+            // per-instance (applied by FigForgeBindings), not part of the shared look.
             AppendShapeSig(sb, "trk", c.trackShape);
             AppendShapeSig(sb, "sfl", c.fillShape);
             AppendShapeSig(sb, "thm", c.thumbShape);
             sb.Append(";thr=").Append(SigF(c.thumbRollover)).Append(";thp=").Append(SigF(c.thumbPressed));
+            sb.Append(";smin=").Append(c.minValue.ToString("0.###")).Append(";smax=").Append(c.maxValue.ToString("0.###")).Append(";slt=").Append(c.slots);
             if (c.parts != null && c.parts.Count > 0)
             {
                 var keys = new List<string>(c.parts.Keys);
