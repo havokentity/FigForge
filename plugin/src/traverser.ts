@@ -127,7 +127,12 @@ export function hasMeaningfulFill(node: SceneNode): boolean {
   return paints(node, 'fills').some((f) => !isEmptyPaint(f));
 }
 
-function hasImageFill(node: SceneNode): boolean {
+/** Visible IMAGE paint in the node's own fill stack (placeholder/hidden/zero-
+ *  opacity image paints are filtered by isEmptyPaint). Used both to force
+ *  rasterization of childless blend/blur panels (below) and by the exporter to
+ *  bake a STRUCTURAL container's own photo background (paintToFill has no image
+ *  case, so an unbaked image fill silently vanishes from the manifest). */
+export function hasImageFill(node: SceneNode): boolean {
   return paints(node, 'fills').some((f) => f.type === 'IMAGE' && !isEmptyPaint(f));
 }
 
@@ -167,7 +172,7 @@ function hasChildren(node: SceneNode): node is SceneNode & ChildrenMixin {
 }
 
 /** Container made up solely of vector shapes — treat as a single icon. */
-function isIconContainer(node: SceneNode): boolean {
+export function isIconContainer(node: SceneNode): boolean {
   if (!CONTAINER_TYPES.has(node.type) || !hasChildren(node)) return false;
   const kids = node.children.filter(isVisible);
   if (kids.length === 0) return false;

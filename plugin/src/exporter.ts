@@ -10,9 +10,11 @@
 // =============================================================================
 
 import {
+  CANONICAL_SCHEMA,
   DEFAULT_EXPORT_OPTIONS,
   MANIFEST_SCHEMA,
   MANIFEST_VERSION,
+  type BinaryAsset,
   type ButtonShape,
   type CanonicalKind,
   type CanonicalRef,
@@ -39,17 +41,21 @@ import { generateFileName, sanitize } from './naming';
 import {
   canonicalTagData,
   detectCanonical,
+  hasImageFill,
   hasMeaningfulFill,
   hasVisibleStroke,
   isEmptyPaint,
   isExportable,
+  isIconContainer,
 } from './traverser';
 import { mapTransform, rootTransform } from './mapper';
 import { buildVectorDrawing } from './vector';
 
 export interface ExportResult {
   manifest: Manifest;
-  assets: { name: string; data: number[] }[];
+  // PNG bytes stay Uint8Array through the whole plugin (postMessage structured-
+  // clones them; JSZip takes them natively) — see BinaryAsset in types.ts.
+  assets: BinaryAsset[];
 }
 
 export type ProgressFn = (current: number, total: number, label: string) => void;
@@ -323,10 +329,17 @@ function buildText(node: TextNode): TextProps {
   const size = node.fontSize !== figma.mixed ? node.fontSize : 16;
   const fills = Array.isArray(node.fills) ? node.fills : [];
   const solid = fills.find((f) => !isEmptyPaint(f) && f.type === 'SOLID') as SolidPaint | undefined;
+  // Figma units: lineHeight is PIXELS | PERCENT | AUTO, letterSpacing is
+  // PIXELS | PERCENT — and PERCENT is a percentage of the font size. The
+  // manifest is pixel-semantics (Unity assigns letterSpacing straight onto
+  // TMP characterSpacing), so convert PERCENT → px here: a 150% line height
+  // must not export as a raw 150 and read as 150px downstream.
+  const toPx = (v: { value: number; unit: string }): number =>
+    v.unit === 'PERCENT' ? (size * v.value) / 100 : v.value;
   const lh = node.lineHeight !== figma.mixed && node.lineHeight.unit !== 'AUTO'
-    ? (node.lineHeight as { value: number }).value
+    ? toPx(node.lineHeight as { value: number; unit: string })
     : undefined;
-  const ls = node.letterSpacing !== figma.mixed ? node.letterSpacing.value : undefined;
+  const ls = node.letterSpacing !== figma.mixed ? toPx(node.letterSpacing) : undefined;
   // A stroke on the text layer → a TMP outline (color + px weight).
   const strokes = Array.isArray(node.strokes) ? node.strokes : [];
   const strokePaint = strokes.find((f) => !isEmptyPaint(f) && f.type === 'SOLID') as SolidPaint | undefined;
@@ -366,6 +379,21 @@ function fnv1a(bytes: Uint8Array): string {
   return h.toString(16);
 }
 
+// Content key for the PNG dedup map. FNV-1a alone is only 32 bits — two
+// different sprites can collide (≈50% odds by ~77k assets, but any single
+// collision silently substitutes the WRONG sprite with no error anywhere).
+// Folding in the byte length plus two cheap probe bytes (middle + last; the
+// first PNG byte is the constant 0x89, so it discriminates nothing) makes an
+// undetected collision require equal hash AND length AND probes — while true
+// duplicates still dedup byte-identically, and the wire format is untouched
+// (this key only ever lives in the in-memory hashToFile map).
+function dedupKey(bytes: Uint8Array): string {
+  const len = bytes.length;
+  const mid = len ? bytes[len >> 1] : 0;
+  const last = len ? bytes[len - 1] : 0;
+  return `${fnv1a(bytes)}-${len.toString(16)}-${mid.toString(16)}-${last.toString(16)}`;
+}
+
 function exportConstraint(scale: ExportScale): ExportSettingsImage['constraint'] {
   switch (scale.type) {
     case 'width':
@@ -388,6 +416,11 @@ interface Plan {
   merged: boolean;
   canonicalRef: CanonicalRef | null;
   exportable: boolean;
+  // Structural container with a visible IMAGE fill of its own: rasterize the
+  // container's OWN appearance (children hidden) and attach it as this
+  // element's background sprite, while the children stay structural elements
+  // built on top. See plan() for the full rationale.
+  bakeSelf: boolean;
   children: SceneNode[];
 }
 
@@ -426,6 +459,23 @@ function isIconOnlyContainer(node: SceneNode): boolean {
   };
   for (const c of (node as ChildrenMixin).children as SceneNode[]) walk(c);
   return ok && vectorLeaves > 0;
+}
+
+// True when an exportable node's PNG bakes its WHOLE subtree, making it a raster
+// LEAF: a vector (a BOOLEAN_OPERATION's operands are inputs to its path math,
+// not separate layers) or an icon-only container (the flatten-to-one-sprite
+// feature). Descending into such a node is doubly wrong — the children export
+// as separate elements (defeating the flattening), and because planned
+// exportable descendants are hidden during the parent's exportAsync, the
+// parent's own render is corrupted (a SUBTRACT with hidden operands exports
+// empty or throws; an icon container loses its glyphs).
+// Deliberately NOT a leaf: a forced-PNG (`forcedPngIds`) structural container.
+// The UI only offers force-PNG on TEXT nodes (ui.ts), and flatten-with-children
+// semantics already belongs to the Merge toggle — so a `rasterize` flag arriving
+// on a container via a saved config keeps the existing bake-plus-overlay
+// behaviour rather than silently swallowing its children.
+function bakesWholeSubtree(node: SceneNode): boolean {
+  return VECTOR_SHAPE_TYPES.has(node.type) || isIconContainer(node);
 }
 
 // A paint Unity can't reconstruct as a solid SDF panel (image/gradient/video) —
@@ -632,12 +682,31 @@ export async function exportDesign(
     const forced = forcedPngIds.has(node.id);
     const exportable = !canonicalRef && (forced || isExportable(node) || isMergeRoot);
 
+    // A raster leaf (vector / icon-only container) plans NO children: its PNG
+    // already bakes the whole subtree (see bakesWholeSubtree).
+    const rasterLeaf = exportable && bakesWholeSubtree(node);
+
+    // A STRUCTURAL container (visible children → isExportable said no) whose own
+    // fill stack holds a visible IMAGE paint — the classic hero banner: a FRAME
+    // with a photo background and children. paintToFill has no image case, so the
+    // photo would silently vanish from the style. Bake the container's OWN
+    // appearance — fill + stroke + corners exactly as Figma composes them (image
+    // scale modes FILL/FIT/CROP/TILE for free) — to a PNG with all children
+    // hidden, attached as this element's background sprite; the children stay
+    // structural elements built on top. Merge roots / forced-PNG containers are
+    // `exportable` (their bake already covers the image fill) and canonical
+    // controls have their own capture path, so all three are excluded here.
+    // VIDEO fills are NOT handled (hasImageFill is IMAGE-only): a structural
+    // container's video fill still vanishes — punt until a poster-frame bake.
+    const bakeSelf =
+      !exportable && !canonicalRef && 'children' in node && hasImageFill(node);
+
     const children: SceneNode[] =
-      !canonicalRef && !isMergeRoot && 'children' in node
+      !canonicalRef && !isMergeRoot && !rasterLeaf && 'children' in node
         ? (node as ChildrenMixin).children.slice() as SceneNode[]
         : [];
 
-    const p: Plan = { node, parentId, merged: isMergeRoot, canonicalRef, exportable, children };
+    const p: Plan = { node, parentId, merged: isMergeRoot, canonicalRef, exportable, bakeSelf, children };
     plans.push(p);
     planById.set(node.id, p);
 
@@ -646,21 +715,47 @@ export async function exportDesign(
   plan(root, null, false);
 
   // ---- 2. Rasterize exportable nodes (hide siblings/descendants to isolate) --
-  const assets: { name: string; data: number[] }[] = [];
+  const assets: BinaryAsset[] = [];
   const assetEntries: ManifestAsset[] = [];
   const hashToFile = new Map<string, string>();
   const assetByNode = new Map<string, { file: string; w: number; h: number }>();
   const failedExportIds = new Set<string>();
 
-  const exportPlans = plans.filter((p) => p.exportable);
+  const exportPlans = plans.filter((p) => p.exportable || p.bakeSelf);
   let done = 0;
+
+  // Config-excluded nodes never become plans (plan() returns early), but Figma
+  // still renders them into any ANCESTOR's exportAsync — a merge root's PNG in
+  // particular bakes its whole subtree, excluded or not. Resolve the excluded
+  // ids to nodes once so each export below can hide the ones underneath it:
+  // exclusion must mean exclusion, not "excluded unless a merge bakes you in".
+  const excludedNodes: SceneNode[] = [];
+  for (const id of excludedIds) {
+    const n = figma.getNodeById(id) as SceneNode | null;
+    if (n && isDescendant(n, root)) excludedNodes.push(n);
+  }
 
   for (const p of exportPlans) {
     onProgress?.(done++, exportPlans.length, sanitize(p.node.name));
 
     // Hide exportable descendants so they don't double-render into this PNG.
+    // Raster leaves plan no children, so nothing is hidden under a boolean op
+    // or icon container — they export their true composed appearance. The loop
+    // still isolates exportable children under a forced-PNG container (a saved
+    // config can set `rasterize` on a structural container; see applyConfigs).
     const hidden: SceneNode[] = [];
-    if (!p.merged) {
+    if (p.bakeSelf) {
+      // Bake-self exports the container's OWN appearance: hide ALL visible
+      // children (not just exportable descendant plans — structural ones must
+      // not bake in either), so the PNG is just the image fill + stroke +
+      // corners as Figma renders them. The children remain structural elements
+      // layered on top in Unity. Hide/restore is scoped to this one export, so
+      // a nested bake-self container (hidden here) still bakes independently
+      // on its own loop iteration.
+      for (const c of ((p.node as ChildrenMixin).children as SceneNode[])) {
+        if ((c as unknown as { visible?: boolean }).visible !== false) hidden.push(c);
+      }
+    } else if (!p.merged) {
       for (const other of plans) {
         if (other === p || !other.exportable) continue;
         if (isDescendant(other.node, p.node)) {
@@ -668,6 +763,20 @@ export async function exportDesign(
             hidden.push(other.node);
           }
         }
+      }
+    }
+    // Excluded descendants would bake into this PNG too — hide them for the
+    // export. This matters most for merge roots (they deliberately SKIP the
+    // exportable-descendant hiding above: flattening planned descendants is
+    // the point of a merge; rendering excluded ones is not). The includes()
+    // dedup guards the bakeSelf overlap (an excluded direct child is already
+    // in `hidden`); a duplicate entry would record before=false in `restore`
+    // and leave the node hidden in the document afterwards.
+    for (const ex of excludedNodes) {
+      if ((ex as unknown as { visible?: boolean }).visible !== false
+        && isDescendant(ex, p.node)
+        && !hidden.includes(ex)) {
+        hidden.push(ex);
       }
     }
     const restore = hidden.map((n) => {
@@ -681,7 +790,7 @@ export async function exportDesign(
         exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
       }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
 
-      const hash = fnv1a(bytes);
+      const hash = dedupKey(bytes);
       let file = hashToFile.get(hash);
       const dims = pngSize(bytes);
       if (!file) {
@@ -690,7 +799,7 @@ export async function exportDesign(
         let n = 1;
         while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
         hashToFile.set(hash, file);
-        assets.push({ name: file, data: Array.from(bytes) });
+        assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: p.node.id, scale: scaleNum });
       }
       assetByNode.set(p.node.id, { file, w: dims.w, h: dims.h });
@@ -725,14 +834,14 @@ export async function exportDesign(
         const bytes = await (layer as unknown as {
           exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
         }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
-        const hash = fnv1a(bytes);
+        const hash = dedupKey(bytes);
         let file = hashToFile.get(hash);
         if (!file) {
           file = generateFileName(root.name, `${master.name}_${layerName}`, scaleNum);
           let n = 1;
           while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
           hashToFile.set(hash, file);
-          assets.push({ name: file, data: Array.from(bytes) });
+          assets.push({ name: file, data: bytes });
           assetEntries.push({ file, nodeId: layer.id, scale: scaleNum });
         }
         out[key] = file;
@@ -757,14 +866,14 @@ export async function exportDesign(
       const bytes = await (node as unknown as {
         exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
       }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
-      const hash = fnv1a(bytes);
+      const hash = dedupKey(bytes);
       let file = hashToFile.get(hash);
       if (!file) {
         file = generateFileName(root.name, nameHint, scaleNum);
         let n = 1;
         while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
         hashToFile.set(hash, file);
-        assets.push({ name: file, data: Array.from(bytes) });
+        assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
       }
       return file;
@@ -1100,7 +1209,7 @@ export async function exportDesign(
       const bytes = await (node as unknown as {
         exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
       }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
-      const hash = fnv1a(bytes);
+      const hash = dedupKey(bytes);
       const dims = pngSize(bytes);
       let file = hashToFile.get(hash);
       if (!file) {
@@ -1108,7 +1217,7 @@ export async function exportDesign(
         let n = 1;
         while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
         hashToFile.set(hash, file);
-        assets.push({ name: file, data: Array.from(bytes) });
+        assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
       }
       return { file, w: dims.w, h: dims.h };
@@ -1141,7 +1250,11 @@ export async function exportDesign(
       const isCanon = node.id !== rootNode.id && !!detectCanonical(node);
       const keepStructural = !!structuralIds && structuralIds.has(node.id);
       const exportable = !isCanon && !keepStructural && (forcedPngIds.has(node.id) || isExportable(node));
-      const children: SceneNode[] = !isCanon && 'children' in node
+      // Same raster-leaf rule as plan(): an exportable vector / icon-only
+      // container's PNG covers its whole subtree — emit no child elements
+      // (and hide nothing during its export; see bakesWholeSubtree).
+      const rasterLeaf = exportable && bakesWholeSubtree(node);
+      const children: SceneNode[] = !isCanon && !rasterLeaf && 'children' in node
         ? ((node as ChildrenMixin).children.slice() as SceneNode[]).filter(
             (c) => (c as unknown as { visible?: boolean }).visible !== false)
         : [];
@@ -1247,6 +1360,16 @@ export async function exportDesign(
       // 'HitArea' (optional): if the component defines a HitArea layer, Unity uses it
       // as the clickable region; otherwise the whole component frame is clickable.
       parts: partsOf(master, ['Background', 'Checkmark', 'Label', 'HitArea']) };
+  }
+
+  // THIS node's own checked state, read the way captureToggle reads the master's:
+  // the Checkmark layer's visibility. Toggling an instance on/off in Figma flips
+  // the INSTANCE's own Checkmark override — the master's layer stays unchanged,
+  // so the (memoized) master capture above cannot see it.
+  function toggleValueOf(node: SceneNode): string | undefined {
+    const ck = childByName(node, 'Checkmark');
+    if (!ck) return undefined;
+    return (ck as unknown as { visible?: boolean }).visible !== false ? 'on' : 'off';
   }
 
   // Capture an input field: Background (TMP_InputField.targetGraphic), Placeholder,
@@ -1629,6 +1752,22 @@ export async function exportDesign(
   const fmtC = (c?: RGBA) => (c ? `(${c.slice(0, 3).map((n) => Math.round(n * 255)).join(',')})` : 'none');
   // Captured control-specific data (toggle/radio/dropdown/list) merged into the canonical at assembly.
   const controlByNode = new Map<string, Partial<CanonicalRef>>();
+  // MASTER captures memoized per master component id: every INSTANCE of one
+  // master otherwise re-runs the whole capture against the SAME master — up to
+  // ~9 exportAsync calls per dropdown instance, so 20 placed dropdowns meant
+  // ~180 master exports. The dominator of export time on control-heavy pages.
+  // Cached data is MASTER-derived only: per-instance reads (the button
+  // instance-override capture below, the instance label/value/state
+  // re-application at assembly) still run for every instance. The tag value is
+  // folded into the key for the captures it parameterizes, and the cache lives
+  // inside this exportDesign call — nothing persists across export runs.
+  const masterCaptureCache = new Map<string, unknown>();
+  async function memoMasterCapture<T>(key: string, capture: () => Promise<T>): Promise<T> {
+    if (masterCaptureCache.has(key)) return masterCaptureCache.get(key) as T;
+    const value = await capture();
+    masterCaptureCache.set(key, value);
+    return value;
+  }
   for (const p of plans) {
     if (!p.canonicalRef || p.canonicalRef.kind !== 'button') continue;
     const master =
@@ -1636,9 +1775,9 @@ export async function exportDesign(
         ? ((p.node as InstanceNode).mainComponent as SceneNode | null)
         : p.node;
     if (!master) continue;
-    const states = await exportStates(master);
+    const states = await memoMasterCapture(`button-states|${master.id}`, () => exportStates(master));
     if (states) stateByNode.set(p.node.id, states);
-    const sh = await captureButtonShape(master);
+    const sh = await memoMasterCapture(`button-shape|${master.id}`, () => captureButtonShape(master));
     if (sh) shapeByNode.set(p.node.id, sh);
     if (sh) {
       const shc = sh.shape.effects?.find((effect) => effect.kind === 'dropShadow' || (!effect.kind && !effect.inner));
@@ -1683,10 +1822,10 @@ export async function exportDesign(
     const master = p.node.type === 'INSTANCE' ? ((p.node as InstanceNode).mainComponent as SceneNode | null) : p.node;
     if (!master) continue;
     if (ref.kind === 'toggle' || ref.kind === 'radio') {
-      const t = await captureToggle(master, ref.value);
+      const t = await memoMasterCapture(`${ref.kind}|${master.id}|${ref.value ?? ''}`, () => captureToggle(master, ref.value));
       if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts, partTrees: t.partTrees });
     } else if (ref.kind === 'input') {
-      const i = await captureInput(master);
+      const i = await memoMasterCapture(`input|${master.id}`, () => captureInput(master));
       controlByNode.set(p.node.id, {
         shape: i.shape,
         label: i.label,
@@ -1696,7 +1835,7 @@ export async function exportDesign(
         parts: i.parts,
       });
     } else if (ref.kind === 'dropdown') {
-      const d = await captureDropdown(master, ref.value);
+      const d = await memoMasterCapture(`dropdown|${master.id}|${ref.value ?? ''}`, () => captureDropdown(master, ref.value));
       controlByNode.set(p.node.id, {
         shape: d.shape, options: d.options,
         optionShape: d.optionShape,
@@ -1714,7 +1853,7 @@ export async function exportDesign(
         parts: d.parts,
       });
     } else if (ref.kind === 'list') {
-      const l = await captureList(master);
+      const l = await memoMasterCapture(`list|${master.id}`, () => captureList(master));
       if (l) {
         const ih = l.itemHeight || 44;
         const instH = (p.node as unknown as { height?: number }).height || ih;
@@ -1729,7 +1868,7 @@ export async function exportDesign(
         controlByNode.set(p.node.id, { ...l, itemHeight: ih, count });
       }
     } else if (ref.kind === 'table') {
-      const t = await captureTable(master);
+      const t = await memoMasterCapture(`table|${master.id}`, () => captureTable(master));
       if (t) {
         const ih = t.itemHeight || 40;
         const instH = (p.node as unknown as { height?: number }).height || ih;
@@ -1741,7 +1880,7 @@ export async function exportDesign(
         controlByNode.set(p.node.id, { ...t, itemHeight: ih, count });
       }
     } else if (ref.kind === 'slider') {
-      const s = await captureSlider(master, canonicalTagData(master));
+      const s = await memoMasterCapture(`slider|${master.id}`, () => captureSlider(master, canonicalTagData(master)));
       if (s) {
         // THIS instance's Fill÷Track ratio wins (a stretched instance shows a
         // different fraction than the master — export what it shows), mapped into
@@ -1817,6 +1956,21 @@ export async function exportDesign(
       style = textStyle(node);
     } else {
       style = buildStyle(node, options, hasAsset);
+      // A bake-self container's PNG already composes its own fill + stroke +
+      // corners (Figma rendered them with the children hidden) — strip the
+      // paint stacks from the emitted style so neither builder draws them
+      // again (uGUI AddStroke would outline on top of the sprite; UITK would
+      // emit border-*/background-color alongside the background-image).
+      // Geometry (cornerRadius/corners, for rounded child clipping), opacity,
+      // blendMode and effects stay — exactly what plain exportable nodes ship
+      // alongside their PNGs today. Skipped when the bake failed (no asset):
+      // the un-stripped style is then the normal fallback panel.
+      if (p.bakeSelf && hasAsset && style) {
+        delete style.fill;
+        delete style.fills;
+        delete style.stroke;
+        delete style.strokes;
+      }
       if (hasAsset || style?.fill || style?.stroke) components.push('Image');
     }
     if (interactive(node.name) && !p.canonicalRef) components.push('Button');
@@ -1844,6 +1998,13 @@ export async function exportDesign(
       const instanceInputPlaceholder = canonical.kind === 'input' ? canonical.placeholder : undefined;
       const instanceInputValue = canonical.kind === 'input' ? canonical.value : undefined;
       const instanceSliderLabel = canonical.kind === 'slider' ? canonical.label : undefined;
+      const toggleLike = canonical.kind === 'toggle' || canonical.kind === 'radio';
+      const instanceToggleLabel = toggleLike ? canonical.label : undefined;
+      // The instance's own checked state: the variant property when one is
+      // detectable (canonicalValue via buildCanonical), else this instance's own
+      // Checkmark visibility — the master capture read the MASTER's Checkmark,
+      // so a toggle flipped on via instance override exported as 'off'.
+      const instanceToggleValue = toggleLike ? (canonical.value ?? toggleValueOf(node)) : undefined;
       Object.assign(canonical, controlByNode.get(node.id));
       if (canonical.kind === 'dropdown') {
         if (instanceDropdownLabel !== undefined) canonical.label = instanceDropdownLabel;
@@ -1852,6 +2013,12 @@ export async function exportDesign(
         if (instanceInputLabel !== undefined) canonical.label = instanceInputLabel;
         if (instanceInputPlaceholder !== undefined) canonical.placeholder = instanceInputPlaceholder;
         if (instanceInputValue !== undefined) canonical.value = instanceInputValue;
+      } else if (toggleLike) {
+        // Re-apply the instance's own label/checked state clobbered by the master
+        // merge above — the dropdown/input convention; toggle/radio previously
+        // skipped it, exporting the MASTER's label + state for every instance.
+        if (instanceToggleLabel !== undefined) canonical.label = instanceToggleLabel;
+        if (instanceToggleValue !== undefined) canonical.value = instanceToggleValue;
       } else if (canonical.kind === 'slider') {
         // The instance's own Label text (possibly overridden in Figma) wins over the
         // master's; the captured per-instance value is already correct from dispatch.
@@ -1928,6 +2095,7 @@ export async function exportDesign(
   const manifest: Manifest = {
     schema: MANIFEST_SCHEMA,
     version: MANIFEST_VERSION,
+    canonicalSchema: CANONICAL_SCHEMA, // importer warns when ≠ HierarchyBuilder.CanonicalSchema
     generator: 'FigForge',
     exportedAt: new Date().toISOString(),
     screen: {

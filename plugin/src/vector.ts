@@ -20,6 +20,16 @@ import type { RGBA, VectorDrawing, VectorMesh } from './types';
 const AA_PX = 0.75;          // anti-alias feather width, node-local px
 const FLATTEN_TOL = 0.15;    // max bézier chord deviation, node-local px
 const MAX_TOTAL_VERTS = 24000; // safety cap → above this, fall back to PNG
+// Control-polygon extent below which a cubic segment is DEGENERATE (all four
+// points effectively coincident) and flattens to a single point. Far below the
+// 0.15px FLATTEN_TOL, so no normally-sized curve can hit it. See flattenCubic.
+const DEGENERATE_EPS = 1e-3; // node-local px
+// Per-ring flattening budget, in array slots (2 per point). Set just past
+// MAX_TOTAL_VERTS points: any ring that large is already guaranteed to trip
+// the total-verts cap and fall back to PNG, so truncating there changes no
+// surviving output — it only spares earcut its quadratic worst case on a
+// quarter-million-point degenerate ring (the multi-second hang).
+const MAX_RING_SLOTS = 2 * (MAX_TOTAL_VERTS + 1);
 
 // First (and only) visible SOLID paint as RGBA, or a signal:
 //   null         → no visible paint (e.g. stroke-only or fill-only node)
@@ -184,9 +194,22 @@ function flattenCubic(
   x2: number, y2: number, x3: number, y3: number,
   out: number[], depth: number,
 ): void {
-  if (depth > 18) { out.push(x3, y3); return; }
+  if (depth > 18 || out.length > MAX_RING_SLOTS) { out.push(x3, y3); return; }
   const dx = x3 - x0;
   const dy = y3 - y0;
+  // DEGENERATE segment (all/most points coincident): with a near-zero chord,
+  // BOTH sides of the flatness comparison below collapse toward 0 and float
+  // cancellation noise decides it — every level can "fail" flatness, so the
+  // recursion expands to its full 2^18 leaves and emits ~260k coincident points
+  // per segment (which then hang earcut for seconds). A curve whose control
+  // polygon spans less than DEGENERATE_EPS cannot deviate visibly from a point;
+  // emit the endpoint and stop. Normal curves never get here (their polygon
+  // span dwarfs the epsilon long before flatness passes), so output for them
+  // is pixel-identical.
+  const span = Math.abs(x1 - x0) + Math.abs(y1 - y0)
+    + Math.abs(x2 - x1) + Math.abs(y2 - y1)
+    + Math.abs(x3 - x2) + Math.abs(y3 - y2);
+  if (span < DEGENERATE_EPS) { out.push(x3, y3); return; }
   const d1 = Math.abs((x1 - x3) * dy - (y1 - y3) * dx);
   const d2 = Math.abs((x2 - x3) * dy - (y2 - y3) * dx);
   if ((d1 + d2) * (d1 + d2) <= FLATTEN_TOL * FLATTEN_TOL * (dx * dx + dy * dy)) {

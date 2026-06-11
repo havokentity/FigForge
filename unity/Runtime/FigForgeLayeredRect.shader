@@ -454,10 +454,15 @@ Shader "FigForge/LayeredRect4"
 
                 fixed4 base = compositeFill(p, size);
                 fixed4 strokeBase = compositeStroke(p, size);
-                float hasFillGradient = max(max(_FillFlags.x, _FillFlags.y), max(_FillFlags.z, _FillFlags.w));
-                float hasStrokeGradient = max(max(_StrokeFlags.x, _StrokeFlags.y), max(_StrokeFlags.z, _StrokeFlags.w));
-                if (_FillCount > 1.5 || hasFillGradient > 0.5) base.rgb = figmaToProjectRgb(base.rgb);
-                if (_StrokeCount > 1.5 || hasStrokeGradient > 0.5) strokeBase.rgb = figmaToProjectRgb(strokeBase.rgb);
+                // Every paint reaches the shader in Figma (sRGB) space: gradient texels
+                // come from a linear (non-sRGB-sampled) texture and solids are set via
+                // SetVector, which skips Unity's bind-time sRGB→linear conversion. The
+                // stack is composited in sRGB (matching Figma) and converted to the
+                // project space exactly once here — mirroring RoundedRect's unpackColor.
+                // (Converting only multi-fill/gradient stacks double-converted solids
+                // that were SetColor-bound: too dark in Linear projects.)
+                base.rgb = figmaToProjectRgb(base.rgb);
+                strokeBase.rgb = figmaToProjectRgb(strokeBase.rgb);
                 float fillCov = 1.0 - smoothstep(-edgeAa, edgeAa, d);
                 fixed4 shape = fixed4(base.rgb, base.a * fillCov);
                 float shapeCov = fillCov;

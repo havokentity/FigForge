@@ -22,6 +22,9 @@ namespace FigForge
 
         void Awake() { Apply(); }
         void OnEnable() { Apply(); }
+        // Disabled mid-interaction would re-enable stuck on the hover/press sprite —
+        // clear the flags and restore normal (same pattern as FigForgeButtonStateObjects).
+        void OnDisable() { _over = false; _down = false; Apply(); }
 
         public void OnPointerEnter(PointerEventData e) { _over = true; Apply(); }
         public void OnPointerExit(PointerEventData e) { _over = false; _down = false; Apply(); }

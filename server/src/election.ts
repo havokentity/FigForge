@@ -18,20 +18,51 @@ export class FigForgeNode implements PluginSender {
   private role: Role = 'follower';
   private leader: Leader | null = null;
   private follower = new Follower();
+  // Single-flight takeover guard — see tryBecomeLeader().
+  private takeover: Promise<void> | null = null;
 
   async start(): Promise<Role> {
     await this.tryBecomeLeader();
     return this.role;
   }
 
-  private async tryBecomeLeader(): Promise<void> {
+  /**
+   * Attempt to bind the leader port, with at most one attempt in flight.
+   *
+   * Why the mutex: two concurrent send() calls can both observe a dead leader
+   * and both race in here. Each used to construct its own listening Leader;
+   * the loser's EADDRINUSE catch then stomped role/leader back to follower
+   * AFTER the winner had installed itself — orphaning a bound Leader nobody
+   * references. The orphan holds the port forever, so the node can never
+   * become leader again (permanently degraded). Now the first caller performs
+   * the takeover and concurrent callers await the same promise.
+   */
+  private tryBecomeLeader(): Promise<void> {
+    if (!this.takeover) {
+      this.takeover = this.performTakeover().finally(() => {
+        // Clear on settle (success or failure alike) so a future dead-leader
+        // detection starts a fresh attempt instead of awaiting a stale,
+        // already-settled promise.
+        this.takeover = null;
+      });
+    }
+    return this.takeover;
+  }
+
+  private async performTakeover(): Promise<void> {
+    // Late-joiner guard: a caller queued behind a finished takeover (mutex
+    // already cleared) must not create a SECOND Leader next to a live one —
+    // binding would fail against our own port and the catch below would
+    // wrongly demote us, orphaning the existing listening Leader.
+    if (this.leader) return;
     const leader = new Leader();
     try {
       await leader.listen();
       this.leader = leader;
       this.role = 'leader';
     } catch {
-      // Port taken → someone else is leader; act as follower.
+      // Port taken → someone else is leader; act as follower. Close the
+      // never-bound Leader so its WebSocketServer can't linger.
       leader.close();
       this.leader = null;
       this.role = 'follower';

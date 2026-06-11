@@ -7,6 +7,7 @@
 // =============================================================================
 
 using System.Collections.Generic;
+using System.Globalization;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -53,8 +54,10 @@ namespace FigForge
                 else if (value == "off" || value == "0") toggle.isOn = false;
             }
 
+            // Manifest values are invariant-format ("1.5") — parse culture-invariant so
+            // comma-decimal locales (de-DE etc.) don't misread or reject them.
             var slider = control as Slider;
-            if (slider != null && float.TryParse(value, out var v)) slider.value = v;
+            if (slider != null && float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) slider.value = v;
 
             // A slider owns its read-out formatting (FigForgeSlider rewrites it on the
             // value assignment above — integer by default); stamping the raw manifest

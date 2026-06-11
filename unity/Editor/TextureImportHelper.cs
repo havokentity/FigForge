@@ -78,26 +78,39 @@ namespace FigForge
 
             AssetDatabase.Refresh();
 
+            // Two-phase: apply importer settings for EVERY sprite inside one batch
+            // (SaveAndReimport is deferred — StopAssetEditing flushes them as a single
+            // import pass instead of N one-by-one reimports), THEN load the results.
+            // Loading inside the batch would return the pre-settings import (not yet
+            // a Sprite), so the load loop must stay outside.
+            AssetDatabase.StartAssetEditing();
+            try
+            {
+                foreach (var asset in manifest.assets)
+                {
+                    var dst = $"{targetFolder}/{asset.file}";
+                    var importer = AssetImporter.GetAtPath(dst) as TextureImporter;
+                    if (importer == null) continue;
+
+                    importer.textureType = TextureImporterType.Sprite;
+                    importer.spriteImportMode = SpriteImportMode.Single;
+                    importer.alphaIsTransparency = true;
+                    importer.mipmapEnabled = settings.mipmaps && !settings.disableMipForUI;
+                    importer.filterMode = settings.filterMode;
+                    importer.textureCompression = settings.compression;
+                    importer.maxTextureSize = settings.autoMaxSize ? AutoMax(dst) : settings.maxSize;
+
+                    if (borders.TryGetValue(asset.file, out var b))
+                        importer.spriteBorder = new Vector4(b.left, b.bottom, b.right, b.top);
+
+                    importer.SaveAndReimport();
+                }
+            }
+            finally { AssetDatabase.StopAssetEditing(); }
+
             foreach (var asset in manifest.assets)
             {
-                var dst = $"{targetFolder}/{asset.file}";
-                var importer = AssetImporter.GetAtPath(dst) as TextureImporter;
-                if (importer == null) continue;
-
-                importer.textureType = TextureImporterType.Sprite;
-                importer.spriteImportMode = SpriteImportMode.Single;
-                importer.alphaIsTransparency = true;
-                importer.mipmapEnabled = settings.mipmaps && !settings.disableMipForUI;
-                importer.filterMode = settings.filterMode;
-                importer.textureCompression = settings.compression;
-                importer.maxTextureSize = settings.autoMaxSize ? AutoMax(dst) : settings.maxSize;
-
-                if (borders.TryGetValue(asset.file, out var b))
-                    importer.spriteBorder = new Vector4(b.left, b.bottom, b.right, b.top);
-
-                importer.SaveAndReimport();
-
-                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(dst);
+                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>($"{targetFolder}/{asset.file}");
                 if (sprite != null) result[asset.file] = sprite;
             }
 

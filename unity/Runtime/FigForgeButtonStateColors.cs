@@ -28,6 +28,9 @@ namespace FigForge
 
         void Awake() { ResolveTarget(); Apply(); }
         void OnEnable() { ResolveTarget(); Apply(); }
+        // Disabled mid-interaction would re-enable stuck on the hover/press fill —
+        // clear the flags and restore normal (same pattern as FigForgeButtonStateObjects).
+        void OnDisable() { _over = false; _down = false; Apply(); }
 
         public void OnPointerEnter(PointerEventData e) { _over = true; Apply(); }
         public void OnPointerExit(PointerEventData e) { _over = false; _down = false; Apply(); }

@@ -1,10 +1,18 @@
 // Zod input schemas for MCP tools.
 import { z } from 'zod';
 
-// Figma node ids use a colon (e.g. "123:456"), never a hyphen.
+// Figma node ids use a colon (e.g. "123:456"), never a hyphen. Nodes inside
+// component instances get instance-path ids: "I" + one or more ";"-separated
+// "num:num" segments (e.g. "I123:4;567:8" = node 567:8 inside instance 123:4).
+// get_selection/get_document hand those back verbatim, so the tools must
+// accept them too — a plain-id-only regex made every instance descendant
+// unaddressable.
 export const figmaNodeId = z
   .string()
-  .regex(/^[0-9]+:[0-9]+$/, 'Expected a Figma node id like "123:456" (colon, not hyphen).');
+  .regex(
+    /^(?:[0-9]+:[0-9]+|I[0-9]+:[0-9]+(?:;[0-9]+:[0-9]+)*)$/,
+    'Expected a Figma node id like "123:456" or an instance path like "I123:4;567:8" (colon, not hyphen).'
+  );
 
 export const screenshotFormat = z.enum(['PNG', 'SVG', 'JPG']).default('PNG');
 

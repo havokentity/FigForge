@@ -43,10 +43,18 @@ namespace FigForge
         Mesh _bakeMesh;
         RenderTexture _cachedSurface;
         string _cachedSurfaceKey;
+        // uint twin of _cachedSurfaceKey — the per-canvas-update validity check compares
+        // this instead of building the key string, so the steady state allocates nothing.
+        uint _cachedSurfaceHash;
         int _cachedSurfaceWidth;
         int _cachedSurfaceHeight;
         FigForgePageCompositor _pageCompositor;
         readonly Vector3[] _worldCorners = new Vector3[4];
+        // Cached surface scale keyed by the projection camera — recomputed only when the
+        // camera actually moves, so an idle SceneView doesn't thrash the quantized scale
+        // across a 0.25 boundary and re-bake the cached surface every canvas update.
+        float _cachedScaleFactor = -1f;
+        Matrix4x4 _scaleCamKey;
 
         // ---- IFigForgeCompositorSource ----------------------------------------
         // Tier-2 blends ride the page compositor (real-backdrop blending) alongside
@@ -283,23 +291,27 @@ namespace FigForge
             var bake = EnsureBakeMaterial();
             if (bake == null || !HasMesh) return;
 
-            if (!CurrentSurfaceDescriptor(out int width, out int height, out float pad, out float scale, out string key))
+            if (!CurrentSurfaceDescriptor(out int width, out int height, out float pad, out float scale, out uint hash))
                 return;
 
-            if (_cachedSurface != null && _cachedSurfaceKey == key
+            if (_cachedSurface != null && _cachedSurfaceHash == hash
                 && _cachedSurfaceWidth == width && _cachedSurfaceHeight == height)
                 return;
 
             ReleaseSurface();
             BuildBakeMesh(pad, scale, rectTransform.rect);
+            // The string key is built only here, off the re-bake path — the steady-state
+            // validity check compares the uint hash without allocating.
+            string key = "vec:" + hash.ToString("X8");
             _cachedSurface = FigForgeCompositorCache.AcquireMesh(key, width, height, _bakeMesh, bake);
             if (_cachedSurface == null) return;
             _cachedSurfaceKey = key;
+            _cachedSurfaceHash = hash;
             _cachedSurfaceWidth = width;
             _cachedSurfaceHeight = height;
         }
 
-        bool CurrentSurfaceDescriptor(out int width, out int height, out float pad, out float scale, out string key)
+        bool CurrentSurfaceDescriptor(out int width, out int height, out float pad, out float scale, out uint hash)
         {
             scale = SurfaceScaleFactor();
             var rect = rectTransform.rect;
@@ -307,11 +319,11 @@ namespace FigForge
             int limit = MaxSurfaceTextureSize();
             width = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.width + 2f * pad) * scale), 1, limit);
             height = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.height + 2f * pad) * scale), 1, limit);
-            key = BuildSurfaceCacheKey(width, height, pad, scale, rect);
-            return !string.IsNullOrEmpty(key);
+            hash = ComputeSurfaceHash(width, height, pad, scale, rect);
+            return true;
         }
 
-        string BuildSurfaceCacheKey(int width, int height, float pad, float scale, Rect rect)
+        uint ComputeSurfaceHash(int width, int height, float pad, float scale, Rect rect)
         {
             unchecked
             {
@@ -324,7 +336,7 @@ namespace FigForge
                 Hash(ref hash, scale);
                 Hash(ref hash, rect.width);
                 Hash(ref hash, rect.height);
-                return "vec:" + hash.ToString("X8");
+                return hash;
             }
         }
 
@@ -333,10 +345,10 @@ namespace FigForge
             if (_cachedSurface == null || string.IsNullOrEmpty(_cachedSurfaceKey))
                 return;
 
-            if (!CurrentSurfaceDescriptor(out int width, out int height, out _, out _, out string key))
+            if (!CurrentSurfaceDescriptor(out int width, out int height, out _, out _, out uint hash))
                 return;
 
-            if (_cachedSurfaceKey == key && _cachedSurfaceWidth == width && _cachedSurfaceHeight == height)
+            if (_cachedSurfaceHash == hash && _cachedSurfaceWidth == width && _cachedSurfaceHeight == height)
                 return;
 
             ReleaseSurface();
@@ -392,6 +404,7 @@ namespace FigForge
                 FigForgeCompositorCache.Release(_cachedSurfaceKey);
             _cachedSurface = null;
             _cachedSurfaceKey = null;
+            _cachedSurfaceHash = 0;
             _cachedSurfaceWidth = 0;
             _cachedSurfaceHeight = 0;
         }
@@ -399,8 +412,19 @@ namespace FigForge
         // ---- Surface scale (mirrors FigForgeLayeredRect so positions line up) --
         float SurfaceScaleFactor()
         {
+            // The only per-frame-varying input is the camera projection (used by
+            // RawSurfaceScaleFactor via WorldToScreenPoint). Reuse the cached quantized
+            // scale unless the camera actually moved; rect-size changes invalidate it via
+            // OnRectTransformDimensionsChange. This stops the every-canvas-update re-bake
+            // loop where float jitter flipped the 0.25-quantized scale on an idle SceneView.
+            Camera cam = ProjectionCamera();
+            Matrix4x4 camKey = cam != null ? cam.projectionMatrix * cam.worldToCameraMatrix : Matrix4x4.identity;
+            if (_cachedScaleFactor > 0f && camKey == _scaleCamKey)
+                return _cachedScaleFactor;
+            _scaleCamKey = camKey;
             float scale = Mathf.Clamp(RawSurfaceScaleFactor(), 1f, MaxCachedSurfaceScale);
-            return Mathf.Ceil(scale * 4f) * 0.25f;
+            _cachedScaleFactor = Mathf.Ceil(scale * 4f) * 0.25f;
+            return _cachedScaleFactor;
         }
 
         float RawSurfaceScaleFactor()
@@ -535,6 +559,7 @@ namespace FigForge
         protected override void OnRectTransformDimensionsChange()
         {
             base.OnRectTransformDimensionsChange();
+            _cachedScaleFactor = -1f; // rect size feeds the surface scale — re-evaluate it
             ReleaseSurface();
             MarkPageCompositorDirty();
             SetVerticesDirty();

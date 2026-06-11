@@ -223,6 +223,9 @@ namespace FigForge
         Texture2D _paintTexture;
         RenderTexture _cachedSurface;
         string _cachedSurfaceKey;
+        // uint twin of _cachedSurfaceKey — the per-canvas-update validity check compares
+        // this instead of building the key string, so the steady state allocates nothing.
+        uint _cachedSurfaceHash;
         int _cachedSurfaceWidth;
         int _cachedSurfaceHeight;
         readonly Vector3[] _worldCorners = new Vector3[4];
@@ -230,7 +233,11 @@ namespace FigForge
         // camera actually moves, so an idle SceneView doesn't thrash the quantized scale
         // across a 0.25 boundary and re-bake the cached surface every canvas update.
         float _cachedScaleFactor = -1f;
+        float _cachedRawScaleFactor = -1f;
         Matrix4x4 _scaleCamKey;
+        // RefreshRecipe runs on the per-canvas-update validity path — cache the visible
+        // counts so the (serialized, debug-facing) string is only rebuilt on change.
+        int _recipeFills = -1, _recipeStrokes = -1, _recipeEffects = -1;
         FigForgePageCompositor _pageCompositor;
 
         public IReadOnlyList<FigForgeFill> Fills => fills;
@@ -544,10 +551,16 @@ namespace FigForge
             ApplyBlendState(target, alphaBlend);
             target.SetFloat("_FillCount", Mathf.Min(VisibleFillCount(), 4));
             target.SetVector("_FillFlags", FillFlags());
-            target.SetColor("_FillColor0", FillColor(0));
-            target.SetColor("_FillColor1", FillColor(1));
-            target.SetColor("_FillColor2", FillColor(2));
-            target.SetColor("_FillColor3", FillColor(3));
+            // All paint/shadow tints go through SetVector, NOT SetColor: in a Linear
+            // project Unity sRGB→linear-converts Color-typed properties at bind time,
+            // but the shader composites paints in Figma (sRGB) space and converts once
+            // itself via figmaToProjectRgb — mirroring RoundedRect's unpackColor, which
+            // also receives raw sRGB (vertex bytes) and converts exactly once. SetColor
+            // here double-converted multi-fill solids and non-black shadow tints.
+            target.SetVector("_FillColor0", FillColor(0));
+            target.SetVector("_FillColor1", FillColor(1));
+            target.SetVector("_FillColor2", FillColor(2));
+            target.SetVector("_FillColor3", FillColor(3));
             target.SetVector("_FillKind", FillKind());
             target.SetVector("_FillDir0", FillDir(0));
             target.SetVector("_FillDir1", FillDir(1));
@@ -555,10 +568,10 @@ namespace FigForge
             target.SetVector("_FillDir3", FillDir(3));
             target.SetFloat("_StrokeCount", Mathf.Min(VisibleStrokeCount(), 4));
             target.SetVector("_StrokeFlags", StrokeFlags());
-            target.SetColor("_StrokeColor0", StrokeColor(0));
-            target.SetColor("_StrokeColor1", StrokeColor(1));
-            target.SetColor("_StrokeColor2", StrokeColor(2));
-            target.SetColor("_StrokeColor3", StrokeColor(3));
+            target.SetVector("_StrokeColor0", StrokeColor(0));
+            target.SetVector("_StrokeColor1", StrokeColor(1));
+            target.SetVector("_StrokeColor2", StrokeColor(2));
+            target.SetVector("_StrokeColor3", StrokeColor(3));
             target.SetVector("_StrokeKind", StrokeKind());
             target.SetVector("_StrokeDir0", StrokeDir(0));
             target.SetVector("_StrokeDir1", StrokeDir(1));
@@ -571,10 +584,10 @@ namespace FigForge
             var rt = rectTransform.rect;
             target.SetVector("_Size", new Vector4(Mathf.Max(1f, rt.width), Mathf.Max(1f, rt.height), 0, 0));
             target.SetFloat("_ShadowCount", Mathf.Min(VisibleDropShadowCount(), 4));
-            target.SetColor("_ShadowColor0", ShadowColor(0));
-            target.SetColor("_ShadowColor1", ShadowColor(1));
-            target.SetColor("_ShadowColor2", ShadowColor(2));
-            target.SetColor("_ShadowColor3", ShadowColor(3));
+            target.SetVector("_ShadowColor0", ShadowColor(0));
+            target.SetVector("_ShadowColor1", ShadowColor(1));
+            target.SetVector("_ShadowColor2", ShadowColor(2));
+            target.SetVector("_ShadowColor3", ShadowColor(3));
             target.SetVector("_ShadowOffset0", ShadowOffset(0));
             target.SetVector("_ShadowOffset1", ShadowOffset(1));
             target.SetVector("_ShadowOffset2", ShadowOffset(2));
@@ -585,10 +598,10 @@ namespace FigForge
             target.SetVector("_ShadowParams3", ShadowParams(3));
             target.SetVector("_ShadowBehind", ShadowBehindFlags());
             target.SetFloat("_InnerShadowCount", Mathf.Min(VisibleInnerShadowCount(), 4));
-            target.SetColor("_InnerShadowColor0", InnerShadowColor(0));
-            target.SetColor("_InnerShadowColor1", InnerShadowColor(1));
-            target.SetColor("_InnerShadowColor2", InnerShadowColor(2));
-            target.SetColor("_InnerShadowColor3", InnerShadowColor(3));
+            target.SetVector("_InnerShadowColor0", InnerShadowColor(0));
+            target.SetVector("_InnerShadowColor1", InnerShadowColor(1));
+            target.SetVector("_InnerShadowColor2", InnerShadowColor(2));
+            target.SetVector("_InnerShadowColor3", InnerShadowColor(3));
             target.SetVector("_InnerShadowOffset0", InnerShadowOffset(0));
             target.SetVector("_InnerShadowOffset1", InnerShadowOffset(1));
             target.SetVector("_InnerShadowOffset2", InnerShadowOffset(2));
@@ -679,7 +692,13 @@ namespace FigForge
 
         void RefreshRecipe()
         {
-            recipe = $"F{VisibleFillCount()}_S{VisibleStrokeCount()}_E{VisibleEffectCount()}";
+            int f = VisibleFillCount(), s = VisibleStrokeCount(), e = VisibleEffectCount();
+            if (f == _recipeFills && s == _recipeStrokes && e == _recipeEffects && !string.IsNullOrEmpty(recipe))
+                return;
+            _recipeFills = f;
+            _recipeStrokes = s;
+            _recipeEffects = e;
+            recipe = $"F{f}_S{s}_E{e}";
         }
 
         FigForgeStrokeLayer FirstStroke()
@@ -1032,7 +1051,7 @@ namespace FigForge
         {
             float pad = MeshPad();
             var rect = rectTransform.rect;
-            float scale = RawSurfaceScaleFactor();
+            float scale = RawScaleFactorCached();
             int limit = MaxSurfaceTextureSize();
             return scale > MaxCachedSurfaceScale
                 || Mathf.CeilToInt(Mathf.Max(1f, rect.width + 2f * pad) * scale) >= limit
@@ -1046,9 +1065,9 @@ namespace FigForge
 
             EnsurePaintTexture();
             float scale = SurfaceScaleFactor();
-            if (!CurrentSurfaceDescriptor(out int width, out int height, out float pad, out string key))
+            if (!CurrentSurfaceDescriptor(out int width, out int height, out float pad, out uint hash))
                 return;
-            if (_cachedSurface != null && _cachedSurfaceKey == key && _cachedSurfaceWidth == width && _cachedSurfaceHeight == height)
+            if (_cachedSurface != null && _cachedSurfaceHash == hash && _cachedSurfaceWidth == width && _cachedSurfaceHeight == height)
                 return;
 
             ReleaseCachedSurface();
@@ -1056,9 +1075,13 @@ namespace FigForge
             var blurMaterial = layerBlur.x > 0.5f ? EnsureBlurMaterial() : null;
             var scaledBlur = new Vector4(layerBlur.x, layerBlur.y, layerBlur.z * scale, layerBlur.w * scale);
             UpdateResolverMaterialProperties(bakeMaterial, 1f, false, true, true, pad, false);
+            // The string key is built only here, off the re-bake path — the steady-state
+            // validity check compares the uint hash without allocating.
+            string key = hash.ToString("X8");
             _cachedSurface = FigForgeCompositorCache.Acquire(key, width, height, _paintTexture, bakeMaterial, blurMaterial, scaledBlur);
             if (_cachedSurface == null) return;
             _cachedSurfaceKey = key;
+            _cachedSurfaceHash = hash;
             _cachedSurfaceWidth = width;
             _cachedSurfaceHeight = height;
         }
@@ -1069,6 +1092,7 @@ namespace FigForge
                 FigForgeCompositorCache.Release(_cachedSurfaceKey);
             _cachedSurface = null;
             _cachedSurfaceKey = null;
+            _cachedSurfaceHash = 0;
             _cachedSurfaceWidth = 0;
             _cachedSurfaceHeight = 0;
         }
@@ -1124,6 +1148,21 @@ namespace FigForge
 
         float SurfaceScaleFactor()
         {
+            RefreshScaleCache();
+            return _cachedScaleFactor;
+        }
+
+        // Raw (unquantized, unclamped) scale through the same camera-keyed cache —
+        // WouldCacheHitTextureLimit also runs per canvas update and must not redo the
+        // WorldToScreenPoint projection while nothing moves.
+        float RawScaleFactorCached()
+        {
+            RefreshScaleCache();
+            return _cachedRawScaleFactor;
+        }
+
+        void RefreshScaleCache()
+        {
             // The only per-frame-varying input is the camera projection (used by
             // RawSurfaceScaleFactor via WorldToScreenPoint). Reuse the cached quantized
             // scale unless the camera actually moved; rect-size changes invalidate it via
@@ -1132,11 +1171,11 @@ namespace FigForge
             Camera cam = ProjectionCamera();
             Matrix4x4 camKey = cam != null ? cam.projectionMatrix * cam.worldToCameraMatrix : Matrix4x4.identity;
             if (_cachedScaleFactor > 0f && camKey == _scaleCamKey)
-                return _cachedScaleFactor;
+                return;
             _scaleCamKey = camKey;
-            float scale = Mathf.Clamp(RawSurfaceScaleFactor(), 1f, MaxCachedSurfaceScale);
+            _cachedRawScaleFactor = RawSurfaceScaleFactor();
+            float scale = Mathf.Clamp(_cachedRawScaleFactor, 1f, MaxCachedSurfaceScale);
             _cachedScaleFactor = Mathf.Ceil(scale * 4f) * 0.25f;
-            return _cachedScaleFactor;
         }
 
         float RawSurfaceScaleFactor()
@@ -1200,7 +1239,7 @@ namespace FigForge
         }
 #endif
 
-        bool CurrentSurfaceDescriptor(out int width, out int height, out float pad, out string key)
+        bool CurrentSurfaceDescriptor(out int width, out int height, out float pad, out uint hash)
         {
             NormalizeLists();
             RefreshRecipe();
@@ -1210,8 +1249,8 @@ namespace FigForge
             int limit = MaxSurfaceTextureSize();
             width = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.width + 2f * pad) * scale), 1, limit);
             height = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1f, rect.height + 2f * pad) * scale), 1, limit);
-            key = BuildSurfaceCacheKey(width, height, pad);
-            return !string.IsNullOrEmpty(key);
+            hash = ComputeSurfaceHash(width, height, pad);
+            return true;
         }
 
         static int MaxSurfaceTextureSize()
@@ -1234,10 +1273,10 @@ namespace FigForge
                 return;
             }
 
-            if (!CurrentSurfaceDescriptor(out int width, out int height, out _, out string key))
+            if (!CurrentSurfaceDescriptor(out int width, out int height, out _, out uint hash))
                 return;
 
-            if (_cachedSurfaceKey == key && _cachedSurfaceWidth == width && _cachedSurfaceHeight == height)
+            if (_cachedSurfaceHash == hash && _cachedSurfaceWidth == width && _cachedSurfaceHeight == height)
                 return;
 
             ReleaseCachedSurface();
@@ -1251,7 +1290,7 @@ namespace FigForge
             CheckCachedSurfaceValidity();
         }
 
-        string BuildSurfaceCacheKey(int width, int height, float pad)
+        uint ComputeSurfaceHash(int width, int height, float pad)
         {
             unchecked
             {
@@ -1290,7 +1329,7 @@ namespace FigForge
                     visibleEffects++;
                 }
 
-                return hash.ToString("X8");
+                return hash;
             }
         }
 
@@ -1405,7 +1444,16 @@ namespace FigForge
             NormalizeLists();
             RefreshRecipe();
             ReleaseCachedSurface();
-            UpdatePageCompositorRegistration();
+            // UpdatePageCompositorRegistration can AddComponent (FindOrCreatePageCompositor),
+            // which Unity disallows inside OnValidate ("SendMessage cannot be called during
+            // OnValidate") — defer it to the next editor tick, guarding against the
+            // component being destroyed or disabled in between.
+            UnityEditor.EditorApplication.delayCall += () =>
+            {
+                if (this == null || !isActiveAndEnabled) return;
+                UpdatePageCompositorRegistration();
+                MarkPageCompositorDirty();
+            };
             MarkPageCompositorDirty();
             base.OnValidate();
             SetVerticesDirty();
@@ -1429,18 +1477,11 @@ namespace FigForge
             Hash(ref hash, paint.dir.x);
             Hash(ref hash, paint.dir.y);
             if (paint.gradient == null) return;
-            var colors = paint.gradient.colorKeys;
-            for (int i = 0; i < colors.Length; i++)
-            {
-                Hash(ref hash, colors[i].time);
-                Hash(ref hash, colors[i].color);
-            }
-            var alphas = paint.gradient.alphaKeys;
-            for (int i = 0; i < alphas.Length; i++)
-            {
-                Hash(ref hash, alphas[i].time);
-                Hash(ref hash, alphas[i].alpha);
-            }
+            // Gradient.colorKeys/alphaKeys allocate a fresh array on every access and
+            // this runs per canvas update (CheckCachedSurfaceValidity) — sample the
+            // gradient at fixed stops instead; Evaluate is allocation-free.
+            for (int i = 0; i <= 8; i++)
+                Hash(ref hash, paint.gradient.Evaluate(i / 8f));
         }
 
         static void Hash(ref uint hash, FigForgeStrokeLayer stroke)

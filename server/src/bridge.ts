@@ -26,12 +26,36 @@ export class Bridge {
   attach(socket: WebSocket): void {
     if (this.socket) {
       try { this.socket.close(); } catch { /* ignore */ }
+      // In-flight requests went out over the old connection; the replacement
+      // plugin session has no knowledge of their requestIds, so no response
+      // can ever arrive. Fail them now instead of letting each caller sit
+      // out the full timeout.
+      this.failAllPending('Figma plugin reconnected; in-flight request dropped.');
     }
     this.socket = socket;
     socket.on('message', (raw) => this.onMessage(raw.toString()));
-    socket.on('close', () => {
-      if (this.socket === socket) this.socket = null;
-    });
+    // Fail pending work the moment the plugin goes away — otherwise a
+    // mid-export disconnect leaves every caller hanging for the full
+    // REQUEST_TIMEOUT_MS before it learns anything.
+    const detach = () => {
+      if (this.socket !== socket) return; // an attach() already replaced us
+      this.socket = null;
+      this.failAllPending('Figma plugin disconnected.');
+    };
+    socket.on('close', detach);
+    // ws emits 'close' after 'error', but handle 'error' directly too: it
+    // fails callers without waiting on the close handshake, and an unhandled
+    // 'error' event on the socket would crash the process.
+    socket.on('error', detach);
+  }
+
+  /** Resolve every pending request with an error and cancel its timer. */
+  private failAllPending(message: string): void {
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.resolve({ error: message });
+    }
+    this.pending.clear();
   }
 
   private onMessage(raw: string): void {

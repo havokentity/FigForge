@@ -28,6 +28,9 @@ namespace FigForge
         bool _dragging;
         bool _allowElastic; // true while a drag/flick is in flight or settling back
 
+        CanvasGroup _scrollbarGroup;  // lazy; hides the bar without fighting base SetActive
+        bool _scrollbarSuppressed;    // last state applied to the group
+
         public override void OnBeginDrag(PointerEventData eventData)
         {
             _dragging = true;
@@ -63,17 +66,31 @@ namespace FigForge
             ClampToRange();
         }
 
-        // Stock AutoHide re-activates the bar each frame for any overflow > 0.01px; this
-        // runs after it and re-hides when the overflow is within the tolerance, so the
-        // net state at render time is correct (no flicker).
+        // Stock AutoHide re-activates the bar every frame for ANY overflow > 0.01px, so
+        // fighting it with SetActive(false) here toggled the GameObject twice per frame
+        // forever in the tolerance window — a canvas rebuild every frame. The bar is a
+        // pure overlay (AutoHide, never expand-viewport), so the GameObject's active
+        // state is left entirely to the base ScrollRect and the tolerance hides the bar
+        // visually instead: a CanvasGroup zeroes alpha and blocks interaction. Only a
+        // change in the desired state touches the group, so steady frames are free.
         void EnforceScrollbarTolerance()
         {
             if (verticalScrollbar == null || content == null || viewport == null) return;
-            if (verticalScrollbarVisibility == ScrollbarVisibility.Permanent) return;
             float overflow = content.rect.height - viewport.rect.height;
-            if (overflow <= Mathf.Max(0.01f, scrollbarHideTolerance)
-                && verticalScrollbar.gameObject.activeSelf)
-                verticalScrollbar.gameObject.SetActive(false);
+            bool suppress = verticalScrollbarVisibility != ScrollbarVisibility.Permanent
+                && overflow <= Mathf.Max(0.01f, scrollbarHideTolerance);
+            if (_scrollbarGroup == null)
+            {
+                if (!suppress) return; // visible is the default — nothing to undo yet
+                _scrollbarGroup = verticalScrollbar.GetComponent<CanvasGroup>();
+                if (_scrollbarGroup == null) _scrollbarGroup = verticalScrollbar.gameObject.AddComponent<CanvasGroup>();
+                _scrollbarSuppressed = !suppress; // force the first apply below
+            }
+            if (suppress == _scrollbarSuppressed) return;
+            _scrollbarSuppressed = suppress;
+            _scrollbarGroup.alpha = suppress ? 0f : 1f;
+            _scrollbarGroup.interactable = !suppress;
+            _scrollbarGroup.blocksRaycasts = !suppress;
         }
 
         bool InRange()

@@ -19,7 +19,7 @@ namespace FigForge
     {
         public TMP_Dropdown dropdown;
 
-        readonly HashSet<int> _styledLists = new HashSet<int>();
+        Transform _styledList; // popup already styled — alive only while it stays open
 
         void Awake()
         {
@@ -28,18 +28,23 @@ namespace FigForge
 
         void OnEnable()
         {
-            _styledLists.Clear();
+            _styledList = null;
             if (dropdown == null) dropdown = GetComponent<TMP_Dropdown>();
         }
 
         void LateUpdate()
         {
+            // Cheapest gate first: TMP only holds a popup instance while expanded, so a
+            // closed dropdown costs one property read per frame — no canvas walk, no
+            // allocation. The walk in FindOpenList runs once per popup open; afterwards
+            // the cached Transform short-circuits (Unity's == turns it back to null the
+            // moment TMP destroys the popup, so a reopened popup is restyled).
+            if (dropdown == null || !dropdown.IsExpanded) { _styledList = null; return; }
+            if (_styledList != null) return;
             var list = FindOpenList();
             if (list == null) return;
-            int id = list.GetInstanceID();
-            if (_styledLists.Contains(id)) return;
             StyleList(list);
-            _styledLists.Add(id);
+            _styledList = list;
         }
 
         Transform FindOpenList()
@@ -57,8 +62,10 @@ namespace FigForge
             var rows = new List<FigForgeToggleStateColors>();
             foreach (var toggle in list.GetComponentsInChildren<Toggle>(true))
             {
-                var states = toggle.GetComponent<FigForgeToggleStateColors>()
-                    ?? toggle.GetComponentInChildren<FigForgeToggleStateColors>(true);
+                // No ?? here: in the editor a missing component comes back as Unity's
+                // fake-null stub, which ?? treats as found — explicit == null is safe.
+                var states = toggle.GetComponent<FigForgeToggleStateColors>();
+                if (states == null) states = toggle.GetComponentInChildren<FigForgeToggleStateColors>(true);
                 if (states != null && states.useShapeStyles) rows.Add(states);
             }
 

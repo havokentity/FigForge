@@ -333,9 +333,21 @@ namespace FigForge
 
             rt.anchorMin = V(t.anchorMin, 0.5f);
             rt.anchorMax = V(t.anchorMax, 0.5f);
+            // Pivot MUST be set before offsetMin/offsetMax: the offset setters pin
+            // the rect edges against the anchors whatever the current pivot is, so
+            // the rect lands identically for any pivot. (Setting pivot AFTER would
+            // drag the rect — anchoredPosition stays fixed, so the rect shifts until
+            // the new pivot point sits at the old one.) The mapper emits [0,1]
+            // (Figma's top-left in Unity pivot space) for rotated nodes so rotation
+            // spins about the same corner Figma does, [0.5,0.5] otherwise.
             rt.pivot = V(t.pivot, 0.5f);
             rt.offsetMin = V(t.offsetMin, 0f) * sf;
             rt.offsetMax = V(t.offsetMax, 0f) * sf;
+            // Sign convention: rotationZ is Figma's rotation in degrees, positive =
+            // counterclockwise on screen. uGUI is y-up with +Z out of the screen, so
+            // a +Z euler is also CCW on screen — pass through unchanged. (UxmlBuilder
+            // negates instead because UI Toolkit is y-down; the asymmetry is correct,
+            // don't "fix" it.)
             if (Mathf.Abs(t.rotationZ) > 0.001f)
                 rt.localEulerAngles = new Vector3(0, 0, t.rotationZ);
         }
@@ -714,6 +726,21 @@ namespace FigForge
 
             tmp.alignment = MapAlign(t.alignH, t.alignV);
             if (t.letterSpacing.HasValue) tmp.characterSpacing = t.letterSpacing.Value;
+            // Figma lineHeight is the baseline-to-baseline advance in px (the
+            // exporter already folded PERCENT → px). TMP has no px line-height:
+            // each wrap/newline advances faceInfo.lineHeight scaled to the render
+            // size, plus lineSpacing in 1/100-em units (TMP_Text.GenerateTextMesh:
+            // lineGap * baseScale + m_lineSpacing * currentEmScale, where baseScale
+            // = fontSize / faceInfo.pointSize * faceInfo.scale and currentEmScale =
+            // fontSize * 0.01 for UGUI). Solve for the lineSpacing that lands the
+            // requested advance — target and fontSize are both scaleFactor-scaled,
+            // so the em-relative offset is zoom-stable.
+            if (t.lineHeight.HasValue && tmp.font != null && tmp.font.faceInfo.pointSize > 0)
+            {
+                var face = tmp.font.faceInfo;
+                float defaultAdvance = face.lineHeight * (tmp.fontSize / face.pointSize) * face.scale;
+                tmp.lineSpacing = (t.lineHeight.Value * ctx.scaleFactor - defaultAdvance) / (tmp.fontSize * 0.01f);
+            }
             // Figma "auto width" text (WIDTH_AND_HEIGHT) hugs its content and never
             // wraps — so don't wrap, else a hair of width difference pushes a word
             // to the next line. Fixed-width/auto-height text still wraps.
@@ -2913,7 +2940,17 @@ namespace FigForge
         //      sits ≤4px below it — the creator's protective ~2px inset left a white
         //      sliver under the header divider that read as a grey band; rows now
         //      start flush with the header like the placed instances do in Figma.
+        //
+        // Counterpart constant: plugin/src/types.ts CANONICAL_SCHEMA — the plugin
+        // stamps its number into the manifest (canonicalSchema) and ManifestParser
+        // warns when the two differ. Bump BOTH together.
         internal const int CanonicalSchema = 48;
+
+        // Invariant culture for every signature number: signatures persist in the
+        // committed library asset, so a comma-decimal locale (de-DE, fr-FR, …) must
+        // format identically to en-US — otherwise those machines never match a
+        // stored signature and churn-regenerate every canonical prefab.
+        static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
@@ -2927,12 +2964,12 @@ namespace FigForge
         {
             var c = e.canonical;
             var sb = new System.Text.StringBuilder();
-            sb.Append("v=").Append(CanonicalSchema).Append(";k=").Append(kind).Append(";sf=").Append(sf.ToString("0.###"));
+            sb.Append("v=").Append(CanonicalSchema).Append(";k=").Append(kind).Append(";sf=").Append(sf.ToString("0.###", Inv));
             if (e.rect != null)
-                sb.Append(";sz=").Append(e.rect.w.ToString("0.###")).Append('x').Append(e.rect.h.ToString("0.###"));
+                sb.Append(";sz=").Append(e.rect.w.ToString("0.###", Inv)).Append('x').Append(e.rect.h.ToString("0.###", Inv));
             var sh = c.shape;
             if (sh != null)
-                sb.Append(";cr=").Append(sh.cornerRadius.ToString("0.###"))
+                sb.Append(";cr=").Append(sh.cornerRadius.ToString("0.###", Inv))
                   .Append(";f=").Append(SigF(sh.fill)).Append(";f2=").Append(SigF(sh.fill2))
                   .Append(";fg=").Append(SigGradient(sh.gradient))
                   .Append(";gt=").Append(SigF(sh.gradientTransform))
@@ -2942,8 +2979,8 @@ namespace FigForge
             if (sh != null && sh.shadow != null)
             {
                 var sd = sh.shadow;
-                sb.Append(";shc=").Append(SigF(sd.color)).Append(";sho=").Append(sd.offsetX.ToString("0.###")).Append(',').Append(sd.offsetY.ToString("0.###"))
-                  .Append(";shb=").Append(sd.blur.ToString("0.###")).Append(";shs=").Append(sd.spread.ToString("0.###"));
+                sb.Append(";shc=").Append(SigF(sd.color)).Append(";sho=").Append(sd.offsetX.ToString("0.###", Inv)).Append(',').Append(sd.offsetY.ToString("0.###", Inv))
+                  .Append(";shb=").Append(sd.blur.ToString("0.###", Inv)).Append(";shs=").Append(sd.spread.ToString("0.###", Inv));
             }
             var sc = c.stateColors;
             if (sc != null)
@@ -2959,7 +2996,7 @@ namespace FigForge
             if (c.checkShape != null)
             {
                 var cs = c.checkShape;
-                sb.Append(";ckcr=").Append(cs.cornerRadius.ToString("0.###"))
+                sb.Append(";ckcr=").Append(cs.cornerRadius.ToString("0.###", Inv))
                   .Append(";ckf=").Append(SigF(cs.fill)).Append(";ckf2=").Append(SigF(cs.fill2))
                   .Append(";ckfg=").Append(SigGradient(cs.gradient))
                   .Append(";ckgt=").Append(SigF(cs.gradientTransform))
@@ -2968,8 +3005,8 @@ namespace FigForge
             if (c.optionShape != null)
             {
                 var os = c.optionShape;
-                sb.Append(";oh=").Append(c.optionHeight.ToString("0.###"))
-                  .Append(";ocr=").Append(os.cornerRadius.ToString("0.###"))
+                sb.Append(";oh=").Append(c.optionHeight.ToString("0.###", Inv))
+                  .Append(";ocr=").Append(os.cornerRadius.ToString("0.###", Inv))
                   .Append(";of=").Append(SigF(os.fill)).Append(";of2=").Append(SigF(os.fill2))
                   .Append(";ofg=").Append(SigGradient(os.gradient))
                   .Append(";ogt=").Append(SigF(os.gradientTransform))
@@ -2977,8 +3014,8 @@ namespace FigForge
                 if (os.shadow != null)
                 {
                     var sd = os.shadow;
-                    sb.Append(";oshc=").Append(SigF(sd.color)).Append(";osho=").Append(sd.offsetX.ToString("0.###")).Append(',').Append(sd.offsetY.ToString("0.###"))
-                      .Append(";oshb=").Append(sd.blur.ToString("0.###")).Append(";oshs=").Append(sd.spread.ToString("0.###"));
+                    sb.Append(";oshc=").Append(SigF(sd.color)).Append(";osho=").Append(sd.offsetX.ToString("0.###", Inv)).Append(',').Append(sd.offsetY.ToString("0.###", Inv))
+                      .Append(";oshb=").Append(sd.blur.ToString("0.###", Inv)).Append(";oshs=").Append(sd.spread.ToString("0.###", Inv));
                 }
             }
             AppendShapeSig(sb, "pop", c.popupShape);
@@ -2992,8 +3029,8 @@ namespace FigForge
             if (c.itemShape != null)
             {
                 var ish = c.itemShape;
-                sb.Append(";ih=").Append(c.itemHeight.ToString("0.###"))
-                  .Append(";icr=").Append(ish.cornerRadius.ToString("0.###"))
+                sb.Append(";ih=").Append(c.itemHeight.ToString("0.###", Inv))
+                  .Append(";icr=").Append(ish.cornerRadius.ToString("0.###", Inv))
                   .Append(";if=").Append(SigF(ish.fill)).Append(";if2=").Append(SigF(ish.fill2))
                   .Append(";ifg=").Append(SigGradient(ish.gradient))
                   .Append(";igt=").Append(SigF(ish.gradientTransform))
@@ -3003,7 +3040,7 @@ namespace FigForge
             // data; real rows come from FigForgeList.SetItems at runtime) so distinct list
             // instances share one visual prefab instead of thrash-regenerating it.
             sb.Append(";iro=").Append(SigF(c.itemRollover)).Append(";ipr=").Append(SigF(c.itemPressed)).Append(";isel=").Append(SigF(c.itemSelected));
-            sb.Append(";hh=").Append(c.headerHeight.ToString("0.###"));
+            sb.Append(";hh=").Append(c.headerHeight.ToString("0.###", Inv));
             // Table grid: column count + the n×m cell texts. The rows are captured from
             // the MASTER's placed Row instances (shared by every placed table), so folding
             // them regenerates the prefab when a cell text is edited in Figma — without
@@ -3026,7 +3063,7 @@ namespace FigForge
             AppendShapeSig(sb, "sfl", c.fillShape);
             AppendShapeSig(sb, "thm", c.thumbShape);
             sb.Append(";thr=").Append(SigF(c.thumbRollover)).Append(";thp=").Append(SigF(c.thumbPressed));
-            sb.Append(";smin=").Append(c.minValue.ToString("0.###")).Append(";smax=").Append(c.maxValue.ToString("0.###")).Append(";slt=").Append(c.slots);
+            sb.Append(";smin=").Append(c.minValue.ToString("0.###", Inv)).Append(";smax=").Append(c.maxValue.ToString("0.###", Inv)).Append(";slt=").Append(c.slots);
             if (c.parts != null && c.parts.Count > 0)
             {
                 var keys = new List<string>(c.parts.Keys);
@@ -3055,7 +3092,7 @@ namespace FigForge
             sb.Append(";hasShape=").Append(sh != null ? 1 : 0).Append(";hasStates=").Append(hasStates ? 1 : 0);
             if (c.defLabelFont != null)
                 sb.Append(";lf=").Append(c.defLabelFont.family ?? "").Append('/').Append(c.defLabelFont.style ?? "");
-            if (c.defLabelFontSize.HasValue) sb.Append(";lfs=").Append(c.defLabelFontSize.Value.ToString("0.###"));
+            if (c.defLabelFontSize.HasValue) sb.Append(";lfs=").Append(c.defLabelFontSize.Value.ToString("0.###", Inv));
             return sb.ToString();
         }
 
@@ -3064,9 +3101,9 @@ namespace FigForge
             if (sh == null) return;
             sb.Append(';').Append(prefix).Append("asset=").Append(sh.asset ?? "")
               .Append(';').Append(prefix).Append("vec=").Append(SigVector(sh.vector))
-              .Append(';').Append(prefix).Append("op=").Append(sh.opacity.ToString("0.###"))
+              .Append(';').Append(prefix).Append("op=").Append(sh.opacity.ToString("0.###", Inv))
               .Append(';').Append(prefix).Append("bm=").Append(sh.blendMode ?? "")
-              .Append(';').Append(prefix).Append("cr=").Append(sh.cornerRadius.ToString("0.###"))
+              .Append(';').Append(prefix).Append("cr=").Append(sh.cornerRadius.ToString("0.###", Inv))
               .Append(';').Append(prefix).Append("f=").Append(SigF(sh.fill))
               .Append(';').Append(prefix).Append("f2=").Append(SigF(sh.fill2))
               .Append(';').Append(prefix).Append("fg=").Append(SigGradient(sh.gradient))
@@ -3086,13 +3123,13 @@ namespace FigForge
                     sb.Append(';').Append(prefix).Append("effect").Append(i).Append('=')
                       .Append(EffectKind(sd)).Append(',')
                       .Append(SigF(sd.color)).Append(',')
-                      .Append(sd.offsetX.ToString("0.###")).Append(',')
-                      .Append(sd.offsetY.ToString("0.###")).Append(',')
-                      .Append(sd.blur.ToString("0.###")).Append(',')
-                      .Append(sd.spread.ToString("0.###")).Append(',')
+                      .Append(sd.offsetX.ToString("0.###", Inv)).Append(',')
+                      .Append(sd.offsetY.ToString("0.###", Inv)).Append(',')
+                      .Append(sd.blur.ToString("0.###", Inv)).Append(',')
+                      .Append(sd.spread.ToString("0.###", Inv)).Append(',')
                       .Append(sd.blurMode ?? "").Append(',')
-                      .Append((sd.startBlur ?? 0f).ToString("0.###")).Append(',')
-                      .Append((sd.endBlur ?? 0f).ToString("0.###"));
+                      .Append((sd.startBlur ?? 0f).ToString("0.###", Inv)).Append(',')
+                      .Append((sd.endBlur ?? 0f).ToString("0.###", Inv));
                 }
         }
 
@@ -3102,7 +3139,7 @@ namespace FigForge
         }
 
         static string SigF(float[] a)
-            => a == null ? "_" : string.Join(",", System.Array.ConvertAll(a, x => x.ToString("0.###")));
+            => a == null ? "_" : string.Join(",", System.Array.ConvertAll(a, x => x.ToString("0.###", Inv)));
 
         // Compact, stable fingerprint of a vector drawing so geometry/colour edits
         // trigger a prefab regen. Folds counts + a rolling hash of verts/colours.
@@ -3133,15 +3170,15 @@ namespace FigForge
             sb.Append(f.gradient ?? "").Append(':').Append(SigF(f.transform));
             if (f.stops != null)
                 for (int i = 0; i < f.stops.Count; i++)
-                    sb.Append('|').Append(f.stops[i].position.ToString("0.###")).Append('=').Append(SigF(f.stops[i].color));
+                    sb.Append('|').Append(f.stops[i].position.ToString("0.###", Inv)).Append('=').Append(SigF(f.stops[i].color));
             return sb.ToString();
         }
 
         static string SigStroke(Stroke stroke, float[] legacyColor, float legacyWidth, string legacyAlign)
         {
             if (stroke != null)
-                return SigF(stroke.color) + "," + SigFill(stroke.fill) + "," + stroke.weight.ToString("0.###") + "," + (stroke.align ?? "") + "," + (stroke.dashed ? "d" : "s") + "," + SigDash(stroke.dashPattern);
-            return SigF(legacyColor) + "," + legacyWidth.ToString("0.###") + "," + (legacyAlign ?? "");
+                return SigF(stroke.color) + "," + SigFill(stroke.fill) + "," + stroke.weight.ToString("0.###", Inv) + "," + (stroke.align ?? "") + "," + (stroke.dashed ? "d" : "s") + "," + SigDash(stroke.dashPattern);
+            return SigF(legacyColor) + "," + legacyWidth.ToString("0.###", Inv) + "," + (legacyAlign ?? "");
         }
 
         static string SigDash(List<float> dashPattern)
@@ -3151,7 +3188,7 @@ namespace FigForge
             for (int i = 0; i < dashPattern.Count; i++)
             {
                 if (i > 0) sb.Append('/');
-                sb.Append(dashPattern[i].ToString("0.###"));
+                sb.Append(dashPattern[i].ToString("0.###", Inv));
             }
             return sb.ToString();
         }
@@ -3171,10 +3208,13 @@ namespace FigForge
             if (!CanonicalLibrary.TryParseKind(kind, out var k)) return;
             var entry = lib.entries.Find(en => en != null && en.kind == k && en.referenceName == refName);
             if (entry == null) { entry = new CanonicalLibrary.Entry { kind = k, referenceName = refName }; lib.entries.Add(entry); }
+            else if (entry.signature == signature && entry.prefab == prefab) return; // pure reuse — nothing to dirty
             entry.signature = signature;
             entry.prefab = prefab; // keep current (updates on regen; same ref on plain reuse)
+            // Dirty only — NO per-instance SaveAssets (a page with N controls would
+            // trigger N full project saves). The import pass ends with one
+            // AssetDatabase.SaveAssets() in FigForgeImporterWindow's finally blocks.
             UnityEditor.EditorUtility.SetDirty(lib);
-            UnityEditor.AssetDatabase.SaveAssets();
         }
 
         static CanonicalLibrary LoadOrCreateCanonicalLibrary()

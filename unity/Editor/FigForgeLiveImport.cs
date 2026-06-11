@@ -251,14 +251,37 @@ namespace FigForge
                 if (s.assets != null)
                     foreach (var a in s.assets)
                     {
-                        if (a == null || string.IsNullOrEmpty(a.name) || a.data == null) continue;
+                        if (a == null || string.IsNullOrEmpty(a.name)) continue;
                         // Flatten to the bare file name. Like ZipImporter, this
                         // neutralises any "../" path-traversal in the asset name
                         // so a crafted bundle can't escape the screen folder.
                         var assetName = Path.GetFileName(a.name);
                         if (string.IsNullOrEmpty(assetName)) continue;
-                        var bytes = new byte[a.data.Length];
-                        for (int i = 0; i < a.data.Length; i++) bytes[i] = (byte)a.data[i];
+                        byte[] bytes;
+                        if (!string.IsNullOrEmpty(a.b64))
+                        {
+                            // v2.0 plugin: PNG bytes as a base64 string (~1.33×
+                            // binary size on the wire vs ~3.7× for decimal
+                            // number[] text, and far cheaper to JSON-parse).
+                            try { bytes = Convert.FromBase64String(a.b64); }
+                            catch (FormatException e)
+                            {
+                                Debug.LogWarning($"[FigForge] live import: asset '{assetName}' has malformed base64 — skipped ({e.Message})");
+                                continue;
+                            }
+                        }
+                        else if (a.data != null)
+                        {
+                            // Legacy v1.0 plugin: bytes as a JSON number array.
+                            // Kept so an older plugin still works against this
+                            // importer during the 1.0 → 2.0 transition.
+                            // (JsonUtility can't union-type one field, hence a
+                            // separate `b64` field rather than string-or-array
+                            // detection on `data` itself.)
+                            bytes = new byte[a.data.Length];
+                            for (int i = 0; i < a.data.Length; i++) bytes[i] = (byte)a.data[i];
+                        }
+                        else continue;
                         File.WriteAllBytes(Path.Combine(folderAbs, assetName), bytes);
                     }
 
@@ -295,7 +318,9 @@ namespace FigForge
         [Serializable] class LiveBundle { public LiveProject project; public LiveScreen[] screens; }
         [Serializable] class LiveProject { public string name; public string initial; }
         [Serializable] class LiveScreen { public string name; public string manifest; public LiveAsset[] assets; public string section; public string role; }
-        [Serializable] class LiveAsset { public string name; public int[] data; }
+        // `b64` (base64 string) is the v2.0 wire format; `data` (number array)
+        // is the legacy v1.0 form — see the decode in ImportBundle.
+        [Serializable] class LiveAsset { public string name; public string b64; public int[] data; }
 
         // ---- project.json index (mirrors the plugin's downloadProjectBundle) ---
         [Serializable] class ProjIndex

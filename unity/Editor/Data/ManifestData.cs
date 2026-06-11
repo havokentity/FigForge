@@ -12,7 +12,8 @@ namespace FigForge
     public class Manifest
     {
         public string schema;
-        public string version;
+        public string version;          // checked against ManifestParser.SupportedManifestVersions
+        public int canonicalSchema;     // plugin's CANONICAL_SCHEMA (types.ts); 0 = pre-2.0 manifest
         public string generator;
         public string exportedAt;
         public ScreenInfo screen;

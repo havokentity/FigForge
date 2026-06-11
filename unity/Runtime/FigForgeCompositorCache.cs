@@ -7,10 +7,27 @@ namespace FigForge
     static class FigForgeCompositorCache
     {
         const long MaxBytes = 64L * 1024L * 1024L;
+        // Idle pooled RTs get their own (smaller) budget: the pool only ever hits on
+        // an EXACT size match (same-size re-bakes after eviction, enable/disable
+        // cycles), but surface sizes track rect size x camera scale, so after a
+        // resize the old-size buckets would otherwise pile up unreleased for the
+        // whole session. Total GPU residency is bounded by MaxBytes + MaxPooledBytes.
+        const long MaxPooledBytes = 16L * 1024L * 1024L;
         static readonly Dictionary<string, Entry> _entries = new Dictionary<string, Entry>();
-        static readonly Dictionary<string, Stack<RenderTexture>> _pool = new Dictionary<string, Stack<RenderTexture>>();
+        static readonly Dictionary<string, PoolBucket> _pool = new Dictionary<string, PoolBucket>();
         static long _bytes;
+        static long _pooledBytes;
         static int _clock;
+
+#if UNITY_EDITOR
+        // Statics reset on domain reload but the HideAndDontSave RTs survive it —
+        // without this hook every reload strands the live cache AND the pool on the
+        // GPU until the editor closes.
+        static FigForgeCompositorCache()
+        {
+            UnityEditor.AssemblyReloadEvents.beforeAssemblyReload += Clear;
+        }
+#endif
 
         public static RenderTexture Acquire(string key, int width, int height, Texture paintTexture, Material resolver,
                                             Material blur = null, Vector4 blurParams = default(Vector4))
@@ -103,22 +120,17 @@ namespace FigForge
         public static void Clear()
         {
             foreach (var kv in _entries)
-            {
-                if (kv.Value.texture != null)
-                    kv.Value.texture.Release();
-            }
+                ReleaseRT(kv.Value.texture);
             _entries.Clear();
 
-            foreach (var stack in _pool.Values)
+            foreach (var bucket in _pool.Values)
             {
-                while (stack.Count > 0)
-                {
-                    var rt = stack.Pop();
-                    if (rt != null) rt.Release();
-                }
+                while (bucket.stack.Count > 0)
+                    ReleaseRT(bucket.stack.Pop());
             }
             _pool.Clear();
             _bytes = 0;
+            _pooledBytes = 0;
         }
 
         public static RenderTexture RentPageRT(int width, int height)
@@ -253,14 +265,16 @@ namespace FigForge
 
         static RenderTexture Rent(int width, int height)
         {
-            string bucket = BucketKey(width, height);
-            if (_pool.TryGetValue(bucket, out var stack))
+            string key = BucketKey(width, height);
+            if (_pool.TryGetValue(key, out var bucket))
             {
-                while (stack.Count > 0)
+                while (bucket.stack.Count > 0)
                 {
-                    var rt = stack.Pop();
+                    var rt = bucket.stack.Pop();
+                    _pooledBytes -= bucket.bytesPerItem;
                     if (rt != null) return rt;
                 }
+                _pool.Remove(key); // drained — don't accrue empty buckets per size
             }
 
             var created = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
@@ -279,13 +293,16 @@ namespace FigForge
         static void Return(RenderTexture rt)
         {
             if (rt == null) return;
-            string bucket = BucketKey(rt.width, rt.height);
-            if (!_pool.TryGetValue(bucket, out var stack))
+            string key = BucketKey(rt.width, rt.height);
+            if (!_pool.TryGetValue(key, out var bucket))
             {
-                stack = new Stack<RenderTexture>();
-                _pool[bucket] = stack;
+                bucket = new PoolBucket { bytesPerItem = EstimateBytes(rt.width, rt.height) };
+                _pool[key] = bucket;
             }
-            stack.Push(rt);
+            bucket.stack.Push(rt);
+            bucket.lastReturned = ++_clock;
+            _pooledBytes += bucket.bytesPerItem;
+            TrimPool();
         }
 
         static void Trim()
@@ -310,6 +327,45 @@ namespace FigForge
             }
         }
 
+        // Over budget, release whole buckets oldest-returned first: a stale-size
+        // bucket is exactly the resize residue that never gets rented again, while
+        // the bucket the caller just returned into is by definition the newest and
+        // survives for same-size re-rents.
+        static void TrimPool()
+        {
+            while (_pooledBytes > MaxPooledBytes)
+            {
+                string oldestKey = null;
+                PoolBucket oldest = null;
+                foreach (var kv in _pool)
+                {
+                    if (kv.Value.stack.Count == 0) continue;
+                    if (oldest == null || kv.Value.lastReturned < oldest.lastReturned)
+                    {
+                        oldestKey = kv.Key;
+                        oldest = kv.Value;
+                    }
+                }
+                if (oldest == null) break;
+                while (oldest.stack.Count > 0 && _pooledBytes > MaxPooledBytes)
+                {
+                    ReleaseRT(oldest.stack.Pop());
+                    _pooledBytes -= oldest.bytesPerItem;
+                }
+                if (oldest.stack.Count == 0) _pool.Remove(oldestKey);
+            }
+        }
+
+        // Release frees the GPU side; the managed shell is HideAndDontSave (never
+        // scene-collected) so it needs an explicit Destroy too.
+        static void ReleaseRT(RenderTexture rt)
+        {
+            if (rt == null) return;
+            rt.Release();
+            if (Application.isPlaying) Object.Destroy(rt);
+            else Object.DestroyImmediate(rt);
+        }
+
         static string BucketKey(int width, int height) => width + "x" + height;
         static long EstimateBytes(int width, int height) => (long)width * height * 4L;
 
@@ -319,6 +375,13 @@ namespace FigForge
             public long bytes;
             public int refCount;
             public int lastUsed;
+        }
+
+        sealed class PoolBucket
+        {
+            public readonly Stack<RenderTexture> stack = new Stack<RenderTexture>();
+            public long bytesPerItem;
+            public int lastReturned;
         }
     }
 }

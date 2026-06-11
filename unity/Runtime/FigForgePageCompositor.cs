@@ -72,6 +72,7 @@ namespace FigForge
 
         Material _compositeMaterial;
         Material _blurMaterial;
+        Canvas _cachedCanvas;
         bool _dirty = true;
         bool _inRebuild;
         bool _warnedCaptureFailed;
@@ -84,7 +85,15 @@ namespace FigForge
         // Whether this page can be composited at all: needs a Screen Space - Camera
         // canvas to capture through. Sources check this BEFORE registering and stay
         // on their per-graphic fallback path (BIRP GrabPass / URP alpha) otherwise.
-        public bool CanComposite => FigForgePageCapture.CanCapture(GetComponentInParent<Canvas>());
+        public bool CanComposite => FigForgePageCapture.CanCapture(ParentCanvas());
+
+        // GetComponentInParent walks the hierarchy and this runs (twice) per frame
+        // from willRenderCanvases — cache it; reparenting/hierarchy edits invalidate.
+        Canvas ParentCanvas()
+        {
+            if (_cachedCanvas == null) _cachedCanvas = GetComponentInParent<Canvas>();
+            return _cachedCanvas;
+        }
 
         public void Register(IFigForgeCompositorSource layer)
         {
@@ -136,6 +145,7 @@ namespace FigForge
 
         void OnEnable()
         {
+            _cachedCanvas = null; // may have been reparented while disabled
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
             Canvas.willRenderCanvases += HandleWillRenderCanvases;
             // Text-content edits change neither rect, position, color, nor texture
@@ -178,12 +188,19 @@ namespace FigForge
 #if UNITY_EDITOR
         void HandleHierarchyChanged()
         {
+            _cachedCanvas = null; // an authoring edit may have inserted/removed a canvas
             MarkDirty();
         }
 #endif
 
         void OnTransformChildrenChanged()
         {
+            MarkDirty();
+        }
+
+        void OnTransformParentChanged()
+        {
+            _cachedCanvas = null;
             MarkDirty();
         }
 
@@ -196,9 +213,10 @@ namespace FigForge
         {
             if (_inRebuild) return;
             PruneAdvancedLayers();
-            if (!IsActive) return;
+            // Inline IsActive: the property's ActiveAdvancedCount would prune again.
+            if (!isActiveAndEnabled || _advancedLayers.Count == 0) return;
 
-            var cam = FigForgePageCapture.ResolveCamera(GetComponentInParent<Canvas>());
+            var cam = FigForgePageCapture.ResolveCamera(ParentCanvas());
             if (cam == null) return;
 
             SortOrderedLayers();
@@ -252,7 +270,14 @@ namespace FigForge
                 var layer = _orderedLayers[i];
                 var surface = layer.GetCompositorSurface();
                 var target = GetBlendedSurface(layer);
-                if (surface == null || target == null) continue;
+                if (surface == null || target == null)
+                {
+                    // Surface not baked yet (first-frame source ordering) — leave the
+                    // rebuild incomplete so _dirty survives and the next frame retries,
+                    // instead of presenting this layer's stale pixels forever.
+                    complete = false;
+                    continue;
+                }
 
                 CullAtOrAbove(layer);
 #if UNITY_EDITOR
@@ -492,7 +517,7 @@ namespace FigForge
         void CollectCanvasGraphics()
         {
             _canvasGraphics.Clear();
-            var canvas = GetComponentInParent<Canvas>();
+            var canvas = ParentCanvas();
             var root = canvas != null ? (canvas.rootCanvas != null ? canvas.rootCanvas : canvas) : null;
             if (root == null) return;
             root.GetComponentsInChildren(false, _canvasGraphics);
@@ -639,7 +664,7 @@ namespace FigForge
             // bypass the overloaded null check (same caveat as SetGraphicDirty).
             var component = obj as Component;
             if (component == null) return;
-            var canvas = GetComponentInParent<Canvas>();
+            var canvas = ParentCanvas();
             var root = canvas != null ? (canvas.rootCanvas != null ? canvas.rootCanvas : canvas) : null;
             if (root == null) return;
             if (!component.transform.IsChildOf(root.transform)) return;
@@ -650,14 +675,14 @@ namespace FigForge
 
         void SortOrderedLayers()
         {
+            // PruneAdvancedLayers just ran (sole caller is the willRenderCanvases
+            // handler): everything left is live, enabled, and under this compositor,
+            // so skip the per-element ShouldRenderLayer re-check — it re-prunes and
+            // Contains-scans per layer, O(n^2) every frame for the same answer.
             _orderedLayers.Clear();
             for (int i = 0; i < _advancedLayers.Count; i++)
-            {
-                var layer = _advancedLayers[i];
-                if (ShouldRenderLayer(layer))
-                    _orderedLayers.Add(layer);
-            }
-            _orderedLayers.Sort(CompareHierarchy);
+                _orderedLayers.Add(_advancedLayers[i]);
+            _orderedLayers.Sort(HierarchyComparison);
         }
 
         int ActiveAdvancedCount()
@@ -701,6 +726,10 @@ namespace FigForge
             _orphanScratch.Clear();
         }
 
+        // Cached once: a method-group Sort(CompareHierarchy) argument allocates a
+        // fresh Comparison<T> delegate on every per-frame sort.
+        static readonly System.Comparison<IFigForgeCompositorSource> HierarchyComparison = CompareHierarchy;
+
         static int CompareHierarchy(IFigForgeCompositorSource a, IFigForgeCompositorSource b)
         {
             if (a == b) return 0;
@@ -709,30 +738,31 @@ namespace FigForge
             return CompareTransforms(a.transform, b.transform);
         }
 
+        // Paint-order compare, allocation-free (runs per graphic per capture cull and
+        // inside the per-frame sort): walk the deeper side up to a common depth, then
+        // both up to the common parent, and compare sibling indices there. An ancestor
+        // paints before its descendants, matching the sibling-index-path comparison
+        // this replaces. (Everything compared here shares the page's root canvas.)
         static int CompareTransforms(Transform a, Transform b)
         {
             if (a == b) return 0;
-            var pathA = HierarchyPath(a);
-            var pathB = HierarchyPath(b);
-            int count = Mathf.Min(pathA.Count, pathB.Count);
-            for (int i = 0; i < count; i++)
+            int depthA = Depth(a), depthB = Depth(b);
+            for (int d = depthA; d > depthB; d--) a = a.parent;
+            for (int d = depthB; d > depthA; d--) b = b.parent;
+            if (a == b) return depthA - depthB; // one is the other's ancestor
+            while (a.parent != b.parent)
             {
-                int diff = pathA[i] - pathB[i];
-                if (diff != 0) return diff;
+                a = a.parent;
+                b = b.parent;
             }
-            return pathA.Count - pathB.Count;
+            return a.GetSiblingIndex() - b.GetSiblingIndex();
         }
 
-        static List<int> HierarchyPath(Transform t)
+        static int Depth(Transform t)
         {
-            var path = new List<int>();
-            while (t != null)
-            {
-                path.Add(t.GetSiblingIndex());
-                t = t.parent;
-            }
-            path.Reverse();
-            return path;
+            int depth = 0;
+            for (; t != null; t = t.parent) depth++;
+            return depth;
         }
 
         static void DestroyRuntimeMaterial(Material material)

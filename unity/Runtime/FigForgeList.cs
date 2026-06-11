@@ -217,7 +217,8 @@ namespace FigForge
             var row = Instantiate(rowTemplate, content);
             row.name = "Item " + (index + 1);
             row.SetActive(true);
-            var le = row.GetComponent<LayoutElement>() ?? row.AddComponent<LayoutElement>();
+            var le = row.GetComponent<LayoutElement>();
+            if (le == null) le = row.AddComponent<LayoutElement>(); // ?? misreads Unity fake-null
             le.minHeight = rowHeight; le.preferredHeight = rowHeight;
 
             var titleT = FindByName(row.transform, "Title");
@@ -233,7 +234,8 @@ namespace FigForge
             if (hit != null) hit.raycastTarget = true;
             else
             {
-                var img = row.GetComponent<Image>() ?? row.AddComponent<Image>();
+                var img = row.GetComponent<Image>();
+                if (img == null) img = row.AddComponent<Image>(); // ?? misreads Unity fake-null
                 img.color = new Color(0, 0, 0, 0);
                 img.raycastTarget = true;
             }

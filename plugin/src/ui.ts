@@ -2,7 +2,8 @@
 // FigForge — UI thread (iframe)
 // =============================================================================
 
-import type { ElementConfig, ExportOptions, ExportScale, TreeNode } from './types';
+import { MANIFEST_VERSION, type BinaryAsset, type ElementConfig, type ExportOptions, type ExportScale, type TreeNode } from './types';
+import { bytesToBase64 } from './base64';
 
 declare const JSZip: any;
 declare const __FIGFORGE_VERSION__: string; // injected by esbuild from package.json
@@ -539,36 +540,37 @@ function currentOptions(): ExportOptions {
   };
 }
 
+// Where a finished export goes — a .zip download or a POST straight to Unity — is
+// captured at click time and travels WITH the request (`target`, echoed back by
+// main in export[-page]-complete). It used to live in module globals, which a
+// second click could clobber while an export was still running: main now rejects
+// the concurrent run, but the click would still have silently re-routed the
+// first export's result (e.g. a Send-to-Unity page export downloading as a zip).
 $('#exportBtn').addEventListener('click', () => {
-  frameExportTarget = 'zip';
   setStatus('Exporting…');
   showProgress(true);
-  post({ type: 'export', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
+  post({ type: 'export', target: 'zip', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
 });
 
-// Where the next page export goes: download a .zip, or POST straight to Unity.
-let pageExportTarget: 'zip' | 'unity' = 'zip';
-let frameExportTarget: 'zip' | 'unity' = 'zip';
-
 $('#exportPageBtn').addEventListener('click', () => {
-  pageExportTarget = 'zip';
   setStatus('Exporting whole page…');
   showProgress(true);
-  post({ type: 'export-page', scale: parseScale(), options: currentOptions() });
+  // elementConfigs travel with page exports too — the per-element exclude/merge/
+  // force-PNG choices saved on the elements apply to every frame on the page,
+  // exactly as they would frame-by-frame (main re-applies them before the loop).
+  post({ type: 'export-page', target: 'zip', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
 });
 
 $('#exportUnityBtn').addEventListener('click', () => {
-  pageExportTarget = 'unity';
   setStatus('Exporting page → Unity…');
   showProgress(true);
-  post({ type: 'export-page', scale: parseScale(), options: currentOptions() });
+  post({ type: 'export-page', target: 'unity', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
 });
 
 $('#exportFrameUnityBtn').addEventListener('click', () => {
-  frameExportTarget = 'unity';
   setStatus('Exporting frame → Unity…');
   showProgress(true);
-  post({ type: 'export', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
+  post({ type: 'export', target: 'unity', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
 });
 
 function unityImportUrl(): string {
@@ -583,11 +585,23 @@ function unityToken(): string {
 
 async function sendToUnity(project: { name: string; initial: string }, screens: PageScreen[]) {
   const url = unityImportUrl();
+  // JSON wire boundary (manifest version 2.0): each PNG goes as a base64 `b64`
+  // string — ~1.33× the binary size, vs ~3.7× for the old `data` number[]
+  // rendered as decimal text, and no 10× number[] heap copy beforehand. Unity's
+  // FigForgeLiveImport.LiveAsset reads `b64` first and still accepts the legacy
+  // `data` array from a 1.0-era plugin.
+  const wireScreens = screens.map((s) => ({
+    name: s.name,
+    manifest: s.manifest,
+    section: s.section,
+    role: s.role,
+    assets: s.assets.map((a) => ({ name: a.name, b64: bytesToBase64(a.data) })),
+  }));
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-FigForge-Token': unityToken() },
-      body: JSON.stringify({ project, screens }),
+      body: JSON.stringify({ project, screens: wireScreens }),
     });
     if (res.ok) setStatus(`Sent ${screens.length} screen(s) → Unity. Building in the FigForge importer.`);
     else if (res.status === 401)
@@ -607,56 +621,87 @@ function screenFromManifest(manifestJson: string): string {
   }
 }
 
-async function downloadBundle(manifestJson: string, assets: { name: string; data: number[] }[]) {
-  const zip = new JSZip();
-  zip.file('manifest.json', manifestJson);
-  for (const a of assets) zip.file(a.name, new Uint8Array(a.data));
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(blob);
-  const screen = JSON.parse(manifestJson).screen?.name || 'figforge';
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${screen}_figforge.zip`;
-  a.click();
-  URL.revokeObjectURL(url);
+// JSZip arrives from cdnjs at runtime (a <script> tag in ui.html) — offline or
+// behind a corporate proxy the tag fails and the global never exists. Checked
+// BEFORE any zip work so the failure is an honest, actionable message instead of
+// an unhandled throw after the UI had already claimed "Bundle downloaded".
+function jszipAvailable(): boolean {
+  if (typeof JSZip !== 'undefined') return true;
+  setStatus('JSZip failed to load — check network/proxy; bundle not saved.', true);
+  return false;
+}
+
+// Script tags load synchronously in order, so by the time this module runs the
+// JSZip global either exists or never will — surface a blocked cdnjs load the
+// moment the UI opens, not at download time. Unity send doesn't need JSZip.
+if (typeof JSZip === 'undefined') {
+  setStatus('JSZip failed to load from cdnjs (offline / proxy?) — Download Frame/Page will not save bundles; Send to Unity still works.', true);
+}
+
+async function downloadBundle(manifestJson: string, assets: BinaryAsset[]) {
+  if (!jszipAvailable()) return;
+  try {
+    const zip = new JSZip();
+    zip.file('manifest.json', manifestJson);
+    for (const a of assets) zip.file(a.name, a.data); // JSZip takes Uint8Array natively
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const screen = JSON.parse(manifestJson).screen?.name || 'figforge';
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${screen}_figforge.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    // Success is only claimed HERE — after the zip blob is handed to the browser.
+    setStatus(`Exported ${assets.length} asset(s). Bundle downloaded.`);
+  } catch (e) {
+    setStatus(`Bundle packaging failed — ${String((e as Error)?.message || e)}; bundle not saved.`, true);
+  }
 }
 
 interface PageScreen {
   name: string;
   manifest: string;
-  assets: { name: string; data: number[] }[];
+  assets: BinaryAsset[];
   section?: string;
   role?: string;
 }
 async function downloadProjectBundle(project: { name: string; initial: string }, screens: PageScreen[]) {
-  const zip = new JSZip();
-  const used = new Set<string>();
-  const index = {
-    schema: 'figforge/project',
-    version: '1.0',
-    generator: 'FigForge',
-    name: project.name,
-    exportedAt: new Date().toISOString(),
-    initial: project.initial,
-    screens: [] as { name: string; manifest: string; section: string; role: string }[],
-  };
-  for (const s of screens) {
-    let folder = s.name || 'screen';
-    let n = 1;
-    while (used.has(folder)) folder = `${s.name}_${n++}`;
-    used.add(folder);
-    zip.file(`${folder}/manifest.json`, s.manifest);
-    for (const a of s.assets) zip.file(`${folder}/${a.name}`, new Uint8Array(a.data));
-    index.screens.push({ name: s.name, manifest: `${folder}/manifest.json`, section: s.section || '', role: s.role || 'screen' });
+  if (!jszipAvailable()) return;
+  try {
+    const zip = new JSZip();
+    const used = new Set<string>();
+    const index = {
+      schema: 'figforge/project',
+      version: MANIFEST_VERSION,
+      generator: 'FigForge',
+      name: project.name,
+      exportedAt: new Date().toISOString(),
+      initial: project.initial,
+      screens: [] as { name: string; manifest: string; section: string; role: string }[],
+    };
+    for (const s of screens) {
+      let folder = s.name || 'screen';
+      let n = 1;
+      while (used.has(folder)) folder = `${s.name}_${n++}`;
+      used.add(folder);
+      zip.file(`${folder}/manifest.json`, s.manifest);
+      for (const a of s.assets) zip.file(`${folder}/${a.name}`, a.data); // Uint8Array, native to JSZip
+      index.screens.push({ name: s.name, manifest: `${folder}/manifest.json`, section: s.section || '', role: s.role || 'screen' });
+    }
+    zip.file('project.json', JSON.stringify(index, null, 2));
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(project.name || 'figforge').replace(/[^a-z0-9]+/gi, '_')}_page.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    // Success is only claimed HERE — after the zip blob is handed to the browser.
+    setStatus(`Exported ${screens.length} screen(s). Project bundle downloaded.`);
+  } catch (e) {
+    setStatus(`Project bundle packaging failed — ${String((e as Error)?.message || e)}; bundle not saved.`, true);
   }
-  zip.file('project.json', JSON.stringify(index, null, 2));
-  const blob = await zip.generateAsync({ type: 'blob' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${(project.name || 'figforge').replace(/[^a-z0-9]+/gi, '_')}_page.zip`;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -819,41 +864,44 @@ window.onmessage = (event: MessageEvent) => {
       setStatus(`Exporting ${msg.label} (${msg.current}/${msg.total})`, false, true); // replace in place
       break;
 
+    // `msg.target` is the destination captured when the export was REQUESTED,
+    // echoed back by main — see the export button handlers. The download/send
+    // helpers print their own success/failure, so a "Bundle downloaded" can no
+    // longer precede (or survive) a JSZip failure.
     case 'export-complete':
       showProgress(false);
       setProgress(0);
-      if (frameExportTarget === 'unity') {
+      if (msg.target === 'unity') {
         const screenName = screenFromManifest(msg.manifest);
-        frameExportTarget = 'zip';
         sendToUnity(
           { name: screenName, initial: screenName },
           [{ name: screenName, manifest: msg.manifest, assets: msg.assets, role: 'screen' }]
         );
       } else {
         downloadBundle(msg.manifest, msg.assets);
-        setStatus(`Exported ${msg.assets.length} asset(s). Bundle downloaded.`);
       }
       break;
 
     case 'export-page-complete':
       showProgress(false);
       setProgress(0);
-      if (pageExportTarget === 'unity') {
+      if (msg.target === 'unity') {
         sendToUnity(msg.project, msg.screens);
       } else {
         downloadProjectBundle(msg.project, msg.screens);
-        setStatus(`Exported ${msg.screens.length} screen(s). Project bundle downloaded.`);
       }
       break;
 
     case 'export-error':
       showProgress(false);
-      frameExportTarget = 'zip';
       setStatus(msg.message, true);
       break;
 
     case 'status':
-      setStatus(msg.message);
+      // `error` is optional — main flags it on e.g. a rejected concurrent export
+      // (which can't use 'export-error': that would tear down the progress UI of
+      // the export that's still running).
+      setStatus(msg.message, !!msg.error);
       break;
 
     case 'mcp-response':

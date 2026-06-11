@@ -54,6 +54,7 @@ namespace FigForge
             if (toggle != null) toggle.onValueChanged.RemoveListener(OnToggleValueChanged);
             _over = false;
             _down = false;
+            Apply(); // restore the resting fill so a disabled row isn't left on hover/press
         }
 
         public void OnPointerEnter(PointerEventData e) { _over = true; Apply(); }

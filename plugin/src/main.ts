@@ -8,11 +8,13 @@
 import {
   DEFAULT_EXPORT_OPTIONS,
   DEFAULT_EXPORT_SCALE,
+  type BinaryAsset,
   type CanonicalKind,
   type ElementConfig,
   type ExportOptions,
   type ExportScale,
 } from './types';
+import { bytesToBase64 } from './base64';
 import { buildTree, detectCanonical } from './traverser';
 import { exportDesign } from './exporter';
 import { sanitize } from './naming';
@@ -57,6 +59,16 @@ function pushSelection() {
 
 figma.on('selectionchange', pushSelection);
 pushSelection();
+
+// One export at a time. exportDesign isolates layers by MUTATING node.visible
+// around each exportAsync call; a second export started mid-run interleaves with
+// the first pass and each bakes the other's hidden layers into its PNGs. Every
+// entry point that runs exportDesign ('export', 'export-page', MCP export_unity)
+// checks this flag and rejects a concurrent request with a visible message —
+// never queued silently (the selection/configs may be stale by completion time,
+// so the user should re-trigger deliberately). Cleared in `finally` on every path.
+let exportInFlight = false;
+const EXPORT_BUSY_MESSAGE = 'An export is already running — wait for it to finish, then try again.';
 
 // ---------------------------------------------------------------------------
 // UI → main
@@ -111,11 +123,19 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       break;
 
     case 'export': {
+      // Rejected as 'status' (error-flagged), NOT 'export-error': ui.ts reacts to
+      // export-error by tearing down the progress bar — UI state that belongs to
+      // the export that's still legitimately running.
+      if (exportInFlight) {
+        figma.ui.postMessage({ type: 'status', message: EXPORT_BUSY_MESSAGE, error: true });
+        break;
+      }
       const root = selectedRoot();
       if (!root) {
         figma.ui.postMessage({ type: 'export-error', message: 'Select a frame to export.' });
         break;
       }
+      exportInFlight = true;
       try {
         const scale = (msg.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
         const options = (msg.options as ExportOptions) || DEFAULT_EXPORT_OPTIONS;
@@ -132,16 +152,26 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         );
         figma.ui.postMessage({
           type: 'export-complete',
+          // Echo the click-time destination (zip download vs Unity POST) so the UI
+          // routes THIS export's result — a module global in ui.ts would be
+          // re-routed by a second (rejected) click while this one was running.
+          target: (msg.target as string) || 'zip',
           manifest: JSON.stringify(result.manifest, null, 2),
           assets: result.assets,
         });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: String((e as Error)?.message || e) });
+      } finally {
+        exportInFlight = false;
       }
       break;
     }
 
     case 'export-page': {
+      if (exportInFlight) { // see 'export' — same gate, same reasoning
+        figma.ui.postMessage({ type: 'status', message: EXPORT_BUSY_MESSAGE, error: true });
+        break;
+      }
       const found = collectScreens(figma.currentPage);
       if (found.length === 0) {
         figma.ui.postMessage({ type: 'export-error', message: 'No top-level frames (or frames in sections) on this page.' });
@@ -155,16 +185,22 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         figma.notify(message);
         figma.ui.postMessage({ type: 'status', message });
       }
+      exportInFlight = true;
       try {
         const scale = (msg.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
         const options = (msg.options as ExportOptions) || DEFAULT_EXPORT_OPTIONS;
+        // Same per-element exclude/merge/force-PNG handling as the single-frame
+        // 'export' path: sync the saved configs, then pass the sets to every
+        // frame's exportDesign — the ids are page-wide, each frame picks up the
+        // ones under it. Page export used to silently ignore all of this.
+        applyConfigs(msg.elementConfigs as ElementConfig[] | undefined);
         const screens: {
-          name: string; manifest: string; assets: { name: string; data: number[] }[];
+          name: string; manifest: string; assets: BinaryAsset[];
           section: string; role: string;
         }[] = [];
         for (let i = 0; i < found.length; i++) {
           figma.ui.postMessage({ type: 'progress', current: i, total: found.length, label: found[i].node.name });
-          const result = await exportDesign(found[i].node, scale, options);
+          const result = await exportDesign(found[i].node, scale, options, excluded, merged, forcedPng);
           screens.push({
             name: sanitize(found[i].node.name),
             manifest: JSON.stringify(result.manifest, null, 2),
@@ -177,11 +213,14 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         const firstScreen = screens.find((s) => s.role !== 'shell') || screens[0];
         figma.ui.postMessage({
           type: 'export-page-complete',
+          target: (msg.target as string) || 'zip', // click-time destination, echoed — see 'export'
           project: { name: figma.currentPage.name, initial: firstScreen ? firstScreen.name : '' },
           screens,
         });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: String((e as Error)?.message || e) });
+      } finally {
+        exportInFlight = false;
       }
       break;
     }
@@ -252,7 +291,8 @@ async function sendPreview(nodeId: string) {
       name: node.name,
       figmaType: node.type,
       size: { w: (node as unknown as { width: number }).width, h: (node as unknown as { height: number }).height },
-      imageData: Array.from(bytes),
+      // Uint8Array structured-clones through postMessage — no number[] blow-up.
+      imageData: bytes,
     });
   } catch {
     /* unpreviewable (e.g. empty container) — ignore */
@@ -312,14 +352,18 @@ async function handleMcp(req: McpRequest) {
       case 'get_screenshot': {
         const ids = req.nodeIds || figma.currentPage.selection.map((n) => n.id);
         const scale = (req.params?.scale as number) ?? 2;
-        const shots: { nodeId: string; data: number[] }[] = [];
+        // MCP responses leave the plugin as JSON (ui.ts → WebSocket → bridge),
+        // so the PNG bytes go base64 here: ~1.33× the binary size on the wire
+        // vs ~3.7× as decimal number[] text. The bridge (server/src/tools.ts)
+        // accepts both forms during the transition.
+        const shots: { nodeId: string; data: string }[] = [];
         for (const id of ids) {
           const node = figma.getNodeById(id) as SceneNode | null;
           if (node && 'exportAsync' in node) {
             const bytes = await (node as unknown as {
               exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
             }).exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: scale } });
-            shots.push({ nodeId: id, data: Array.from(bytes) });
+            shots.push({ nodeId: id, data: bytesToBase64(bytes) });
           }
         }
         response.data = { screenshots: shots };
@@ -328,21 +372,33 @@ async function handleMcp(req: McpRequest) {
       case 'export_unity': {
         // Full Unity export reusing the UI's exporter, driven over MCP so an
         // agent can batch every frame itself. (FigmaTest feature.)
-        const ids = req.nodeIds || figma.currentPage.selection.map((n) => n.id);
-        const exports: unknown[] = [];
-        for (const id of ids) {
-          const node = figma.getNodeById(id) as SceneNode | null;
-          if (node && 'exportAsync' in node) {
-            const result = await exportDesign(node, DEFAULT_EXPORT_SCALE, DEFAULT_EXPORT_OPTIONS);
-            exports.push({
-              nodeId: id,
-              name: sanitize(node.name),
-              manifest: result.manifest,
-              assets: result.assets,
-            });
+        // Shares the one-export-at-a-time gate with the UI buttons: this path
+        // mutates node.visible exactly the same way. Throwing here surfaces the
+        // rejection to the bridge as a normal MCP error response.
+        if (exportInFlight) throw new Error(EXPORT_BUSY_MESSAGE);
+        exportInFlight = true;
+        try {
+          const ids = req.nodeIds || figma.currentPage.selection.map((n) => n.id);
+          const exports: unknown[] = [];
+          for (const id of ids) {
+            const node = figma.getNodeById(id) as SceneNode | null;
+            if (node && 'exportAsync' in node) {
+              const result = await exportDesign(node, DEFAULT_EXPORT_SCALE, DEFAULT_EXPORT_OPTIONS);
+              exports.push({
+                nodeId: id,
+                name: sanitize(node.name),
+                manifest: result.manifest,
+                // JSON wire boundary (see get_screenshot above): base64, not
+                // number[] — server/src/tools.ts executeExportUnity decodes
+                // either form.
+                assets: result.assets.map((a) => ({ name: a.name, data: bytesToBase64(a.data) })),
+              });
+            }
           }
+          response.data = { exports };
+        } finally {
+          exportInFlight = false;
         }
-        response.data = { exports };
         break;
       }
       default:

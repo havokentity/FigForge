@@ -42,6 +42,16 @@ interface UnityExport {
   assets?: Array<{ name?: unknown; data?: unknown }>;
 }
 
+/** Asset/screenshot bytes off the plugin wire. v2.0 plugins send base64
+ * strings (~1.33× binary size); v1.0 plugins sent number[] (~3.7× as decimal
+ * JSON text). Accept both so an older plugin keeps working against this
+ * bridge during the transition. */
+function wireBytesToBuffer(data: unknown): Buffer | null {
+  if (typeof data === 'string') return Buffer.from(data, 'base64');
+  if (Array.isArray(data)) return Buffer.from(data as number[]);
+  return null;
+}
+
 export async function executeExportUnity(
   sender: PluginSender,
   nodeId: string,
@@ -62,12 +72,14 @@ export async function executeExportUnity(
 
   let written = 0;
   for (const asset of Array.isArray(exp.assets) ? exp.assets : []) {
-    if (!asset || typeof asset.name !== 'string' || !Array.isArray(asset.data)) continue;
+    if (!asset || typeof asset.name !== 'string') continue;
+    const bytes = wireBytesToBuffer(asset.data);
+    if (!bytes) continue;
     // Flatten to the bare file name so a "../"-bearing asset name can't escape
     // the validated output dir (path.basename strips all directory components).
     const safeName = path.basename(asset.name);
     if (!safeName || safeName === '.' || safeName === '..') continue;
-    await writeFile(path.join(resolvedDir, safeName), Buffer.from(asset.data as number[]));
+    await writeFile(path.join(resolvedDir, safeName), bytes);
     written++;
   }
 
@@ -111,9 +123,12 @@ export function registerTools(server: McpServer, sender: PluginSender, workspace
     async ({ nodeIds, scale }) => {
       const r = await sender.send('get_screenshot', nodeIds, { scale });
       if (r.error) return fail(r.error);
-      const shots = (r.data as { screenshots?: { nodeId: string; data: number[] }[] })?.screenshots || [];
+      const shots = (r.data as { screenshots?: { nodeId: string; data: string | number[] }[] })?.screenshots || [];
       return ok(
-        shots.map((s) => ({ nodeId: s.nodeId, base64: Buffer.from(s.data).toString('base64') }))
+        shots
+          .map((s) => ({ nodeId: s.nodeId, bytes: wireBytesToBuffer(s.data) }))
+          .filter((s) => s.bytes)
+          .map((s) => ({ nodeId: s.nodeId, base64: (s.bytes as Buffer).toString('base64') }))
       );
     }
   );
@@ -126,15 +141,15 @@ export function registerTools(server: McpServer, sender: PluginSender, workspace
       const ids = items.map((i) => i.nodeId);
       const r = await sender.send('get_screenshot', ids, { scale });
       if (r.error) return fail(r.error);
-      const shots = (r.data as { screenshots?: { nodeId: string; data: number[] }[] })?.screenshots || [];
+      const shots = (r.data as { screenshots?: { nodeId: string; data: string | number[] }[] })?.screenshots || [];
       const byId = new Map(shots.map((s) => [s.nodeId, s.data]));
       const written: string[] = [];
       for (const item of items) {
-        const data = byId.get(item.nodeId);
-        if (!data) continue;
+        const bytes = wireBytesToBuffer(byId.get(item.nodeId));
+        if (!bytes) continue;
         const resolved = resolveAndValidateOutputPath(item.outputPath, workspaceRoot);
         await mkdir(path.dirname(resolved), { recursive: true });
-        await writeFile(resolved, Buffer.from(data));
+        await writeFile(resolved, bytes);
         written.push(resolved);
       }
       return ok({ written });

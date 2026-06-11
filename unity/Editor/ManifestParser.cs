@@ -11,6 +11,16 @@ namespace FigForge
 {
     public static class ManifestParser
     {
+        // Manifest wire-format versions this importer understands — counterpart
+        // constant: plugin/src/types.ts MANIFEST_VERSION. Keep the two in sync.
+        //   "1.0" — legacy exports (live-import assets as number[] JSON)
+        //   "2.0" — base64 live-import assets + canonicalSchema in the manifest
+        // An unknown (or missing) version means the plugin and this importer are
+        // from different generations: the contract has dozens of optional fields,
+        // so a mismatched pair degrades silently field-by-field. Fail loudly
+        // instead (LogError + abort, the importer's standard fatal-error surface).
+        static readonly string[] SupportedManifestVersions = { "1.0", "2.0" };
+
         public static Manifest Load(string manifestPath)
         {
             if (!File.Exists(manifestPath))
@@ -29,6 +39,26 @@ namespace FigForge
                 }
                 if (manifest.schema != "figforge/manifest")
                     Debug.LogWarning($"[FigForge] unexpected schema '{manifest.schema}'.");
+                if (System.Array.IndexOf(SupportedManifestVersions, manifest.version) < 0)
+                {
+                    Debug.LogError(
+                        $"[FigForge] manifest version '{(string.IsNullOrEmpty(manifest.version) ? "(missing)" : manifest.version)}' " +
+                        $"is not supported by this importer (supported: {string.Join(", ", SupportedManifestVersions)}) — import aborted.\n" +
+                        "One side is stale: if the manifest is NEWER, update the FigForge Unity importer; " +
+                        "if it is OLDER (or has no version), re-export with a current FigForge plugin.\n" +
+                        manifestPath);
+                    return null;
+                }
+                // Canonical-control capture generation: a mismatch is NOT fatal
+                // (plain elements import fine) but canonical controls may degrade —
+                // say so prominently with both numbers so the stale side is obvious.
+                // 0 = pre-2.0 manifest that didn't carry the field; nothing to compare.
+                if (manifest.canonicalSchema != 0 && manifest.canonicalSchema != HierarchyBuilder.CanonicalSchema)
+                    Debug.LogWarning(
+                        $"[FigForge] canonical schema mismatch: manifest (plugin) = {manifest.canonicalSchema}, " +
+                        $"importer (HierarchyBuilder.CanonicalSchema) = {HierarchyBuilder.CanonicalSchema}. " +
+                        "Canonical controls (buttons/toggles/lists/…) may degrade — update the older side.\n" +
+                        manifestPath);
                 return manifest;
             }
             catch (System.Exception e)

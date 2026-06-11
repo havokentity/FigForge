@@ -8,7 +8,17 @@
 // =============================================================================
 
 export const MANIFEST_SCHEMA = 'figforge/manifest';
-export const MANIFEST_VERSION = '1.0';
+// Manifest wire-format version — counterpart: unity/Editor/ManifestParser.cs
+// (SupportedManifestVersions). The importer hard-fails on a version it doesn't
+// know, so bump this ONLY together with that list.
+//   1.0 — assets as JSON number[] on the live-import wire
+//   2.0 — assets as base64 strings (`b64`) on the live-import/MCP wire,
+//         manifest carries `canonicalSchema`
+export const MANIFEST_VERSION = '2.0';
+// Canonical-control capture generation this plugin emits — counterpart:
+// unity/Editor/HierarchyBuilder.cs `CanonicalSchema`. Keep the two numbers in
+// lockstep; the importer warns (but continues) when they differ.
+export const CANONICAL_SCHEMA = 48;
 
 // ---------------------------------------------------------------------------
 // Geometry primitives
@@ -359,6 +369,16 @@ export interface ManifestAsset {
   scale: number;
 }
 
+/** A rendered PNG travelling through the plugin (exporter → main → ui).
+ * Kept as Uint8Array end-to-end: a number[] of the same bytes costs ~10× the
+ * JS heap and structured-clones/stringifies proportionally. Only at the JSON
+ * wire boundary to Unity (live-import POST / MCP bridge) do the bytes become
+ * a base64 string — see bytesToBase64 in base64.ts. */
+export interface BinaryAsset {
+  name: string;
+  data: Uint8Array;
+}
+
 export interface ManifestFont {
   family: string;
   styles: string[];
@@ -380,6 +400,9 @@ export interface ScreenInfo {
 export interface Manifest {
   schema: typeof MANIFEST_SCHEMA;
   version: typeof MANIFEST_VERSION;
+  // Canonical capture generation of the exporting plugin (CANONICAL_SCHEMA).
+  // The Unity importer compares it against its own HierarchyBuilder.CanonicalSchema.
+  canonicalSchema: number;
   generator: 'FigForge';
   exportedAt: string;
   screen: ScreenInfo;

@@ -86,6 +86,7 @@ export function mapTransform(input: MapInput): UnityTransform {
   const { rect, parent, rotation } = input;
   const pw = parent.w;
   const ph = parent.h;
+  const rotated = Math.abs(rotation || 0) > 0.001;
 
   // Child rect edges in Unity parent-space (bottom-left origin, +Y up).
   const left = rect.x;
@@ -103,13 +104,21 @@ export function mapTransform(input: MapInput): UnityTransform {
   const offsetMin: Vec2 = [left - h.min * pw, bottom - v.min * ph];
   const offsetMax: Vec2 = [right - h.max * pw, top - v.max * ph];
 
+  // Rotation pivot: Figma's x/y are the translation column of relativeTransform —
+  // the node's own local origin (its UNROTATED top-left corner) in parent coords —
+  // so Figma rotates the w×h rect about that top-left corner. Unity rotates about
+  // rt.pivot, so rotated nodes must pivot at top-left ([0,1] in Unity's pivot
+  // space: x=0 left, y=1 top). This is placement-safe because the rect is defined
+  // via offsetMin/offsetMax against the anchors, which pin the edges regardless of
+  // pivot — the pivot only sets the rotation/scale centre. Unrotated nodes keep
+  // the historical centre pivot so nothing else shifts behaviour.
   return {
     anchorMin,
     anchorMax,
-    pivot: [0.5, 0.5],
+    pivot: rotated ? [0, 1] : [0.5, 0.5],
     offsetMin,
     offsetMax,
-    rotationZ: rotation || 0,
+    rotationZ: rotation || 0, // Figma degrees, +CCW on screen (see HierarchyBuilder/UxmlBuilder)
   };
 }
 

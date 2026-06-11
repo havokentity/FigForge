@@ -51,6 +51,11 @@ namespace FigForge
         FigForgePageCompositor _pageCompositor;
         FigForgeImageBlendGraphic _present;
         readonly Vector3[] _worldCorners = new Vector3[4];
+        // Cached surface scale keyed by the projection camera — recomputed only when the
+        // camera actually moves, so an idle SceneView doesn't thrash the quantized scale
+        // across a 0.25 boundary and re-bake the cached surface every canvas update.
+        float _cachedScaleFactor = -1f;
+        Matrix4x4 _scaleCamKey;
 
         public FigForgeBlendMode BlendMode
         {
@@ -127,6 +132,7 @@ namespace FigForge
 
         void OnRectTransformDimensionsChange()
         {
+            _cachedScaleFactor = -1f; // rect size feeds the surface scale — re-evaluate it
             _bakeDirty = true;
             MarkPageCompositorDirty();
         }
@@ -147,7 +153,15 @@ namespace FigForge
         void OnValidate()
         {
             appearanceOpacity = Mathf.Clamp01(appearanceOpacity);
-            if (isActiveAndEnabled) Reconfigure();
+            // Reconfigure can AddComponent (FindOrCreatePageCompositor), which Unity
+            // disallows inside OnValidate ("SendMessage cannot be called during
+            // OnValidate") — defer it to the next editor tick, guarding against the
+            // component being destroyed or disabled in between.
+            UnityEditor.EditorApplication.delayCall += () =>
+            {
+                if (this == null || !isActiveAndEnabled) return;
+                Reconfigure();
+            };
         }
 #endif
 
@@ -452,8 +466,19 @@ namespace FigForge
         // ---- Surface scale (mirrors the other sources so positions line up) -----
         float SurfaceScaleFactor()
         {
+            // The only per-frame-varying input is the camera projection (used by
+            // RawSurfaceScaleFactor via WorldToScreenPoint). Reuse the cached quantized
+            // scale unless the camera actually moved; rect-size changes invalidate it via
+            // OnRectTransformDimensionsChange. This stops the every-canvas-update re-bake
+            // loop where float jitter flipped the 0.25-quantized scale on an idle SceneView.
+            Camera cam = ProjectionCamera(GetComponentInParent<Canvas>());
+            Matrix4x4 camKey = cam != null ? cam.projectionMatrix * cam.worldToCameraMatrix : Matrix4x4.identity;
+            if (_cachedScaleFactor > 0f && camKey == _scaleCamKey)
+                return _cachedScaleFactor;
+            _scaleCamKey = camKey;
             float scale = Mathf.Clamp(RawSurfaceScaleFactor(), 1f, MaxSurfaceScale);
-            return Mathf.Ceil(scale * 4f) * 0.25f;
+            _cachedScaleFactor = Mathf.Ceil(scale * 4f) * 0.25f;
+            return _cachedScaleFactor;
         }
 
         float RawSurfaceScaleFactor()

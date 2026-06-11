@@ -487,7 +487,7 @@ namespace FigForge
                 if (_atlas.create) SpriteAtlasHelper.Build(_manifest.screen.name, screenFolder, _atlas);
 
                 EditorUtility.DisplayProgressBar("FigForge", "Building hierarchy…", 0.55f);
-                var canvas = ResolveCanvas();
+                var canvas = ResolveCanvas(out bool canvasCreated);
                 Transform parent = canvas.transform;
                 FrameManager mgr = null;
                 if (_connectedScene)
@@ -524,7 +524,14 @@ namespace FigForge
                 if (_output != OutputMode.Scene) SavePrefab(page);
                 if (_output == OutputMode.Prefab) DestroyImmediate(page);
 
-                Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build");
+                // Creation-undo covers only what THIS import created: the canvas when we
+                // made it (its children — the page — go with it), else the page alone
+                // (unless Prefab-only output already destroyed the scene instance).
+                if (canvasCreated)
+                    Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build");
+                else if (_output != OutputMode.Prefab)
+                    Undo.RegisterCreatedObjectUndo(page, "FigForge Build");
+                Undo.SetCurrentGroupName("FigForge Build");
                 EditorUtility.SetDirty(canvas);
                 if (_output != OutputMode.Prefab)
                     UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
@@ -675,6 +682,7 @@ namespace FigForge
             var ctx = MakeContext(screen.m, sprites);
             var page = HierarchyBuilder.BuildPage(screen.m, parent, ctx);
             if (page == null) return null;
+            Undo.RegisterCreatedObjectUndo(page, "FigForge Build Page"); // newly built only — reused screens above must survive undo
             builtCtx = ctx; // expose the build context so the caller can generate + wire accessors
             if (stretch) StretchToParent(page);
             StampImported(page, projectName, screen);
@@ -746,7 +754,7 @@ namespace FigForge
             {
                 var mp = $"{baseDir}/{ps.manifest}".Replace('\\', '/');
                 var m = ManifestParser.Load(mp);
-                if (m == null) { Log($"skip '{ps.name}': manifest not found ({mp})", MessageType.Warning); continue; }
+                if (m == null) { Log($"skip '{ps.name}': manifest missing or rejected — see Console ({mp})", MessageType.Warning); continue; }
                 loaded.Add(new LoadedScreen
                 {
                     m = m,
@@ -763,7 +771,7 @@ namespace FigForge
             {
                 if (_backend == UIBackend.UIToolkit) { BuildPageUITK(proj, loaded); return; }
 
-                var canvas = ResolveCanvas();
+                var canvas = ResolveCanvas(out bool canvasCreated);
                 var mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
                 mgr.screens.Clear();
                 mgr.shell = null;
@@ -817,7 +825,12 @@ namespace FigForge
                 foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(s == init);
                 if (mgr.shell != null) mgr.shell.SetActive(init != null && init.usesShell);
 
-                Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build Page");
+                // Only a canvas THIS import created gets creation-undo (a reused one
+                // must survive Ctrl+Z); freshly-built screens are registered in
+                // ReuseOrBuildScreen, reused ones deliberately not.
+                if (canvasCreated)
+                    Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build Page");
+                Undo.SetCurrentGroupName("FigForge Build Page");
                 EditorUtility.SetDirty(canvas);
                 UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
                     UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
@@ -920,11 +933,13 @@ namespace FigForge
 
             GameObject go;
             UnityEngine.UIElements.UIDocument doc;
+            bool createdDoc = false;
             if (_connectedScene && existing != null) { doc = existing; go = existing.gameObject; }
             else
             {
                 go = new GameObject("FigForge UI", typeof(UnityEngine.UIElements.UIDocument));
                 doc = go.GetComponent<UnityEngine.UIElements.UIDocument>();
+                createdDoc = true;
             }
             if (panel != null) doc.panelSettings = panel;
 
@@ -939,7 +954,8 @@ namespace FigForge
                 doc.visualTreeAsset = vta;
             }
 
-            Undo.RegisterCreatedObjectUndo(go, "FigForge UITK Build");
+            if (createdDoc) // a reused UIDocument must survive Ctrl+Z
+                Undo.RegisterCreatedObjectUndo(go, "FigForge UITK Build");
             EditorUtility.SetDirty(go);
             UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
                 UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
@@ -992,10 +1008,13 @@ namespace FigForge
         static bool IsFigForgeCanvasMode(RenderMode mode)
             => mode == RenderMode.ScreenSpaceCamera || mode == RenderMode.ScreenSpaceOverlay;
 
-        Canvas ResolveCanvas()
+        // `created` reports whether THIS call made the canvas — undo registration
+        // must only cover objects the import created (registering a reused canvas
+        // for creation-undo would have Ctrl+Z destroy the user's canvas).
+        Canvas ResolveCanvas(out bool created)
         {
             EnsureEventSystem(); // always — even when an existing canvas is reused
-            var canvas = ResolveCanvasObject();
+            var canvas = ResolveCanvasObject(out created);
             // Always render the FigForge page through the dedicated FigForge camera (Screen
             // Space - Camera), UPGRADING a reused Overlay canvas too. Overlay can't be captured
             // by the blend compositor, and in the Scene view it renders at screen-pixel scale
@@ -1004,8 +1023,9 @@ namespace FigForge
             return canvas;
         }
 
-        Canvas ResolveCanvasObject()
+        Canvas ResolveCanvasObject(out bool created)
         {
+            created = false;
             if (!_newCanvas && _existingCanvas != null) return _existingCanvas;
 
             var existing = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
@@ -1013,6 +1033,7 @@ namespace FigForge
             if (!_newCanvas && existing != null) return existing;
             if (_connectedScene && existing != null && existing.GetComponent<FrameManager>() != null) return existing;
 
+            created = true;
             var go = new GameObject("FigForge Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
             var scaler = go.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;

@@ -124,7 +124,17 @@ namespace FigForge
             }
 
             if (e.clipsContent) rule.Append("  overflow: hidden;\n");
-            if (Mathf.Abs(e.rotation) > 0.001f) rule.Append($"  rotate: {F(-e.rotation)}deg;\n");
+            // Figma rotates about the node's local origin (its unrotated top-left,
+            // which is exactly the left/top this rule lays out), not the centre —
+            // override USS's default transform-origin of center. Sign: Figma rotation
+            // is degrees with positive = CCW on screen; USS `rotate` is positive = CW
+            // (y-down), hence the negation. (HierarchyBuilder passes the angle through
+            // un-negated because uGUI is y-up; the asymmetry is correct, don't "fix" it.)
+            if (Mathf.Abs(e.rotation) > 0.001f)
+            {
+                rule.Append("  transform-origin: 0% 0%;\n");
+                rule.Append($"  rotate: {F(-e.rotation)}deg;\n");
+            }
 
             // text styling
             if (e.text != null && string.IsNullOrEmpty(e.asset))
@@ -132,6 +142,11 @@ namespace FigForge
                 rule.Append($"  color: {Rgba(e.text.color)};\n");
                 rule.Append($"  font-size: {Px(e.text.fontSize)};\n");
                 rule.Append($"  -unity-text-align: {TextAlign(e.text)};\n");
+                // text.lineHeight is intentionally dropped here: USS has no
+                // line-height property as of Unity 6000.3 (the only spacing knob,
+                // -unity-paragraph-spacing, separates \n paragraphs, not wrapped
+                // lines). Figma line height renders via TMP only — see
+                // HierarchyBuilder.ApplyText's lineSpacing solve.
                 var fr = ctx.resolveFontPath?.Invoke(e.text.fontFamily, e.text.fontStyle);
                 if (fr.HasValue && !string.IsNullOrEmpty(fr.Value.assetPath))
                     rule.Append($"  -unity-font-definition: url(\"{RelUrl(ussFolderAbs, ToAbs(fr.Value.assetPath))}\");\n");
@@ -173,7 +188,7 @@ namespace FigForge
                         // manifests carry no range (both 0) → the original 0..1 ratio.
                         float lo = e.canonical.minValue, hi = e.canonical.maxValue;
                         if (hi <= lo) { lo = 0f; hi = 1f; }
-                        el = $"<ui:Slider name=\"{name}\" label=\"{label}\" low-value=\"{F(lo)}\" high-value=\"{F(hi)}\"{(float.TryParse(val, out var sv) ? $" value=\"{F(Mathf.Clamp(sv, lo, hi))}\"" : "")} class=\"{classes}\" />";
+                        el = $"<ui:Slider name=\"{name}\" label=\"{label}\" low-value=\"{F(lo)}\" high-value=\"{F(hi)}\"{(float.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var sv) ? $" value=\"{F(Mathf.Clamp(sv, lo, hi))}\"" : "")} class=\"{classes}\" />";
                         break;
                     }
                     default:

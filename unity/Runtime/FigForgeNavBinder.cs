@@ -37,7 +37,10 @@ namespace FigForge
             foreach (var link in links)
             {
                 if (link == null || string.IsNullOrEmpty(link.targetScreen)) continue;
-                var btn = link.GetComponent<Button>() ?? link.GetComponentInChildren<Button>(true);
+                // No ?? here: in the editor a missing Button comes back as Unity's
+                // fake-null stub, which ?? treats as found — explicit == null is safe.
+                var btn = link.GetComponent<Button>();
+                if (btn == null) btn = link.GetComponentInChildren<Button>(true);
                 if (btn == null) continue;
                 var target = link.targetScreen;
                 btn.onClick.AddListener(() => screenManager.Show(target));

@@ -25,6 +25,9 @@ namespace FigForge
         bool _over, _down;
 
         void OnEnable() { Apply(); }
+        // Disabled mid-interaction would re-enable stuck on the rollover/pressed tint —
+        // clear the flags and restore regular (same pattern as FigForgeButtonStateObjects).
+        void OnDisable() { _over = false; _down = false; Apply(); }
 
         public void OnPointerEnter(PointerEventData e) { _over = true; Apply(); }
         public void OnPointerExit(PointerEventData e) { _over = false; _down = false; Apply(); }

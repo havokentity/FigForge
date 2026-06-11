@@ -12,6 +12,10 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 
 import { resolveAndValidateOutputPath, executeExportUnity } from '../dist/tools.js';
+// Imported from src (not dist) deliberately: the regex is the thing under
+// test, and node's native type stripping runs the erasable-only schema.ts
+// as-is — so the test can't silently pass against a stale compiled copy.
+import { figmaNodeId } from '../src/schema.ts';
 import type { PluginSender, RpcResponse } from '../src/types.ts';
 
 // A sender whose export_unity reply carries the given assets verbatim.
@@ -24,6 +28,33 @@ function senderWithAssets(assets: Array<{ name: unknown; data: unknown }>): Plug
     },
   };
 }
+
+describe('figmaNodeId schema', () => {
+  it('accepts plain "num:num" ids', () => {
+    assert.equal(figmaNodeId.safeParse('123:456').success, true);
+    assert.equal(figmaNodeId.safeParse('0:1').success, true);
+  });
+
+  it('accepts instance-descendant path ids ("I" + ";"-separated segments)', () => {
+    assert.equal(figmaNodeId.safeParse('I123:4;567:8').success, true);
+    assert.equal(figmaNodeId.safeParse('I1:2;3:4;5:6').success, true);
+    assert.equal(figmaNodeId.safeParse('I123:4').success, true); // single segment
+  });
+
+  it('rejects malformed ids', () => {
+    const bad = [
+      '123-456',      // hyphen, not colon
+      '123:4;567:8',  // path segments without the "I" prefix
+      'I123:4;',      // trailing separator
+      'I;123:4',      // empty first segment
+      'I123',         // no colon pair
+      '',
+    ];
+    for (const id of bad) {
+      assert.equal(figmaNodeId.safeParse(id).success, false, `should reject "${id}"`);
+    }
+  });
+});
 
 describe('resolveAndValidateOutputPath', () => {
   const root = path.resolve(os.tmpdir(), 'figforge-workspace');
