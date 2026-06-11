@@ -551,12 +551,15 @@ namespace FigForge
             ApplyBlendState(target, alphaBlend);
             target.SetFloat("_FillCount", Mathf.Min(VisibleFillCount(), 4));
             target.SetVector("_FillFlags", FillFlags());
-            // All paint/shadow tints go through SetVector, NOT SetColor: in a Linear
-            // project Unity sRGB→linear-converts Color-typed properties at bind time,
-            // but the shader composites paints in Figma (sRGB) space and converts once
-            // itself via figmaToProjectRgb — mirroring RoundedRect's unpackColor, which
-            // also receives raw sRGB (vertex bytes) and converts exactly once. SetColor
-            // here double-converted multi-fill solids and non-black shadow tints.
+            // All paint/shadow tints must reach the shader as RAW sRGB: the frag
+            // composites paints in Figma (sRGB) space and converts to project space
+            // exactly once itself via figmaToProjectRgb — mirroring RoundedRect's
+            // unpackColor (raw sRGB vertex bytes, converted once). What guarantees
+            // raw delivery is the shader DECLARING these properties as Vector, not
+            // Color — in a Linear project Unity sRGB→linear-converts Color-DECLARED
+            // properties at upload regardless of whether SetColor or SetVector was
+            // called (pixel-verified: SetVector into a Color-declared property still
+            // arrived linearized and double-darkened every solid fill).
             target.SetVector("_FillColor0", FillColor(0));
             target.SetVector("_FillColor1", FillColor(1));
             target.SetVector("_FillColor2", FillColor(2));

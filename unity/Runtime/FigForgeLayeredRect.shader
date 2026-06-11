@@ -10,10 +10,16 @@ Shader "FigForge/LayeredRect4"
         _FillCount ("Fill Count", Float) = 0
         _FillFlags ("Fill Uses Gradient", Vector) = (0,0,0,0)
         _FillKind ("Fill Gradient Kinds", Vector) = (0,0,0,0)
-        _FillColor0 ("Fill 0", Color) = (0,0,0,0)
-        _FillColor1 ("Fill 1", Color) = (0,0,0,0)
-        _FillColor2 ("Fill 2", Color) = (0,0,0,0)
-        _FillColor3 ("Fill 3", Color) = (0,0,0,0)
+        // All 16 tints are declared Vector, NOT Color, on purpose: in a Linear
+        // project Unity sRGB→linear-converts COLOR-DECLARED properties at upload
+        // regardless of whether C# used SetColor or SetVector — the declaration,
+        // not the setter, decides. The frag composites paints in Figma (sRGB)
+        // space and converts to project space exactly once itself, so the raw
+        // sRGB values must reach the shader untouched.
+        _FillColor0 ("Fill 0", Vector) = (0,0,0,0)
+        _FillColor1 ("Fill 1", Vector) = (0,0,0,0)
+        _FillColor2 ("Fill 2", Vector) = (0,0,0,0)
+        _FillColor3 ("Fill 3", Vector) = (0,0,0,0)
         _FillDir0 ("Fill Dir 0", Vector) = (1,0,0,0)
         _FillDir1 ("Fill Dir 1", Vector) = (1,0,0,0)
         _FillDir2 ("Fill Dir 2", Vector) = (1,0,0,0)
@@ -21,10 +27,10 @@ Shader "FigForge/LayeredRect4"
         _StrokeCount ("Stroke Count", Float) = 0
         _StrokeFlags ("Stroke Uses Gradient", Vector) = (0,0,0,0)
         _StrokeKind ("Stroke Gradient Kinds", Vector) = (0,0,0,0)
-        _StrokeColor0 ("Stroke 0", Color) = (0,0,0,0)
-        _StrokeColor1 ("Stroke 1", Color) = (0,0,0,0)
-        _StrokeColor2 ("Stroke 2", Color) = (0,0,0,0)
-        _StrokeColor3 ("Stroke 3", Color) = (0,0,0,0)
+        _StrokeColor0 ("Stroke 0", Vector) = (0,0,0,0)
+        _StrokeColor1 ("Stroke 1", Vector) = (0,0,0,0)
+        _StrokeColor2 ("Stroke 2", Vector) = (0,0,0,0)
+        _StrokeColor3 ("Stroke 3", Vector) = (0,0,0,0)
         _StrokeDir0 ("Stroke Dir 0", Vector) = (1,0,0,0)
         _StrokeDir1 ("Stroke Dir 1", Vector) = (1,0,0,0)
         _StrokeDir2 ("Stroke Dir 2", Vector) = (1,0,0,0)
@@ -36,10 +42,10 @@ Shader "FigForge/LayeredRect4"
         _Size ("Rect Size (px)", Vector) = (100,100,0,0)
         _AppearanceOpacity ("Appearance Opacity", Float) = 1
         _ShadowCount ("Shadow Count", Float) = 0
-        _ShadowColor0 ("Drop Shadow 0 Color", Color) = (0,0,0,0)
-        _ShadowColor1 ("Drop Shadow 1 Color", Color) = (0,0,0,0)
-        _ShadowColor2 ("Drop Shadow 2 Color", Color) = (0,0,0,0)
-        _ShadowColor3 ("Drop Shadow 3 Color", Color) = (0,0,0,0)
+        _ShadowColor0 ("Drop Shadow 0 Color", Vector) = (0,0,0,0)
+        _ShadowColor1 ("Drop Shadow 1 Color", Vector) = (0,0,0,0)
+        _ShadowColor2 ("Drop Shadow 2 Color", Vector) = (0,0,0,0)
+        _ShadowColor3 ("Drop Shadow 3 Color", Vector) = (0,0,0,0)
         _ShadowOffset0 ("Shadow 0 Offset px (xy)", Vector) = (0,0,0,0)
         _ShadowOffset1 ("Shadow 1 Offset px (xy)", Vector) = (0,0,0,0)
         _ShadowOffset2 ("Shadow 2 Offset px (xy)", Vector) = (0,0,0,0)
@@ -50,10 +56,10 @@ Shader "FigForge/LayeredRect4"
         _ShadowParams3 ("Shadow 3 (x=blur, y=spread) px", Vector) = (0,0,0,0)
         _ShadowBehind ("Drop Shadows Show Behind Shape", Vector) = (0,0,0,0)
         _InnerShadowCount ("Inner Shadow Count", Float) = 0
-        _InnerShadowColor0 ("Inner Shadow 0 Color", Color) = (0,0,0,0)
-        _InnerShadowColor1 ("Inner Shadow 1 Color", Color) = (0,0,0,0)
-        _InnerShadowColor2 ("Inner Shadow 2 Color", Color) = (0,0,0,0)
-        _InnerShadowColor3 ("Inner Shadow 3 Color", Color) = (0,0,0,0)
+        _InnerShadowColor0 ("Inner Shadow 0 Color", Vector) = (0,0,0,0)
+        _InnerShadowColor1 ("Inner Shadow 1 Color", Vector) = (0,0,0,0)
+        _InnerShadowColor2 ("Inner Shadow 2 Color", Vector) = (0,0,0,0)
+        _InnerShadowColor3 ("Inner Shadow 3 Color", Vector) = (0,0,0,0)
         _InnerShadowOffset0 ("Inner Shadow 0 Offset px (xy)", Vector) = (0,0,0,0)
         _InnerShadowOffset1 ("Inner Shadow 1 Offset px (xy)", Vector) = (0,0,0,0)
         _InnerShadowOffset2 ("Inner Shadow 2 Offset px (xy)", Vector) = (0,0,0,0)
