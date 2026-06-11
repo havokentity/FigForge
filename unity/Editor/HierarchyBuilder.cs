@@ -217,6 +217,10 @@ namespace FigForge
                 {
                     inst = BuildList(e, parent, ctx);
                 }
+                else if (canonicalKind == "table")
+                {
+                    inst = BuildTable(e, parent, ctx);
+                }
                 else
                 {
                     ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' → placeholder");
@@ -2149,15 +2153,37 @@ namespace FigForge
             states.selected = selected.fill;
         }
 
-        // List: a scrollable, masked, rounded container that repeats ONE interactive Item
-        // row `count` times. Each row is its own Button with a FigForgeRoundedRect from the
-        // template's Regular shape and a rollover-colour swap (FigForgeButtonStateColors).
-        // Built per-instance (not a shared prefab) so each list's height sets its row count.
-        static GameObject BuildList(ElementData e, Transform parent, BuildContext ctx)
+        // Shared scroll scaffolding for the List/Table canonicals: rounded container
+        // Background (subtree or flat shape), optional Header subtree pinned to the
+        // top, FigForgeScrollRect with a designer-defined (Mask layer) or derived
+        // clip viewport, vertical-layout Content, and the styled overlay Scrollbar
+        // that auto-hides when the rows fit the viewport.
+        sealed class ScrollShell
+        {
+            public GameObject go;
+            public Graphic bg;
+            public FigForgeScrollRect scroll;
+            public RectTransform viewport;
+            public RectTransform content;
+            public GameObject scrollbarGo;
+            public float headerH;     // canvas px
+            public float maskInset;   // canvas px
+            public bool hasMaskPart;
+
+            // Viewport height for the EDIT-mode initial scrollbar visibility check
+            // (the AutoHide + tolerance logic in FigForgeScrollRect.LateUpdate only
+            // runs in play mode).
+            public float ViewportHeight(ElementData e, float sf)
+                => hasMaskPart
+                    ? (e.canonical.parts["Mask"][3] - e.canonical.parts["Mask"][1]) * e.rect.h * sf
+                    : e.rect.h * sf - headerH - 2f * maskInset;
+        }
+
+        static ScrollShell BuildScrollShell(ElementData e, Transform parent, BuildContext ctx, string kindLabel)
         {
             var c = e.canonical;
             float sf = ctx.scaleFactor;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "List" : e.name, parent);
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? kindLabel : e.name, parent);
             // Rounded container background — full render-only subtree when present (added
             // first so it sits behind the scrollable viewport/content), else the flat shape.
             Graphic bg;
@@ -2214,12 +2240,12 @@ namespace FigForge
             }
             if (viewport.GetComponent<CanvasRenderer>() == null) viewport.AddComponent<CanvasRenderer>();
             float maskR = (c.maskShape != null ? c.maskShape.cornerRadius : 0f) * sf;
-            bool listClips = e.clipsContent || hasMaskPart;
+            bool clips = e.clipsContent || hasMaskPart;
             if (hasMaskPart && maskR <= 0.5f)
-                Debug.LogWarning($"[FigForge] List '{e.name}': the Mask layer has corner radius 0, so the clip is SQUARE — " +
+                Debug.LogWarning($"[FigForge] {kindLabel} '{e.name}': the Mask layer has corner radius 0, so the clip is SQUARE — " +
                                  "row fills will poke past the rounded Background at the corners. Give the Mask layer a corner " +
-                                 "radius in Figma (clicking +List once repairs un-touched default masks), then re-export.");
-            if (listClips && maskR > 0.5f)
+                                 "radius in Figma (clicking the create chip once repairs un-touched default masks), then re-export.");
+            if (clips && maskR > 0.5f)
             {
                 // ROUNDED clip, designer-defined by the Mask layer's own corner radius.
                 // The rounded SDF graphic doubles as drag target and stencil source — its
@@ -2234,7 +2260,7 @@ namespace FigForge
             else
             {
                 viewport.AddComponent<Image>().color = new Color(1, 1, 1, 0.004f); // near-invisible drag/clip target
-                if (listClips)
+                if (clips)
                 {
                     var mask = viewport.AddComponent<RectMask2D>();
                     // Feather the clip edge ~1px so hard row edges blend like the AA'd background edge.
@@ -2277,7 +2303,7 @@ namespace FigForge
             if (sbGo.GetComponent<CanvasRenderer>() == null) sbGo.AddComponent<CanvasRenderer>();
             var sbHit = sbGo.AddComponent<Image>();
             sbHit.color = new Color(0, 0, 0, 0);
-            sbHit.raycastTarget = true; // track click pages the list
+            sbHit.raycastTarget = true; // track click pages the rows
             if (c.scrollTrackShape != null)
             {
                 var trackGo = NewRect("Track", sbGo.transform);
@@ -2324,13 +2350,30 @@ namespace FigForge
             sbStates.hasRollover = true;
             sbStates.hasPressed = true;
 
+            return new ScrollShell
+            {
+                go = go, bg = bg, scroll = scroll, viewport = vrt, content = crt,
+                scrollbarGo = sbGo, headerH = headerH, maskInset = maskInset, hasMaskPart = hasMaskPart,
+            };
+        }
+
+        // List: a scrollable, masked, rounded container that repeats ONE interactive Item
+        // row `count` times. Each row is its own Button with a FigForgeRoundedRect from the
+        // template's Regular shape and a rollover-colour swap (FigForgeButtonStateColors).
+        static GameObject BuildList(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var shell = BuildScrollShell(e, parent, ctx, "List");
+            var go = shell.go;
+
             float rowH = (c.itemHeight > 0.01f ? c.itemHeight : 44f) * sf;
             int count = c.count > 0 ? c.count : 5;
             bool hasHover = c.itemRollover != null;
             Color hover = hasHover ? ToColor(c.itemRollover) : Color.white;
             string labelTmpl = string.IsNullOrEmpty(c.label) ? "Item" : c.label;
             var list = go.AddComponent<FigForgeList>();
-            list.Configure(crt, rowH, labelTmpl, ToListRowStyle(c.itemShape, sf), hover, hasHover);
+            list.Configure(shell.content, rowH, labelTmpl, ToListRowStyle(c.itemShape, sf), hover, hasHover);
             // Row corner rounding (containerCorners) stays zero: the clip shape is owned by
             // the designer's Mask layer now — its corner radius rounds the clip itself, so
             // nothing is derived from the Background's corners anymore.
@@ -2362,16 +2405,64 @@ namespace FigForge
             }
             else list.CreatePreviewRows(count);
 
-            // Initial scrollbar visibility for EDIT mode (the AutoHide + tolerance logic in
-            // FigForgeScrollRect.LateUpdate only runs in play mode): hidden when the rows
-            // fit the viewport within the same tolerance.
+            // Initial scrollbar visibility for EDIT mode: hidden when the rows fit the
+            // viewport within the play-mode AutoHide tolerance.
             int builtRows = c.listItems != null && c.listItems.Count > 0 ? c.listItems.Count : count;
-            float viewportH = hasMaskPart
-                ? (c.parts["Mask"][3] - c.parts["Mask"][1]) * e.rect.h * sf
-                : e.rect.h * sf - headerH - 2f * maskInset;
-            sbGo.SetActive(builtRows * rowH > viewportH + scroll.scrollbarHideTolerance);
+            shell.scrollbarGo.SetActive(builtRows * rowH > shell.ViewportHeight(e, sf) + shell.scroll.scrollbarHideTolerance);
 
-            var bind = go.AddComponent<FigForgeBindings>(); bind.background = bg;
+            var bind = go.AddComponent<FigForgeBindings>(); bind.background = shell.bg;
+            return go;
+        }
+
+        // Table: the List's grid sibling — the same scroll shell (pinned Header,
+        // designer Mask clip, overflow-only Scrollbar) repeating ONE TableRow of m
+        // CellN columns per data row. Rows come from the captured n×m cell texts
+        // (the Row instances placed in the Figma master); runtime code can replace
+        // them via table.SetRows.
+        static GameObject BuildTable(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var shell = BuildScrollShell(e, parent, ctx, "Table");
+            var go = shell.go;
+
+            float rowH = (c.itemHeight > 0.01f ? c.itemHeight : 40f) * sf;
+            int count = c.count > 0 ? c.count : 4;
+            int cols = c.columns > 0 ? c.columns
+                : (c.tableRows != null && c.tableRows.Count > 0 && c.tableRows[0] != null ? c.tableRows[0].Count : 1);
+            bool hasHover = c.itemRollover != null;
+            Color hover = hasHover ? ToColor(c.itemRollover) : Color.white;
+            string labelTmpl = string.IsNullOrEmpty(c.label) ? "Item" : c.label;
+            var table = go.AddComponent<FigForgeTable>();
+            table.Configure(shell.content, rowH, cols, labelTmpl, ToListRowStyle(c.itemShape, sf), hover, hasHover);
+
+            // Rich rows: the captured Row subtree as a hidden template that FigForgeTable
+            // clones per data row (Cell1..CellM bound per row), with per-state row fills.
+            if (HasPartTree(c, "Row"))
+            {
+                var tpl = NewRect("RowTemplate", go.transform);
+                Stretch(tpl.GetComponent<RectTransform>());
+                BuildPartSubtree(tpl, c.partTrees["Row"], ctx);
+                tpl.SetActive(false); // never shown directly; cloned per row at build/runtime
+                table.rowTemplate = tpl;
+                table.rowRegular = ToListRowStyle(c.itemShape, sf).fill;
+                table.rowRollover = FigForgeFill.Solid(hover); table.rowHasRollover = hasHover;
+                table.rowPressed = FigForgeFill.Solid(c.itemPressed != null ? ToColor(c.itemPressed) : hover); table.rowHasPressed = c.itemPressed != null;
+                table.rowSelected = FigForgeFill.Solid(c.itemSelected != null ? ToColor(c.itemSelected) : hover); table.rowHasSelected = c.itemSelected != null;
+            }
+
+            // Populate rows from the captured n×m cell texts when present; else generate
+            // `count` placeholder rows. Runtime code can replace them via table.SetRows.
+            if (c.tableRows != null && c.tableRows.Count > 0)
+                table.SetRows(c.tableRows);
+            else table.CreatePreviewRows(count);
+
+            // Initial scrollbar visibility for EDIT mode: hidden when the rows fit the
+            // viewport within the play-mode AutoHide tolerance.
+            int builtRows = c.tableRows != null && c.tableRows.Count > 0 ? c.tableRows.Count : count;
+            shell.scrollbarGo.SetActive(builtRows * rowH > shell.ViewportHeight(e, sf) + shell.scroll.scrollbarHideTolerance);
+
+            var bind = go.AddComponent<FigForgeBindings>(); bind.background = shell.bg;
             return go;
         }
 
@@ -2688,13 +2779,14 @@ namespace FigForge
                 : (kind == "dropdown") ? BuildDropdown(e, null, ctx)
                 : (kind == "slider") ? BuildSlider(e, null, ctx)
                 : (kind == "list") ? BuildList(e, null, ctx)
+                : (kind == "table") ? BuildTable(e, null, ctx)
                 : BuildPlaceholderButton(e, null, ctx);
             if (temp == null) return candidate; // generation failed — keep whatever we had
             temp.name = SafeAsset(refName);
 
             // Wire binding slots so per-instance label/value apply onto the prefab.
             var bind = temp.GetComponent<FigForgeBindings>() ?? temp.AddComponent<FigForgeBindings>();
-            if (kind != "list") // a list has no single label/Selectable — its rows are data-driven via FigForgeList.SetItems
+            if (kind != "list" && kind != "table") // a list/table has no single label/Selectable — rows are data-driven via SetItems/SetRows
             {
                 bind.label = temp.GetComponentInChildren<TMP_Text>(true);
                 bind.control = temp.GetComponent<Selectable>();
@@ -2803,7 +2895,10 @@ namespace FigForge
         // v46: slider live value read-out — the 'Value' layer becomes a TMP wired to
         //      FigForgeSlider.tmpTxt_value (rewritten on every value change) and
         //      FigForgeBindings.valueText.
-        internal const int CanonicalSchema = 46;
+        // v47: canonical Table — the List's scroll shell (pinned Header, Mask clip,
+        //      overflow-only Scrollbar) with a TableRow template of m CellN columns
+        //      cloned per data row (FigForgeTable/FigForgeTableRow, SetRows API).
+        internal const int CanonicalSchema = 47;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)
@@ -2894,6 +2989,21 @@ namespace FigForge
             // instances share one visual prefab instead of thrash-regenerating it.
             sb.Append(";iro=").Append(SigF(c.itemRollover)).Append(";ipr=").Append(SigF(c.itemPressed)).Append(";isel=").Append(SigF(c.itemSelected));
             sb.Append(";hh=").Append(c.headerHeight.ToString("0.###"));
+            // Table grid: column count + the n×m cell texts. The rows are captured from
+            // the MASTER's placed Row instances (shared by every placed table), so folding
+            // them regenerates the prefab when a cell text is edited in Figma — without
+            // per-instance thrash.
+            if (c.columns > 0) sb.Append(";tcols=").Append(c.columns);
+            if (c.tableRows != null && c.tableRows.Count > 0)
+            {
+                var trows = new System.Text.StringBuilder();
+                foreach (var row in c.tableRows)
+                {
+                    if (row != null) foreach (var cell in row) trows.Append(cell ?? "").Append('\u001f');
+                    trows.Append('\u001e');
+                }
+                sb.Append(";trows=").Append(SigHash(trows.ToString()));
+            }
             // Slider visuals + numeric behaviour (range/slots are baked into the
             // prefab's Slider fields). `value` is deliberately NOT folded — it's
             // per-instance (applied by FigForgeBindings), not part of the shared look.

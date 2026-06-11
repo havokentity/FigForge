@@ -268,6 +268,25 @@ $('#sliderOptsCreate').addEventListener('click', () => {
   });
 });
 
+// Table variants: rows × columns, header toggle, scrollbar width.
+const tablePop = wirePopover($('#createTableBtn') as HTMLElement, document.getElementById('tableOpts'));
+$('#tableOptsCreate').addEventListener('click', () => {
+  const int = (id: string, def: number, lo: number, hi: number) => {
+    const v = parseInt((document.getElementById(id) as HTMLInputElement | null)?.value ?? '', 10);
+    return isNaN(v) ? def : Math.min(hi, Math.max(lo, v));
+  };
+  tablePop.hide();
+  setStatus('Creating table component…');
+  post({
+    type: 'create-canonical', kind: 'table', componentsPage: compPageOn(),
+    tableOpts: {
+      rows: int('tableOptRows', 4, 1, 100), cols: int('tableOptCols', 3, 1, 12),
+      header: (document.getElementById('tableOptHeader') as HTMLInputElement | null)?.checked !== false,
+      scrollbarWidth: int('tableOptSbWidth', 10, 2, 40),
+    },
+  });
+});
+
 // option chips
 function wireChip(id: string) {
   const el = $(`#${id}`);

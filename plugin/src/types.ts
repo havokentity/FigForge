@@ -146,7 +146,7 @@ export interface TextProps {
 // in Unity as an instance of a named canonical Button definition rather than
 // rebuilt from PNG/text. Scoped to buttons for now; `kind` keeps it extensible.
 // ---------------------------------------------------------------------------
-export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'input' | 'dropdown' | 'slider' | 'list';
+export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'input' | 'dropdown' | 'slider' | 'list' | 'table';
 
 /** Exported per-state background sprites for an interactive control. */
 export interface CanonicalStates {
@@ -229,6 +229,11 @@ export interface CanonicalRef {
   scrollThumbRollover?: RGBA; // list: thumb hover colour ('Scrollbar/ThumbRollover', hidden layer)
   scrollThumbPressed?: RGBA;  // list: thumb pressed colour ('Scrollbar/ThumbPressed', hidden layer)
   maskShape?: ButtonShape;    // list: the 'Mask' layer's styling — its cornerRadius rounds the clip
+  // table: the list fields above (itemShape/itemRollover/itemPressed/itemSelected/
+  // itemHeight/headerHeight/count/scrollbar*/maskShape) are shared verbatim; these
+  // two carry what a table adds over a list.
+  tableRows?: string[][];     // table: per-row cell texts (n rows × m columns), from the placed Row instances
+  columns?: number;           // table: column count (from the TableRow master's CellN texts)
   // slider: Track/Fill/Thumb styling + thumb state colours. `value` above is the
   // RAW initial value within [minValue..maxValue] (derived from the Fill÷Track
   // width ratio, else the canonical tag value); legacy manifests omit the range

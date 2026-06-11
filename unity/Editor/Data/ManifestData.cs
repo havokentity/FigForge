@@ -204,6 +204,10 @@ namespace FigForge
         public float[] scrollThumbRollover; // list: thumb hover colour ('Scrollbar/ThumbRollover')
         public float[] scrollThumbPressed;  // list: thumb pressed colour ('Scrollbar/ThumbPressed')
         public CanonicalShape maskShape;    // list: the 'Mask' layer's styling — cornerRadius rounds the clip
+        // table: shares the list fields above (itemShape/itemRollover/itemPressed/
+        // itemSelected/itemHeight/headerHeight/count/scrollbar*/maskShape) verbatim.
+        public List<List<string>> tableRows; // table: per-row cell texts (n rows × m columns)
+        public int columns;                  // table: column count (CellN texts in the TableRow master)
         // slider: Track/Fill/Thumb styling + thumb state colours. `value` above is the
         // RAW initial value within [minValue..maxValue]; legacy manifests omit the
         // range (both 0 → treat as 0..1, where value was the plain Fill÷Track ratio).

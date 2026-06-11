@@ -423,6 +423,7 @@
             <button class="chip" id="createDropdownBtn" title="Create a canonical Dropdown component">＋ Dropdown</button>
             <button class="chip" id="createSliderBtn" title="Create a canonical Slider component — resize the master's Fill width to set the initial value">＋ Slider</button>
             <button class="chip" id="createListBtn" title="Create a canonical scrollable List component — click to pick which parts the list has">＋ List</button>
+            <button class="chip" id="createTableBtn" title="Create a canonical scrollable Table component — click to pick rows × columns">＋ Table</button>
           </div>
           <!-- List variants popover — floats under the ＋List chip; combinations become
                separate masters (List, List NoHeader, List NoIcon NoSubtitle, …). -->
@@ -445,6 +446,16 @@
             <label class="list-pop-row" title="Number of slots (tick positions) across the range, including both ends"><span>Slots</span><input type="number" id="sliderOptSlots" value="5" min="2" max="100" disabled /></label>
             <label class="list-pop-row" title="Show a live read-out of the current value, right of the label"><input type="checkbox" id="sliderOptValue" /><span>Show value</span></label>
             <button class="list-pop-create" id="sliderOptsCreate" title="Create this Slider variant">＋ Add Slider</button>
+          </div>
+          <!-- Table options popover — floats under the ＋Table chip; configurations
+               become separate masters (Table, Table 6x4, Table 6x4 NoHeader, …). -->
+          <div class="list-pop" id="tableOpts" hidden>
+            <div class="list-pop-title">Table options</div>
+            <label class="list-pop-row" title="Number of data rows placed in the master (each row's cell texts export as the table data)"><span>Rows</span><input type="number" id="tableOptRows" value="4" min="1" max="100" /></label>
+            <label class="list-pop-row" title="Number of columns (cells per row; columns share the width equally — resize a cell in the TableRow master to size a column)"><span>Columns</span><input type="number" id="tableOptCols" value="3" min="1" max="12" /></label>
+            <label class="list-pop-row" title="Include the column-title strip pinned above the scrolling rows"><input type="checkbox" id="tableOptHeader" checked /><span>Header row</span></label>
+            <label class="list-pop-row" title="Scrollbar thickness in px (non-default widths become their own master, e.g. 'Table SB14')"><span>Scrollbar width</span><input type="number" id="tableOptSbWidth" value="10" min="2" max="40" /></label>
+            <button class="list-pop-create" id="tableOptsCreate" title="Create this Table variant">＋ Add Table</button>
           </div>
         </div>
         <div class="create-settings">

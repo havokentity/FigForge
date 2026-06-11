@@ -207,7 +207,8 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
         const comp = await createCanonical(String((msg as { kind?: string }).kind || ''),
           (msg as { listOpts?: Partial<ListOptions> }).listOpts,
-          (msg as { sliderOpts?: Partial<SliderOptions> }).sliderOpts);
+          (msg as { sliderOpts?: Partial<SliderOptions> }).sliderOpts,
+          (msg as { tableOpts?: Partial<TableOptions> }).tableOpts);
         const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
         figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group radios under one frame).` });
       } catch (e) {
@@ -570,7 +571,7 @@ function enclosingScreenFrame(nodes: readonly SceneNode[]): FrameNode | undefine
 }
 
 // Canonical master component names FigForge knows how to create.
-const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'Slider', 'List', 'ListItem'];
+const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'Slider', 'List', 'ListItem', 'Table', 'TableRow'];
 
 // Find an existing canonical master by name ANYWHERE in the document (masters no
 // longer need to live on a dedicated page — they can sit loose on any design page,
@@ -617,9 +618,10 @@ function solidRect(name: string, w: number, h: number, r: number, color: RGB, al
   return rect;
 }
 
-// Dispatch a "+Toggle / +Radio / +Dropdown / +Slider / +List" create request to its builder.
+// Dispatch a "+Toggle / +Radio / +Dropdown / +Slider / +List / +Table" create request to its builder.
 async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
-                               sliderOpts?: Partial<SliderOptions>): Promise<ComponentNode> {
+                               sliderOpts?: Partial<SliderOptions>,
+                               tableOpts?: Partial<TableOptions>): Promise<ComponentNode> {
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
@@ -627,6 +629,7 @@ async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
     case 'dropdown': return createDropdown();
     case 'slider': return createSlider(sliderOpts);
     case 'list': return createList({ ...LIST_DEFAULTS, ...(listOpts ?? {}) });
+    case 'table': return createTable({ ...TABLE_DEFAULTS, ...(tableOpts ?? {}) });
     default: throw new Error(`unknown canonical kind '${kind}'`);
   }
 }
@@ -1157,7 +1160,9 @@ function upgradeAllListMasters(): void {
       }
       const tag = (n as ComponentNode).getSharedPluginData('figforge', 'canonical');
       if (!tag) continue;
-      try { if ((JSON.parse(tag) as { kind?: string }).kind !== 'list') continue; } catch { continue; }
+      // Tables share the List's scroll plumbing (Scrollbar/Mask/rounded clip), so the
+      // same repairs keep both kinds of master up to the current conventions.
+      try { const k = (JSON.parse(tag) as { kind?: string }).kind; if (k !== 'list' && k !== 'table') continue; } catch { continue; }
       const comp = n as ComponentNode;
       repairOldDefaultScrollbar(comp);
       ensureListScrollbar(comp);
@@ -1357,4 +1362,166 @@ function ensureListScrollbar(comp: ComponentNode, width: number = DEFAULT_SCROLL
     press.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
     sb.appendChild(press);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical Table — an n×m grid: an optional pinned Header of column titles +
+// n TableRow instances of m equal columns, on the List's scroll plumbing
+// (Scrollbar, Mask, rounded clip — the same ensure* helpers repair both kinds).
+// ---------------------------------------------------------------------------
+export type TableOptions = { rows: number; cols: number; header: boolean; scrollbarWidth: number };
+const TABLE_DEFAULTS: TableOptions = { rows: 4, cols: 3, header: true, scrollbarWidth: DEFAULT_SCROLLBAR_WIDTH };
+const TABLE_PAD = 14;
+
+function clampTableDim(v: unknown, def: number, max: number): number {
+  const n = typeof v === 'number' && isFinite(v) ? Math.round(v) : def;
+  return Math.min(max, Math.max(1, n));
+}
+
+// Each distinct configuration is its own master ('Table', 'Table 6x4', 'Table
+// 6x4 NoHeader SB14', …) — the slider-variant convention.
+function tableVariantName(o: TableOptions): string {
+  const p: string[] = [];
+  if (o.rows !== TABLE_DEFAULTS.rows || o.cols !== TABLE_DEFAULTS.cols) p.push(`${o.rows}x${o.cols}`);
+  if (!o.header) p.push('NoHeader');
+  const sb = clampScrollbarWidth(o.scrollbarWidth);
+  if (sb !== DEFAULT_SCROLLBAR_WIDTH) p.push('SB' + sb);
+  return 'Table' + (p.length ? ' ' + p.join(' ') : '');
+}
+
+// The row master only varies by column count — tables with the same m share it.
+function tableRowVariantName(cols: number): string {
+  return cols === TABLE_DEFAULTS.cols ? 'TableRow' : `TableRow C${cols}`;
+}
+
+// A horizontal auto-layout strip of m text cells named Cell1..CellM (no spaces:
+// the exporter sanitizes subtree names to lowercase and Unity binds row data by
+// these names). Every cell has layoutGrow=1 so columns share the width equally
+// and reflow when the strip stretches; grow/shrink a cell in Figma to resize a
+// column — rows and header reflow alike since both use this strip.
+function tableCellStrip(W: number, H: number, cols: number, font: FontName,
+                        textFor: (c: number) => string, fontSize: number, color: RGB): FrameNode {
+  const strip = figma.createFrame();
+  strip.name = 'Content'; strip.fills = []; strip.clipsContent = false;
+  strip.x = 0; strip.y = 0; strip.resize(W, H);
+  strip.layoutMode = 'HORIZONTAL';
+  strip.primaryAxisSizingMode = 'FIXED';
+  strip.counterAxisSizingMode = 'FIXED';
+  strip.primaryAxisAlignItems = 'MIN';
+  strip.counterAxisAlignItems = 'CENTER';
+  strip.itemSpacing = 12;
+  strip.paddingLeft = TABLE_PAD; strip.paddingRight = TABLE_PAD;
+  strip.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  for (let c = 1; c <= cols; c++) {
+    const cell = figma.createText();
+    cell.fontName = font; cell.name = 'Cell' + c; cell.characters = textFor(c);
+    cell.fontSize = fontSize; cell.fills = [{ type: 'SOLID', color }];
+    strip.appendChild(cell);
+    cell.textAutoResize = 'HEIGHT';
+    cell.layoutGrow = 1;
+  }
+  return strip;
+}
+
+async function ensureTableRow(font: FontName, W: number, ROW: number, cols: number): Promise<ComponentNode> {
+  const rowName = tableRowVariantName(cols);
+  const found = findMaster(rowName);
+  if (found) return found;
+  const item = figma.createComponent();
+  item.name = rowName; item.resize(W, ROW); item.fills = []; item.clipsContent = true;
+
+  // Pointer/selection state backgrounds (full-bleed) — the ListItem convention:
+  // only Regular shows; Unity swaps these on hover/press/selection.
+  const reg = solidRect('Regular', W, ROW, 0, { r: 1, g: 1, b: 1 });
+  reg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(reg);
+  const roll = solidRect('Rollover', W, ROW, 0, { r: 0.96, g: 0.96, b: 1 });
+  roll.visible = false; roll.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(roll);
+  const press = solidRect('Pressed', W, ROW, 0, { r: 0.92, g: 0.92, b: 1 });
+  press.visible = false; press.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(press);
+  const sel = solidRect('Selected', W, ROW, 0, { r: 0.90, g: 0.91, b: 1 });
+  sel.visible = false; sel.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(sel);
+
+  const strip = tableCellStrip(W, ROW, cols, font, (c) => `Cell ${c}`, 13, { r: 0.1, g: 0.1, b: 0.12 });
+  item.appendChild(strip);
+
+  // Bottom divider separator between rows.
+  const div = solidRect('Divider', W - TABLE_PAD * 2, 1, 0, { r: 0.9, g: 0.9, b: 0.93 });
+  div.x = TABLE_PAD; div.y = ROW - 1; div.constraints = { horizontal: 'STRETCH', vertical: 'MAX' }; item.appendChild(div);
+
+  // Transparent full-bleed hit target — last so it sits on top.
+  const hit = solidRect('HitArea', W, ROW, 0, { r: 0, g: 0, b: 0 }, 0);
+  hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' }; item.appendChild(hit);
+
+  parkMaster(item);
+  return item;
+}
+
+// Table: rounded clipped Background + optional pinned Header (column titles over a
+// tinted band) + n TableRow instances. The rows you see in Figma ARE the exported
+// cell data — edit a cell text on a placed Row to set that cell. In Unity the rows
+// scroll under the pinned header and the scrollbar appears only when they overflow
+// the instance's height (resize the instance to set the visible row count).
+async function createTable(opts: TableOptions = TABLE_DEFAULTS): Promise<ComponentNode> {
+  upgradeAllListMasters();
+  const rows = clampTableDim(opts.rows, TABLE_DEFAULTS.rows, 100);
+  const cols = clampTableDim(opts.cols, TABLE_DEFAULTS.cols, 12);
+  const sbWidth = clampScrollbarWidth(opts.scrollbarWidth);
+  const name = tableVariantName({ ...opts, rows, cols, scrollbarWidth: sbWidth });
+  const reuse = findMaster(name);
+  if (reuse) { ensureListScrollbar(reuse, sbWidth); ensureListRoundedClip(reuse); ensureListMask(reuse); placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const titleFont = await loadBoldFont(font);
+  const W = Math.max(320, cols * 120), ROW = 40, HEADER = opts.header ? 40 : 0, H = HEADER + ROW * rows, R = 14;
+  const rowComp = await ensureTableRow(font, W, ROW, cols);
+
+  const comp = figma.createComponent();
+  comp.name = name; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
+
+  const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
+  bg.strokes = [{ type: 'SOLID', color: { r: 0.82, g: 0.83, b: 0.88 } }]; bg.strokeWeight = 1;
+  bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(bg);
+
+  // Header — column titles pinned above the scrolling rows in Unity. Its cell strip
+  // mirrors the row geometry exactly, so titles align with their columns at any
+  // width. The band's top corners follow the Background radius (the header sits
+  // OUTSIDE Unity's scroll mask, so a square band would poke past the rounding).
+  if (opts.header) {
+    const header = figma.createFrame();
+    header.name = 'Header'; header.resize(W, HEADER); header.fills = []; header.x = 0; header.y = 0;
+    header.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    comp.appendChild(header);
+    const hbg = solidRect('HeaderBg', W, HEADER, 0, { r: 0.97, g: 0.97, b: 0.99 });
+    hbg.topLeftRadius = R; hbg.topRightRadius = R;
+    hbg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+    header.appendChild(hbg);
+    header.appendChild(tableCellStrip(W, HEADER, cols, titleFont, (c) => `Column ${c}`, 12, { r: 0.45, g: 0.45, b: 0.5 }));
+    const hdiv = solidRect('Divider', W, 1, 0, { r: 0.88, g: 0.88, b: 0.92 });
+    hdiv.x = 0; hdiv.y = HEADER - 1; hdiv.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
+    header.appendChild(hdiv);
+  }
+
+  for (let r = 0; r < rows; r++) {
+    const ins = rowComp.createInstance();
+    ins.name = 'Row'; ins.resize(W, ROW); ins.x = 0; ins.y = HEADER + r * ROW;
+    ins.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+    comp.appendChild(ins);
+    for (let c = 1; c <= cols; c++) {
+      const cell = ins.findOne((n) => n.type === 'TEXT' && n.name === 'Cell' + c) as TextNode | null;
+      if (cell) cell.characters = c === 1 ? `Item ${r + 1}` : `R${r + 1}C${c}`;
+    }
+    if (r === 0) {
+      const selected = ins.findOne((n) => n.name === 'Selected');
+      if (selected) (selected as unknown as { visible: boolean }).visible = true;
+    }
+  }
+
+  ensureListScrollbar(comp, sbWidth);
+  ensureListRoundedClip(comp);
+  ensureListMask(comp);
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'table', ref: name }));
+  parkMaster(comp);
+  placeInstance(comp);
+  return comp;
 }

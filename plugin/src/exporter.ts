@@ -1373,7 +1373,11 @@ export async function exportDesign(
     const selNode = childByName(itemMaster, 'Selected');
     const itemSelected = selNode ? (stateSolid(selNode) ?? undefined) : undefined;
     const itemHeight = (itemNode as unknown as { height?: number }).height ?? 44;
-    const rowLabel = textOf(childByName(itemMaster, 'Title')) ?? textOf(childByName(itemMaster, 'Label'));
+    // Texts read by deep find — rich rows nest Title/Subtitle under Content > TextCol;
+    // flat fallback keeps legacy rows where 'Title' is a wrapper around the TEXT.
+    const rowText = (n: SceneNode, name: string): string | undefined =>
+      deepTextByName(n, name) ?? textOf(childByName(n, name));
+    const rowLabel = rowText(itemMaster, 'Title') ?? rowText(itemMaster, 'Label');
 
     // Per-row data from the placed 'Item' instances (their Title/Subtitle overrides) —
     // the list's analogue of a dropdown's options. Drives the rows Unity renders.
@@ -1381,8 +1385,8 @@ export async function exportDesign(
       .filter((n) => n.name === 'Item');
     const listItems = itemInstances
       .map((it) => ({
-        title: textOf(childByName(it, 'Title')) ?? textOf(childByName(it, 'Label')) ?? '',
-        subtitle: textOf(childByName(it, 'Subtitle')) ?? undefined,
+        title: rowText(it, 'Title') ?? rowText(it, 'Label') ?? '',
+        subtitle: rowText(it, 'Subtitle') ?? undefined,
       }))
       .filter((r) => r.title !== '' || r.subtitle);
 
@@ -1445,6 +1449,101 @@ export async function exportDesign(
       // 'Mask' (optional, usually hidden): a designer-drawn rect that defines the exact
       // scroll/clip region — Unity anchors the list viewport to it instead of deriving
       // the box from the Background interior minus the Header.
+      parts: partsOf(master, ['Background', 'Mask']) };
+  }
+
+  // First descendant TEXT named `name` (case-insensitive). Table cells live inside
+  // the row's auto-layout Content strip, so a direct-child lookup never finds them.
+  function deepTextByName(root: SceneNode, name: string): string | undefined {
+    if (!('findOne' in root)) return undefined;
+    const n = (root as FrameNode).findOne(
+      (c) => c.type === 'TEXT' && c.name.toLowerCase() === name.toLowerCase()) as TextNode | null;
+    return n ? n.characters : undefined;
+  }
+
+  // Capture a table: the List's scroll capture (Background/Header/Scrollbar/Mask)
+  // with a 'Row' template of m 'CellN' columns instead of the Item row, plus the
+  // per-row cell texts from the placed Row instances (n rows × m columns).
+  async function captureTable(master: SceneNode) {
+    const bg = childByName(master, 'Background');
+    const shape = bg ? await shapeOfWithAsset(bg) : undefined;
+    const rowNode = childByName(master, 'Row');
+    if (!rowNode) return null;
+    // Capture the ROW from its master (generic cells), not a placed instance.
+    const rowMaster = rowNode.type === 'INSTANCE'
+      ? (((rowNode as InstanceNode).mainComponent as SceneNode | null) ?? rowNode)
+      : rowNode;
+    const reg = childByName(rowMaster, 'Regular') ?? rowMaster;
+    const itemShape = await shapeOfWithAsset(reg) ?? undefined;
+    const rollNode = childByName(rowMaster, 'Rollover');
+    const itemRollover = rollNode ? (stateSolid(rollNode) ?? undefined) : undefined;
+    const pressNode = childByName(rowMaster, 'Pressed');
+    const itemPressed = pressNode ? (stateSolid(pressNode) ?? undefined) : undefined;
+    const selNode = childByName(rowMaster, 'Selected');
+    const itemSelected = selNode ? (stateSolid(selNode) ?? undefined) : undefined;
+    const itemHeight = (rowNode as unknown as { height?: number }).height ?? 40;
+
+    // Column count from the row MASTER's CellN texts (the structure); per-row cell
+    // data from the placed Row instances' text overrides (the table's analogue of
+    // the list's listItems). Cells read by deep find — they nest in the Content strip.
+    let columns = 0;
+    while (columns < 64 && deepTextByName(rowMaster, 'Cell' + (columns + 1)) !== undefined) columns++;
+    const rowInstances = ('children' in master ? ((master as ChildrenMixin).children as SceneNode[]) : [])
+      .filter((n) => n.name === 'Row');
+    const tableRows = rowInstances
+      .map((row) => {
+        const cells: string[] = [];
+        for (let c = 1; c <= Math.max(1, columns); c++) cells.push(deepTextByName(row, 'Cell' + c) ?? '');
+        return cells;
+      })
+      .filter((cells) => cells.some((t) => t !== ''));
+
+    const headerNode = childByName(master, 'Header');
+    const headerHeight = headerNode ? ((headerNode as unknown as { height?: number }).height ?? 0) : 0;
+
+    // Keep the solid canonical part layers procedural (not baked to PNG) — the
+    // captureList convention, plus the header's tinted band.
+    const STRUCTURAL_NAMES = new Set(['Regular', 'Rollover', 'Pressed', 'Selected', 'Divider', 'HeaderBg']);
+    const collectStructural = (root: SceneNode): Set<string> => {
+      const ids = new Set<string>();
+      const walk = (n: SceneNode): void => {
+        if (STRUCTURAL_NAMES.has(n.name) && isSdfSafe(n)) ids.add(n.id);
+        if ('children' in n) for (const c of (n as ChildrenMixin).children as SceneNode[]) walk(c);
+      };
+      walk(root);
+      return ids;
+    };
+    const bgStructuralIds = bg && isSdfSafe(bg) ? new Set([bg.id]) : undefined;
+
+    const partTrees: Record<string, ElementSubtree> = {};
+    const bgTree = await captureSubtree(bg, bgStructuralIds);
+    if (bgTree) partTrees.Background = bgTree;
+    const rowTree = await captureSubtree(rowMaster, collectStructural(rowMaster));
+    if (rowTree) partTrees.Row = rowTree;
+    const headerTree = await captureSubtree(headerNode, headerNode ? collectStructural(headerNode) : undefined);
+    if (headerTree) partTrees.Header = headerTree;
+
+    // Scrollbar styling + the Mask clip region — identical to captureList.
+    const sbNode = childByName(master, 'Scrollbar');
+    const sbTrackNode = sbNode ? (childByName(sbNode, 'Track') ?? sbNode) : undefined;
+    const sbThumbNode = sbNode ? childByName(sbNode, 'Thumb') : undefined;
+    const scrollbarWidth = sbNode ? ((sbNode as unknown as { width?: number }).width ?? undefined) : undefined;
+    const scrollTrackShape = sbTrackNode ? (shapeOf(sbTrackNode) ?? undefined) : undefined;
+    const scrollThumbShape = sbThumbNode ? (shapeOf(sbThumbNode) ?? undefined) : undefined;
+    const sbThumbRoll = sbNode ? childByName(sbNode, 'ThumbRollover') : undefined;
+    const sbThumbPress = sbNode ? childByName(sbNode, 'ThumbPressed') : undefined;
+    const scrollThumbRollover = sbThumbRoll ? (stateSolid(sbThumbRoll) ?? undefined) : undefined;
+    const scrollThumbPressed = sbThumbPress ? (stateSolid(sbThumbPress) ?? undefined) : undefined;
+    const maskNode = childByName(master, 'Mask');
+    const maskShape = maskNode ? (shapeOf(maskNode) ?? undefined) : undefined;
+
+    return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
+      itemHeight, headerHeight,
+      columns: columns || undefined,
+      tableRows: tableRows.length ? tableRows : undefined,
+      scrollbarWidth, scrollTrackShape, scrollThumbShape, scrollThumbRollover, scrollThumbPressed,
+      maskShape,
+      partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       parts: partsOf(master, ['Background', 'Mask']) };
   }
 
@@ -1628,6 +1727,18 @@ export async function exportDesign(
         // dropped newer fields (maskShape, scrollbarWidth, thumb states) on the floor,
         // so Unity saw a radius-0 mask and clipped square no matter what Figma said.
         controlByNode.set(p.node.id, { ...l, itemHeight: ih, count });
+      }
+    } else if (ref.kind === 'table') {
+      const t = await captureTable(master);
+      if (t) {
+        const ih = t.itemHeight || 40;
+        const instH = (p.node as unknown as { height?: number }).height || ih;
+        // Explicit row data wins; else rows fill the height below the header (the
+        // list convention — resize the table = set its visible length).
+        const count = t.tableRows && t.tableRows.length
+          ? t.tableRows.length
+          : Math.max(1, Math.round((instH - (t.headerHeight || 0)) / ih));
+        controlByNode.set(p.node.id, { ...t, itemHeight: ih, count });
       }
     } else if (ref.kind === 'slider') {
       const s = await captureSlider(master, canonicalTagData(master));

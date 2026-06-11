@@ -238,6 +238,7 @@ namespace FigForge
                     case "input": return "FigForge.FigForgeInputField";
                     case "slider": return "FigForge.FigForgeSlider";
                     case "list": return "FigForge.FigForgeList";
+                    case "table": return "FigForge.FigForgeTable";
                 }
             }
             if (e != null && (e.type == "TEXT" || (e.components != null && e.components.Contains("TextMeshProUGUI"))))
