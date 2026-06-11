@@ -1147,8 +1147,9 @@ async function ensureListItem(font: FontName, titleFont: FontName, W: number, RO
 // Bring EVERY list master in the document up to the current conventions — so one
 // +List click repairs all variants, not just the one being (re)created. Repairs:
 // missing Scrollbar/Mask layers, the interim radius-0 Mask, the pristine old 6px
-// default scrollbar, and the rounded component clip. Designer customisations are
-// never touched (repairs match exact old defaults only).
+// default scrollbar, the old-default 1px Background border, and the rounded
+// component clip. Designer customisations are never touched (repairs match exact
+// old defaults only).
 function upgradeAllListMasters(): void {
   for (const page of figma.root.children) {
     for (const n of page.children) {
@@ -1165,11 +1166,28 @@ function upgradeAllListMasters(): void {
       try { const k = (JSON.parse(tag) as { kind?: string }).kind; if (k !== 'list' && k !== 'table') continue; } catch { continue; }
       const comp = n as ComponentNode;
       repairOldDefaultScrollbar(comp);
+      repairDefaultBackgroundStroke(comp);
       ensureListScrollbar(comp);
       ensureListRoundedClip(comp);
       ensureListMask(comp);
     }
   }
+}
+
+// A Background still wearing the PRISTINE old-default border (1px solid #D1D4E0)
+// predates the borderless default — strip it (it read as a mystery grey outline
+// around the panel in Unity). Any other stroke is a designer's border: left alone.
+function repairDefaultBackgroundStroke(comp: ComponentNode): void {
+  if (!('children' in comp)) return;
+  const bg = (comp as ChildrenMixin).children.find((c) => c.name === 'Background');
+  if (!bg || !('strokes' in bg)) return;
+  const g = bg as unknown as { strokes: readonly Paint[]; strokeWeight: number | symbol };
+  if (g.strokeWeight !== 1 || g.strokes.length !== 1) return;
+  const s = g.strokes[0];
+  if (s.type !== 'SOLID' || s.visible === false) return;
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.005;
+  if (!near(s.color.r, 0.82) || !near(s.color.g, 0.83) || !near(s.color.b, 0.88)) return;
+  (bg as unknown as { strokes: Paint[] }).strokes = [];
 }
 
 // Pristine old-default rows had the Accessory chevron flush at paddingRight 14 —
@@ -1213,8 +1231,10 @@ async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentN
   const comp = figma.createComponent();
   comp.name = name; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
 
+  // Borderless: the panel reads as a card via its drop shadow alone — a 1px grey
+  // stroke here looked like a mystery outline in Unity (designers add one back in
+  // Figma if they want a bordered list).
   const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
-  bg.strokes = [{ type: 'SOLID', color: { r: 0.82, g: 0.83, b: 0.88 } }]; bg.strokeWeight = 1;
   bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   comp.appendChild(bg);
 
@@ -1478,8 +1498,8 @@ async function createTable(opts: TableOptions = TABLE_DEFAULTS): Promise<Compone
   const comp = figma.createComponent();
   comp.name = name; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
 
+  // Borderless, like the List — the drop shadow defines the card edge.
   const bg = solidRect('Background', W, H, R, { r: 1, g: 1, b: 1 });
-  bg.strokes = [{ type: 'SOLID', color: { r: 0.82, g: 0.83, b: 0.88 } }]; bg.strokeWeight = 1;
   bg.x = 0; bg.y = 0; bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   comp.appendChild(bg);
 
