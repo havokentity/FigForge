@@ -2231,6 +2231,17 @@ namespace FigForge
             if (hasMaskPart)
             {
                 AnchorPart(vrt, c.parts, "Mask");
+                // The canonical creator's auto-Mask insets the clip box ~2px on every
+                // side so square row corners can't poke past the Background's rounded
+                // edge. Below a pinned Header the TOP inset is visible slop instead of
+                // protection: rows start a couple px lower than the placed instances
+                // sit in Figma, and the white sliver between the header divider and
+                // row 1 reads as a grey band under the header. Snap the clip's top
+                // edge to the header bottom when the gap is that small — a
+                // deliberately deeper designer mask stays untouched.
+                float maskTopGap = (1f - c.parts["Mask"][3]) * e.rect.h * sf - headerH;
+                if (headerH > 0f && maskTopGap > 0.01f && maskTopGap <= 4f * sf)
+                    vrt.offsetMax = new Vector2(vrt.offsetMax.x, maskTopGap);
             }
             else
             {
@@ -2898,7 +2909,11 @@ namespace FigForge
         // v47: canonical Table — the List's scroll shell (pinned Header, Mask clip,
         //      overflow-only Scrollbar) with a TableRow template of m CellN columns
         //      cloned per data row (FigForgeTable/FigForgeTableRow, SetRows API).
-        internal const int CanonicalSchema = 47;
+        // v48: the clip's top edge snaps to the header bottom when the designer Mask
+        //      sits ≤4px below it — the creator's protective ~2px inset left a white
+        //      sliver under the header divider that read as a grey band; rows now
+        //      start flush with the header like the placed instances do in Figma.
+        internal const int CanonicalSchema = 48;
 
         // Deterministic FNV-1a hash for signature terms (GetHashCode is randomized per run).
         static string SigHash(string s)

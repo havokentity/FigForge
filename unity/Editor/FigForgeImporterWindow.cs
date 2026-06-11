@@ -68,6 +68,27 @@ namespace FigForge
             w.Show();
         }
 
+        // Rebuild every imported live page from its on-disk bundle — same code path
+        // the live-import HTTP receiver uses, so importer upgrades (a new
+        // CanonicalSchema) apply without re-sending the page from Figma.
+        [MenuItem("Window/FigForge/Rebuild Live Pages")]
+        public static void RebuildLivePages()
+        {
+            string dataPath = Application.dataPath.Replace('\\', '/');
+            string liveAbs = dataPath + "/FigForge/Live";
+            var projects = Directory.Exists(liveAbs)
+                ? Directory.GetFiles(liveAbs, "project.json", SearchOption.AllDirectories)
+                : new string[0];
+            if (projects.Length == 0) { Debug.LogWarning("[FigForge] no live page bundles found under Assets/FigForge/Live."); return; }
+            var w = GetWindow<FigForgeImporterWindow>(false, "FigForge", true);
+            foreach (var abs in projects)
+            {
+                string rel = "Assets" + abs.Replace('\\', '/').Substring(dataPath.Length);
+                Debug.Log($"[FigForge] rebuilding live page: {rel}");
+                w.LiveBuildPage(rel);
+            }
+        }
+
         void OnEnable()
         {
             RefreshManifests();
