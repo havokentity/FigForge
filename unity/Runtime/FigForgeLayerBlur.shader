@@ -4,7 +4,7 @@ Shader "FigForge/LayerBlur"
     {
         _MainTex ("Source", 2D) = "white" {}
         _BlurParams ("Blur Params", Vector) = (0,0,0,0)
-        _Direction ("Direction", Vector) = (1,0,0,0)
+        _Direction ("Direction", Vector) = (1,0,0.29596,0)
     }
     SubShader
     {
@@ -36,7 +36,7 @@ Shader "FigForge/LayerBlur"
             sampler2D _MainTex;
             float4 _MainTex_TexelSize;
             float4 _BlurParams; // x enabled, y progressive, z start/uniform px, w end px
-            float4 _Direction;
+            float4 _Direction;  // xy axis, z per-pass step scale (0.29596/sqrt(passes))
 
             v2f vert(appdata v)
             {
@@ -59,7 +59,16 @@ Shader "FigForge/LayerBlur"
                 float blur = blurPixels(i.uv);
                 if (blur <= 0.001) return tex2D(_MainTex, i.uv);
 
-                float2 stepUv = _Direction.xy * _MainTex_TexelSize.xy * (blur * 0.25);
+                // Truncated-binomial 9-tap kernel (row 12): intrinsic sigma is
+                // 1.689 tap units, so a step of blur*0.29596 realises Figma's
+                // layer-blur falloff of sigma = blur/2 in one pass. The caller
+                // (FigForgeCompositorCache.ApplyLayerBlur) bounds the per-blit
+                // blur via downsampling and/or iterated passes so adjacent taps
+                // stay within ~2px of each other — spaced wider, the taps stop
+                // overlapping and the kernel degenerates into a comb that rings
+                // as concentric bands. _Direction.z carries the per-pass step
+                // scale (0.29596/sqrt(passes)).
+                float2 stepUv = _Direction.xy * _MainTex_TexelSize.xy * (blur * _Direction.z);
 
                 fixed4 c = tex2D(_MainTex, i.uv) * 0.2270270270;
                 c += tex2D(_MainTex, i.uv + stepUv * 1.0) * 0.1945945946;

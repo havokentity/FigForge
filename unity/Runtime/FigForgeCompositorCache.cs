@@ -140,20 +140,115 @@ namespace FigForge
             RenderTexture.active = previous;
         }
 
-        static void ApplyLayerBlur(RenderTexture target, Material blur, Vector4 blurParams)
+        // FigForge/LayerBlur spaces its 9 taps blur*0.29596 px apart (sigma = blur/2
+        // with the kernel's intrinsic 1.689-tap sigma). Past ~2px spacing (blur 6.75)
+        // the taps stop overlapping and the kernel degenerates into a comb that rings
+        // as concentric bands, so larger radii run the kernel on a downsampled copy
+        // and/or iterate bounded-step passes (per-pass sigmas add in quadrature).
+        const float StepScalePerPass = 0.29596f;
+        const float MaxBlurPerPass = 6.75f;
+        // Uniform blurs downsample until the per-level blur fits two bounded-step
+        // passes. Blurring deeper (where a single pass would do) makes the result's
+        // width wobble +-5% with the edge's sub-texel phase on the coarse grid —
+        // the chain's box prefilter is too weak an AA for sigma < ~2 level px — so
+        // stay shallow enough for sigma >= ~2.4 and let the second pass both wash
+        // out the grid phase and Gaussianize the kernel's +-4-tap truncation
+        // (verified against erf edge profiles: +-0.5% across phases, +1..2% bias).
+        const float DownsampleBlurBound = 9.5f;
+        // Progressive gradients keep their sharp end at full resolution by iterating
+        // instead of downsampling (resampling would soften the blur=0 end); up to
+        // MaxBlurPasses passes cover 6.75*sqrt(32) ~= 38px of blur per level before
+        // downsampling kicks in after all.
+        const int MaxBlurPasses = 32;
+        const float MaxProgressiveBlurPerLevel = 38f;
+
+        public static void ApplyLayerBlur(RenderTexture target, Material blur, Vector4 blurParams)
         {
-            var temp = RenderTexture.GetTemporary(target.width, target.height, 0, RenderTextureFormat.ARGB32);
+            float maxBlur = Mathf.Max(blurParams.z, blurParams.w);
+            bool progressive = blurParams.y > 0.5f && Mathf.Abs(blurParams.z - blurParams.w) > 0.001f;
+
+            // Uniform blurs run the kernel on a downsampled copy — the radius shrinks
+            // with the surface, so the tap spacing stays bounded and the whole blit
+            // chain is cheaper than one full-res pass. Progressive blurs iterate at
+            // full res (pass sigmas add in quadrature) so the sharp end never gets
+            // resampled, and only fall back to downsampling past ~38px.
+            float levelBound = progressive ? MaxProgressiveBlurPerLevel : DownsampleBlurBound;
+            int scale = 1;
+            {
+                // Halve only while the level dims divide exactly (the first halving
+                // is exempt — phase jitter from an odd full-res dim is sub-pixel):
+                // an inexact 2:1 step lets the sampling phase drift across the
+                // image, which adds blur that grows with scale^2.
+                int dw = target.width, dh = target.height;
+                while (maxBlur / scale > levelBound && dw / 2 >= 4 && dh / 2 >= 4
+                       && (scale == 1 || ((dw & 1) == 0 && (dh & 1) == 0)))
+                {
+                    dw /= 2; dh /= 2; scale *= 2;
+                }
+            }
+
+            // The resample chain blurs on its own (each bilinear halving is a 2x2 box,
+            // each doubling a tent): variance (scale^2 - 1)/3 per axis. Shrink the
+            // kernel so the combined falloff still lands on Figma's sigma = blur/2.
+            float extraVar = (scale * scale - 1) / 3f;
+            float startBlur = CompensateResampleBlur(blurParams.z, extraVar);
+            float endBlur = CompensateResampleBlur(blurParams.w, extraVar);
+
+            float levelBlur = Mathf.Max(startBlur, endBlur) / scale;
+            int passes = Mathf.Clamp(Mathf.CeilToInt(levelBlur * levelBlur / (MaxBlurPerPass * MaxBlurPerPass)),
+                                     scale > 1 ? 2 : 1, MaxBlurPasses);
+            float stepScale = StepScalePerPass / Mathf.Sqrt(passes);
+
+            int w = target.width, h = target.height;
+            RenderTexture small = null;
+            for (int s = 1; s < scale; s *= 2)
+            {
+                w = Mathf.Max(1, w / 2);
+                h = Mathf.Max(1, h / 2);
+                var next = RentBlurTemp(w, h);
+                Graphics.Blit(small != null ? (Texture)small : target, next);
+                if (small != null) RenderTexture.ReleaseTemporary(small);
+                small = next;
+            }
+
+            var surface = small != null ? small : target;
+            var temp = RentBlurTemp(w, h);
+            blur.SetVector("_BlurParams", new Vector4(blurParams.x, blurParams.y, startBlur / scale, endBlur / scale));
+            for (int i = 0; i < passes; i++)
+            {
+                blur.SetVector("_Direction", new Vector4(1f, 0f, stepScale, 0f));
+                Graphics.Blit(surface, temp, blur);
+                blur.SetVector("_Direction", new Vector4(0f, 1f, stepScale, 0f));
+                Graphics.Blit(temp, surface, blur);
+            }
+            RenderTexture.ReleaseTemporary(temp);
+
+            // Progressive doubling keeps each upsample at 2x so the bilinear
+            // magnification stays smooth even from deep levels.
+            while (small != null)
+            {
+                w = Mathf.Min(target.width, w * 2);
+                h = Mathf.Min(target.height, h * 2);
+                bool last = w >= target.width && h >= target.height;
+                var up = last ? target : RentBlurTemp(w, h);
+                Graphics.Blit(small, up);
+                RenderTexture.ReleaseTemporary(small);
+                small = last ? null : up;
+            }
+        }
+
+        static float CompensateResampleBlur(float blurPx, float extraVar)
+        {
+            float sigma = 0.5f * Mathf.Max(0f, blurPx);
+            return 2f * Mathf.Sqrt(Mathf.Max(0f, sigma * sigma - extraVar));
+        }
+
+        static RenderTexture RentBlurTemp(int width, int height)
+        {
+            var temp = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
             temp.filterMode = FilterMode.Bilinear;
             temp.wrapMode = TextureWrapMode.Clamp;
-
-            blur.SetVector("_BlurParams", blurParams);
-            blur.SetVector("_Direction", new Vector4(1f, 0f, 0f, 0f));
-            Graphics.Blit(target, temp, blur);
-
-            blur.SetVector("_Direction", new Vector4(0f, 1f, 0f, 0f));
-            Graphics.Blit(temp, target, blur);
-
-            RenderTexture.ReleaseTemporary(temp);
+            return temp;
         }
 
         static RenderTexture Rent(int width, int height)

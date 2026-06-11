@@ -330,15 +330,9 @@ namespace FigForge
 
         void ApplySeparableBlur(RenderTexture targetRt, float radiusPx)
         {
-            var temp = RenderTexture.GetTemporary(targetRt.width, targetRt.height, 0, RenderTextureFormat.ARGB32);
-            temp.filterMode = FilterMode.Bilinear;
-            temp.wrapMode = TextureWrapMode.Clamp;
-            _blurMaterial.SetVector("_BlurParams", new Vector4(1f, 0f, radiusPx, radiusPx));
-            _blurMaterial.SetVector("_Direction", new Vector4(1f, 0f, 0f, 0f));
-            Graphics.Blit(targetRt, temp, _blurMaterial);
-            _blurMaterial.SetVector("_Direction", new Vector4(0f, 1f, 0f, 0f));
-            Graphics.Blit(temp, targetRt, _blurMaterial);
-            RenderTexture.ReleaseTemporary(temp);
+            // Shared downsample-blur-upsample chain: bounds the 9-tap kernel's tap
+            // spacing so large radii don't ring (see FigForgeCompositorCache).
+            FigForgeCompositorCache.ApplyLayerBlur(targetRt, _blurMaterial, new Vector4(1f, 0f, radiusPx, radiusPx));
         }
 
         bool EnsureBlurMaterial()
