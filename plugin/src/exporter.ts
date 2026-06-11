@@ -1034,7 +1034,7 @@ export async function exportDesign(
     for (const name of names) {
       const c = childByName(master, name);
       if (!c) continue;
-      const x = (c as unknown as { x?: number }).x ?? 0, y = (c as unknown as { y?: number }).y ?? 0;
+      const { x, y } = localXY(c);
       const w = (c as unknown as { width?: number }).width ?? 0, h = (c as unknown as { height?: number }).height ?? 0;
       out[name] = [x / W, 1 - (y + h) / H, (x + w) / W, 1 - y / H];
     }
@@ -1164,7 +1164,7 @@ export async function exportDesign(
       const isRoot = node.id === rootNode.id;
       const asset = assetBySub.get(node.id);
       const hasAsset = !!asset;
-      const nx = (node as unknown as { x: number }).x, ny = (node as unknown as { y: number }).y;
+      const { x: nx, y: ny } = localXY(node);
       const nw = (node as unknown as { width: number }).width, nh = (node as unknown as { height: number }).height;
       const transform: UnityTransform = isRoot
         ? stretchTransform()
@@ -1670,6 +1670,7 @@ export async function exportDesign(
     const node = p.node;
     const isRoot = p.parentId === null;
     const parentSize = parentDims(node, planById);
+    const { x: nodeX, y: nodeY } = localXY(node);
 
     const asset = !failedExportIds.has(node.id) ? assetByNode.get(node.id) : undefined;
     const hasAsset = !!asset;
@@ -1678,8 +1679,8 @@ export async function exportDesign(
       ? rootTransform(frameW, frameH)
       : mapTransform({
           rect: {
-            x: (node as unknown as { x: number }).x,
-            y: (node as unknown as { y: number }).y,
+            x: nodeX,
+            y: nodeY,
             w: (node as unknown as { width: number }).width,
             h: (node as unknown as { height: number }).height,
           },
@@ -1754,8 +1755,8 @@ export async function exportDesign(
       type: node.type,
       parentId: p.parentId,
       rect: {
-        x: (node as unknown as { x: number }).x,
-        y: (node as unknown as { y: number }).y,
+        x: nodeX,
+        y: nodeY,
         w: (node as unknown as { width: number }).width,
         h: (node as unknown as { height: number }).height,
       },
@@ -1771,8 +1772,8 @@ export async function exportDesign(
       vector: hasAsset && VECTOR_SHAPE_TYPES.has(node.type) ? (buildVectorDrawing(node) ?? undefined) : undefined,
       assetBounds: asset
         ? {
-            x: (node as unknown as { x: number }).x,
-            y: (node as unknown as { y: number }).y,
+            x: nodeX,
+            y: nodeY,
             w: (node as unknown as { width: number }).width,
             h: (node as unknown as { height: number }).height,
             pixelWidth: asset.w,
@@ -1851,6 +1852,27 @@ function isDescendant(node: SceneNode, ancestor: SceneNode): boolean {
     p = (p as unknown as { parent?: BaseNode | null }).parent;
   }
   return false;
+}
+
+/**
+ * Node position in IMMEDIATE-parent-local coords. Figma's x/y (relativeTransform)
+ * for a child of a GROUP / BOOLEAN_OPERATION is relative to the group's container
+ * parent (the nearest non-group ancestor), not the group itself — Unity nests the
+ * child under the group's GameObject, so exporting the raw x/y applies the group
+ * offset twice and displaces every group child. The group's own x/y lives in that
+ * same container space (also true for nested groups, whose chain shares one
+ * container), so subtracting the direct group parent's x/y yields group-local
+ * coordinates at every level.
+ */
+function localXY(node: SceneNode): { x: number; y: number } {
+  let x = (node as unknown as { x?: number }).x ?? 0;
+  let y = (node as unknown as { y?: number }).y ?? 0;
+  const parent = (node as unknown as { parent?: BaseNode | null }).parent;
+  if (parent && (parent.type === 'GROUP' || parent.type === 'BOOLEAN_OPERATION')) {
+    x -= (parent as unknown as { x?: number }).x ?? 0;
+    y -= (parent as unknown as { y?: number }).y ?? 0;
+  }
+  return { x, y };
 }
 
 function parentDims(
