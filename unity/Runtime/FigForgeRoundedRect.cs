@@ -135,6 +135,22 @@ namespace FigForge
                 && Mathf.Abs(a.b - b.b) <= Eps
                 && Mathf.Abs(a.a - b.a) <= Eps;
         }
+
+        // Same visual fill? Lets state-swap callers (scrollbar/list-row hover) skip
+        // re-applying an identical fill: re-applying releases cached surfaces and
+        // dirties the page compositor, which on a re-enabled-every-frame caller
+        // (scrollbar fade) becomes a full-page recomposite per frame. Distinct
+        // Gradient instances count as different (conservative).
+        public bool ValueEquals(in FigForgeFill other)
+        {
+            if (disabled != other.disabled) return false;
+            if (disabled) return true;
+            return kind == other.kind
+                && color == other.color
+                && gradientKind == other.gradientKind
+                && dir == other.dir
+                && ReferenceEquals(gradient, other.gradient);
+        }
     }
 
     [System.Serializable]
@@ -276,6 +292,7 @@ namespace FigForge
         void SetFillInternal(FigForgeFill f)
         {
             f.Normalize();
+            if (fill.ValueEquals(f)) return; // state-swap callers re-apply per frame
             fill = f;
             Push();
         }

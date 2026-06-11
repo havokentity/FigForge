@@ -45,6 +45,7 @@ namespace FigForge
         readonly List<IFigForgeCompositorSource> _orderedLayers = new List<IFigForgeCompositorSource>();
         readonly Dictionary<IFigForgeCompositorSource, RenderTexture> _blended = new Dictionary<IFigForgeCompositorSource, RenderTexture>();
         readonly List<IFigForgeCompositorSource> _orphanScratch = new List<IFigForgeCompositorSource>();
+        readonly List<IFigForgeCompositorSource> _retargetScratch = new List<IFigForgeCompositorSource>();
         readonly List<Graphic> _canvasGraphics = new List<Graphic>();
         readonly List<CanvasRenderer> _culled = new List<CanvasRenderer>();
 
@@ -59,6 +60,15 @@ namespace FigForge
             get => autoDetectForeignChanges;
             set => autoDetectForeignChanges = value;
         }
+
+#if UNITY_EDITOR
+        // TEMPORARY diagnostic hooks (FigForgeBlurDebugDump): observe captures/blits
+        // from INSIDE a live rebuild — the only place organic-dispatch sequencing
+        // bugs are visible. No-ops unless armed by the editor tooling.
+        internal static System.Action<string, RenderTexture> DebugRebuildSink;
+        internal static System.Action<string> DebugRebuildLog;
+        string _debugDirtySource;
+#endif
 
         Material _compositeMaterial;
         Material _blurMaterial;
@@ -112,8 +122,17 @@ namespace FigForge
 
         public void MarkDirty()
         {
+#if UNITY_EDITOR
+            if (DebugTraceMarkDirty && !_dirty)
+                Debug.Log("[FigForge] MarkDirty (frame " + Time.frameCount + ", inRebuild=" + _inRebuild + ")\n"
+                          + StackTraceUtility.ExtractStackTrace());
+#endif
             _dirty = true;
         }
+
+#if UNITY_EDITOR
+        internal static bool DebugTraceMarkDirty;
+#endif
 
         void OnEnable()
         {
@@ -183,7 +202,16 @@ namespace FigForge
             if (cam == null) return;
 
             SortOrderedLayers();
-            if (LayoutChanged(cam)) MarkDirty();
+#if UNITY_EDITOR
+            if (DebugRebuildLog != null) _debugDirtySource = _dirty ? "explicit" : "";
+#endif
+            if (LayoutChanged(cam))
+            {
+#if UNITY_EDITOR
+                if (DebugRebuildLog != null) _debugDirtySource += "+layout";
+#endif
+                MarkDirty();
+            }
             if (autoDetectForeignChanges) DetectForeignChanges();
             if (!_dirty) return;
 
@@ -200,8 +228,10 @@ namespace FigForge
             // the final RT instances during the forced canvas update below. Later
             // blits write into the same instances — no further rebinding needed, and
             // lower layers' quads show current content in higher layers' captures.
+            _retargetScratch.Clear();
             for (int i = 0; i < _orderedLayers.Count; i++)
-                EnsureBlendedTarget(_orderedLayers[i]);
+                if (EnsureBlendedTarget(_orderedLayers[i]))
+                    _retargetScratch.Add(_orderedLayers[i]);
 
             // Make quad geometry/material bindings current regardless of where this
             // handler sits in the willRenderCanvases subscription order (re-entrancy
@@ -225,6 +255,13 @@ namespace FigForge
                 if (surface == null || target == null) continue;
 
                 CullAtOrAbove(layer);
+#if UNITY_EDITOR
+                DebugRebuildLog?.Invoke("layer=" + ((Component)layer).name
+                    + " dirty=" + _debugDirtySource
+                    + " culled=" + _culled.Count
+                    + " surface=" + surface.width + "x" + surface.height
+                    + " target=" + target.GetInstanceID() + ":" + target.width + "x" + target.height);
+#endif
                 var capture = FigForgePageCapture.CaptureTemporary(cam);
                 RestoreCulled();
                 if (capture == null)
@@ -251,12 +288,35 @@ namespace FigForge
                 var blurTex = PrepareBackdropBlur(layer, capture, target, backdropRect);
                 Graphics.Blit(surface, target, _compositeMaterial, 0);
                 if (blurTex != null) RenderTexture.ReleaseTemporary(blurTex);
+#if UNITY_EDITOR
+                if (DebugRebuildSink != null)
+                {
+                    var n = ((Component)layer).name;
+                    DebugRebuildSink(n + "_capture", capture);
+                    DebugRebuildSink(n + "_surface", surface);
+                    DebugRebuildSink(n + "_target", target);
+                }
+#endif
                 RenderTexture.ReleaseTemporary(capture);
             }
 
             // Blit leaves the last blended target active; don't let anything
             // downstream inherit it as a render target.
             RenderTexture.active = null;
+
+            // Rebind re-assert for layers whose target INSTANCE changed this rebuild:
+            // a quad rebuild queued while its renderer is culled is consumed without
+            // uploading (uGUI skips culled renderers), which would leave the quad
+            // presenting the RETURNED pooled RT until something else dirtied it.
+            // Nothing is culled here, so one more flush makes the rebind stick.
+            if (_retargetScratch.Count > 0)
+            {
+                for (int i = 0; i < _retargetScratch.Count; i++)
+                    SetGraphicDirty(_retargetScratch[i]);
+                _retargetScratch.Clear();
+                Canvas.ForceUpdateCanvases();
+            }
+
             if (complete) _dirty = false;
         }
 
@@ -346,19 +406,30 @@ namespace FigForge
 
         // ---- Per-layer blended targets -----------------------------------------
 
-        void EnsureBlendedTarget(IFigForgeCompositorSource layer)
+        // Returns true when the layer's target INSTANCE changed (rented anew), so the
+        // caller can re-assert the present quad's binding after the capture loop.
+        bool EnsureBlendedTarget(IFigForgeCompositorSource layer)
         {
             var surface = layer.GetCompositorSurface();
-            if (surface == null) return;
+            if (surface == null) return false;
             _blended.TryGetValue(layer, out var rt);
-            if (rt != null && rt.width == surface.width && rt.height == surface.height) return;
+            if (rt != null && rt.width == surface.width && rt.height == surface.height) return false;
 
             if (rt != null) FigForgeCompositorCache.ReturnPageRT(rt);
             rt = FigForgeCompositorCache.RentPageRT(surface.width, surface.height);
-            if (rt == null) { _blended.Remove(layer); return; }
+            if (rt == null) { _blended.Remove(layer); return false; }
             rt.name = "FigForgeBlended_" + surface.width + "x" + surface.height;
+            // Pooled RTs arrive holding whatever their previous user rendered (often
+            // ANOTHER layer's old blend). The blit below normally overwrites every
+            // pixel, but if it never lands (capture failure, lost rebind) the quad
+            // must present nothing rather than someone else's stale colors.
+            var prevActive = RenderTexture.active;
+            RenderTexture.active = rt;
+            GL.Clear(false, true, Color.clear);
+            RenderTexture.active = prevActive;
             _blended[layer] = rt;
             SetGraphicDirty(layer); // rebind mainTexture/material to the new instance
+            return true;
         }
 
         void ReleaseBlendedTarget(IFigForgeCompositorSource layer)
@@ -517,6 +588,9 @@ namespace FigForge
             }
             if (hash == _foreignHash) return;
             _foreignHash = hash;
+#if UNITY_EDITOR
+            if (DebugRebuildLog != null) _debugDirtySource += "+foreign";
+#endif
             MarkDirty();
         }
 

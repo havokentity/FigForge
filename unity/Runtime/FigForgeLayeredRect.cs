@@ -343,6 +343,11 @@ namespace FigForge
         {
             fill.Normalize();
             if (fills == null) fills = new List<FigForgeFill>();
+            // No-change early-out: state-swap callers (FigForgeScrollbarStates et al.)
+            // re-apply on every OnEnable — the scrollbar fade re-enables per frame,
+            // and without this check each call released the cached surface and
+            // marked the page compositor dirty, recompositing the page every frame.
+            if (fills.Count > 0 && fills[0].ValueEquals(fill)) return;
             if (fills.Count == 0) fills.Add(fill);
             else fills[0] = fill;
             ReleaseCachedSurface();
