@@ -200,6 +200,7 @@ function extractShadows(node: SceneNode): Shadow[] {
         blur: ds.radius ?? 0,
         spread: ds.spread ?? 0,
         inner: e.type === 'INNER_SHADOW',
+        showBehind: e.type === 'DROP_SHADOW' && ds.showShadowBehindNode === true ? true : undefined,
       });
       continue;
     }

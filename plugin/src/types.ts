@@ -90,6 +90,9 @@ export interface Shadow {
   blurMode?: 'uniform' | 'progressive';
   startBlur?: number;
   endBlur?: number;
+  // Figma DropShadowEffect.showShadowBehindNode: when false (default) the shadow
+  // is erased under the node's geometry, so it never shows through translucent fills.
+  showBehind?: boolean;
 }
 
 export interface Style {

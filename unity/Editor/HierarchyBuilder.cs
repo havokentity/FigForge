@@ -1184,9 +1184,16 @@ namespace FigForge
                 var offset = new Vector2(s.offsetX * ctx.scaleFactor, s.offsetY * ctx.scaleFactor);
                 float blur = s.blur * ctx.scaleFactor;
                 float spread = s.spread * ctx.scaleFactor;
-                outEffects.Add(kind == "innerShadow"
-                    ? FigForgeEffectLayer.InnerShadow(c, offset, blur, spread)
-                    : FigForgeEffectLayer.DropShadow(c, offset, blur, spread));
+                if (kind == "innerShadow")
+                {
+                    outEffects.Add(FigForgeEffectLayer.InnerShadow(c, offset, blur, spread));
+                }
+                else
+                {
+                    var drop = FigForgeEffectLayer.DropShadow(c, offset, blur, spread);
+                    drop.showBehindShape = s.showBehind;
+                    outEffects.Add(drop);
+                }
             }
             return outEffects;
         }

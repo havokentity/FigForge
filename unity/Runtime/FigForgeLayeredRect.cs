@@ -112,6 +112,10 @@ namespace FigForge
         public float spread;
         public FigForgeLayerBlurMode blurMode;
         public float endBlur;
+        // Drop shadows only — Figma's showShadowBehindNode. False (the Figma default)
+        // erases the shadow under the shape's geometry, so it never shows through
+        // translucent fills.
+        public bool showBehindShape;
 
         public static FigForgeEffectLayer DropShadow(Color color, Vector2 offset, float blur, float spread)
         {
@@ -201,7 +205,7 @@ namespace FigForge
     public class FigForgeLayeredRect : MaskableGraphic, IFigForgeCompositorSource
     {
         const float MaxCachedSurfaceScale = 16f;
-        const int SurfaceShaderRevision = 2;
+        const int SurfaceShaderRevision = 3;
 
         [SerializeField] List<FigForgeFill> fills = new List<FigForgeFill>();
         [SerializeField] List<FigForgeStrokeLayer> strokes = new List<FigForgeStrokeLayer>();
@@ -574,6 +578,7 @@ namespace FigForge
             target.SetVector("_ShadowParams1", ShadowParams(1));
             target.SetVector("_ShadowParams2", ShadowParams(2));
             target.SetVector("_ShadowParams3", ShadowParams(3));
+            target.SetVector("_ShadowBehind", ShadowBehindFlags());
             target.SetFloat("_InnerShadowCount", Mathf.Min(VisibleInnerShadowCount(), 4));
             target.SetColor("_InnerShadowColor0", InnerShadowColor(0));
             target.SetColor("_InnerShadowColor1", InnerShadowColor(1));
@@ -866,6 +871,17 @@ namespace FigForge
             if (s < 0) return Vector4.zero;
             var e = effects[s];
             return new Vector4(e.blur, e.spread, 0f, 0f);
+        }
+
+        Vector4 ShadowBehindFlags()
+        {
+            return new Vector4(ShadowBehindFlag(0), ShadowBehindFlag(1), ShadowBehindFlag(2), ShadowBehindFlag(3));
+        }
+
+        float ShadowBehindFlag(int index)
+        {
+            int s = VisibleDropShadowIndex(index);
+            return s >= 0 && effects[s].showBehindShape ? 1f : 0f;
         }
 
         int VisibleDropShadowIndex(int visibleIndex)
@@ -1444,6 +1460,7 @@ namespace FigForge
             Hash(ref hash, effect.spread);
             Hash(ref hash, (int)effect.blurMode);
             Hash(ref hash, effect.endBlur);
+            Hash(ref hash, effect.showBehindShape ? 1 : 0);
         }
 
         static void Hash(ref uint hash, Vector4 value)

@@ -90,6 +90,7 @@ namespace FigForge
         public string blurMode;           // uniform|progressive
         public float? startBlur;
         public float? endBlur;
+        public bool showBehind;           // drop shadow visible through translucent fills (Figma showShadowBehindNode, default false)
     }
 
     public class StyleData

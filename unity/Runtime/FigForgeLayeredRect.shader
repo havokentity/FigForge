@@ -48,6 +48,7 @@ Shader "FigForge/LayeredRect4"
         _ShadowParams1 ("Shadow 1 (x=blur, y=spread) px", Vector) = (0,0,0,0)
         _ShadowParams2 ("Shadow 2 (x=blur, y=spread) px", Vector) = (0,0,0,0)
         _ShadowParams3 ("Shadow 3 (x=blur, y=spread) px", Vector) = (0,0,0,0)
+        _ShadowBehind ("Drop Shadows Show Behind Shape", Vector) = (0,0,0,0)
         _InnerShadowCount ("Inner Shadow Count", Float) = 0
         _InnerShadowColor0 ("Inner Shadow 0 Color", Color) = (0,0,0,0)
         _InnerShadowColor1 ("Inner Shadow 1 Color", Color) = (0,0,0,0)
@@ -159,6 +160,7 @@ Shader "FigForge/LayeredRect4"
             float4 _ShadowParams1;
             float4 _ShadowParams2;
             float4 _ShadowParams3;
+            float4 _ShadowBehind;
             float _InnerShadowCount;
             fixed4 _InnerShadowColor0;
             fixed4 _InnerShadowColor1;
@@ -354,7 +356,16 @@ Shader "FigForge/LayeredRect4"
                 return max(max(0.0, strokeOutset), reach);
             }
 
-            fixed4 shadowLayer(int idx, float2 p, float2 size, float rad, float aa)
+            float shadowBehindFlag(int idx)
+            {
+                return idx == 0 ? _ShadowBehind.x : idx == 1 ? _ShadowBehind.y : idx == 2 ? _ShadowBehind.z : _ShadowBehind.w;
+            }
+
+            // geomCov = sharp coverage of the shape's geometry (incl. stroke outset).
+            // Figma's showShadowBehindNode=false (the default) ERASES the drop shadow
+            // under the geometry before effects — a translucent fill must not reveal
+            // its own shadow.
+            fixed4 shadowLayer(int idx, float2 p, float2 size, float rad, float aa, float geomCov)
             {
                 fixed4 color = shadowColor(idx);
                 if (color.a <= 0.001) return fixed4(0,0,0,0);
@@ -367,16 +378,17 @@ Shader "FigForge/LayeredRect4"
                 #ifndef UNITY_COLORSPACE_GAMMA
                     alpha = 1.0 - pow(1.0 - alpha, 2.2);
                 #endif
+                if (shadowBehindFlag(idx) < 0.5) alpha *= 1.0 - geomCov;
                 return fixed4(figmaToProjectRgb(color.rgb), alpha);
             }
 
-            fixed4 compositeShadow(float2 p, float2 size, float rad, float aa)
+            fixed4 compositeShadow(float2 p, float2 size, float rad, float aa, float geomCov)
             {
                 fixed4 acc = fixed4(0,0,0,0);
-                if (_ShadowCount > 0.5) acc = sourceOver(shadowLayer(0, p, size, rad, aa), acc);
-                if (_ShadowCount > 1.5) acc = sourceOver(shadowLayer(1, p, size, rad, aa), acc);
-                if (_ShadowCount > 2.5) acc = sourceOver(shadowLayer(2, p, size, rad, aa), acc);
-                if (_ShadowCount > 3.5) acc = sourceOver(shadowLayer(3, p, size, rad, aa), acc);
+                if (_ShadowCount > 0.5) acc = sourceOver(shadowLayer(0, p, size, rad, aa, geomCov), acc);
+                if (_ShadowCount > 1.5) acc = sourceOver(shadowLayer(1, p, size, rad, aa, geomCov), acc);
+                if (_ShadowCount > 2.5) acc = sourceOver(shadowLayer(2, p, size, rad, aa, geomCov), acc);
+                if (_ShadowCount > 3.5) acc = sourceOver(shadowLayer(3, p, size, rad, aa, geomCov), acc);
                 return acc;
             }
 
@@ -465,9 +477,11 @@ Shader "FigForge/LayeredRect4"
                     shapeCov = max(shapeCov, strokeCov);
                 }
                 shape = compositeInnerShadow(shape, p, size, rad, aa, shapeCov);
-                fixed4 shadow = compositeShadow(p, size, rad, aa);
-                if (_FillCount < 0.5 && _StrokeCount < 0.5)
-                    shadow.a *= 1.0 - fillCov;
+                // Sharp geometric coverage (incl. stroke outset) for the
+                // showShadowBehindNode erase; tracks edgeAa so the direct path's
+                // fake-blurred edge keeps the erase aligned with the fill edge.
+                float geomCov = 1.0 - smoothstep(-edgeAa, edgeAa, d - _StrokeOutset);
+                fixed4 shadow = compositeShadow(p, size, rad, aa, geomCov);
                 fixed4 outc = sourceOver(shape, shadow);
                 outc.a *= saturate(_AppearanceOpacity);
                 outc *= i.color;

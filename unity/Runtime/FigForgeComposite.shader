@@ -10,10 +10,17 @@
 // layer's rounded-rect shape and the sharp capture outside it. The output then
 // replaces the backdrop inside the shape (alpha = shape coverage) so the live
 // page shows the blur through semi-transparent fills, while drop shadows in the
-// same surface keep compositing over the SHARP backdrop outside the shape:
-//   out.rgb = cov·blend(Cs, B_eff) + (1−cov)·covShape·B_blur
-//   out.a   = cov + covShape − cov·covShape
-// With covShape = 0 (no blur) this is exactly the plain pass: (cov·blend, cov).
+// same surface keep compositing over the SHARP backdrop outside the shape.
+//
+// Figma composites in sRGB, so every coverage mix here runs in Figma (sRGB)
+// space; mixing in linear reads as a washed-out band wherever soft coverage
+// ramps over the backdrop (layer-blurred edges especially). The pass computes
+// the final ON-SCREEN colour in Figma space —
+//   finalF = cov·blendF(CsF, CbF) + (1−cov)·CbF,  CbF = lerp(sharp, blurred, covShape)
+//   out.a  = cov + covShape − cov·covShape
+// — then pre-compensates the quad's linear premult-over blend:
+//   out.rgb = max(0, linear(finalF) − (1−out.a)·B_sharp_linear)
+// so screen = out.rgb + (1−out.a)·live lands exactly on finalF.
 //
 // Where coverage < 1 the quad blends toward the LIVE backdrop beneath it, which
 // equals the captured backdrop — so soft shadows and AA edges stay seamless.
@@ -103,10 +110,10 @@ Shader "FigForge/Composite"
                 half3 Cs = s.rgb / max(s.a, 1e-4);
                 float2 backdropUv = (_BackdropRect.xy + i.uv * _BackdropRect.zw)
                     / max(_BackdropSize.xy, float2(1, 1));
-                half3 Cb = tex2D(_Backdrop, saturate(backdropUv)).rgb;
+                half3 CbLin = tex2D(_Backdrop, saturate(backdropUv)).rgb;
 
                 half covShape = 0;
-                half3 Cblur = half3(0, 0, 0);
+                half3 CblurF = half3(0, 0, 0);
                 if (_HasBackdropBlur > 0.5)
                 {
                     // Analytic rounded-rect coverage in surface pixels: the blur is
@@ -120,13 +127,25 @@ Shader "FigForge/Composite"
                     float d = sdRoundBoxFF(p, _ShapeRectPx.zw * 0.5, rad);
                     covShape = 1.0 - smoothstep(-1.0, 1.0, d);
                     float2 blurUv = (px + _BlurUvParams.xy) / max(_BlurUvParams.zw, float2(1, 1));
-                    Cblur = tex2D(_BackdropBlurTex, saturate(blurUv)).rgb;
-                    Cb = lerp(Cb, Cblur, covShape); // backdrop this pixel composites against
+                    CblurF = projectToFigmaRgb(saturate(tex2D(_BackdropBlurTex, saturate(blurUv)).rgb));
                 }
 
-                half3 blended = figmaBlendRgb(Cs, Cb, _BlendMode);
-                half3 outRgb = cov * blended + (1.0 - cov) * covShape * Cblur;
+                // Figma composites in sRGB: do every coverage mix in Figma space and
+                // convert once at the end — linear-space mixing reads as a washed-out
+                // (white-ish) band wherever soft coverage ramps over the backdrop.
+                half3 CsF = projectToFigmaRgb(saturate(Cs));
+                half3 CbSharpF = projectToFigmaRgb(saturate(CbLin));
+                half3 CbF = lerp(CbSharpF, CblurF, covShape); // backdrop this pixel composites against
+                half3 blendedF = figmaBlendFigmaSpace(CsF, CbF, _BlendMode);
+
+                // The colour this pixel should land on ON SCREEN (the live page
+                // beneath the quad equals the captured backdrop).
+                half3 finalF = cov * blendedF + (1.0 - cov) * CbF;
                 half outA = saturate(cov + covShape - cov * covShape);
+                // Pre-compensate the quad's linear premult-over blend so the screen
+                // result resolves to finalF: screen = outRgb + (1-outA)·backdrop.
+                half3 outRgb = max(half3(0, 0, 0),
+                    figmaToProjectRgb(finalF) - (1.0 - outA) * CbLin);
                 return half4(outRgb, outA);
             }
             ENDCG

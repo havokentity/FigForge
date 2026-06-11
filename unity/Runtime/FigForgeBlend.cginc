@@ -52,10 +52,11 @@ float3 setSat(float3 c, float s)
     return (c - mn) * scale;
 }
 
-fixed3 figmaBlendRgb(fixed3 srcProject, fixed3 dstProject, float mode)
+// Blend-mode math with inputs/outputs in FIGMA (sRGB) space — Figma composites
+// in sRGB, so callers that mix further (coverage lerps) should stay in this
+// space and convert once at the end.
+fixed3 figmaBlendFigmaSpace(fixed3 s, fixed3 d, float mode)
 {
-    fixed3 s = saturate(projectToFigmaRgb(srcProject));
-    fixed3 d = saturate(projectToFigmaRgb(dstProject));
     fixed3 b = s;
 
     if (mode < 1.5) b = s;
@@ -81,7 +82,14 @@ fixed3 figmaBlendRgb(fixed3 srcProject, fixed3 dstProject, float mode)
     else if (mode < 17.5) b = setLum(s, blendLum(d));
     else b = setLum(d, blendLum(s));
 
-    return figmaToProjectRgb(saturate(b));
+    return saturate(b);
+}
+
+fixed3 figmaBlendRgb(fixed3 srcProject, fixed3 dstProject, float mode)
+{
+    fixed3 s = saturate(projectToFigmaRgb(srcProject));
+    fixed3 d = saturate(projectToFigmaRgb(dstProject));
+    return figmaToProjectRgb(figmaBlendFigmaSpace(s, d, mode));
 }
 
 #endif

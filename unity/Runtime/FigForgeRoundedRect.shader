@@ -315,8 +315,11 @@ Shader "FigForge/RoundedRect"
                         shadowA = 1.0 - pow(1.0 - shadowA, 2.2);
                     #endif
                 }
-                if (base.a <= 0.001 && strokeBase.a <= 0.001)
-                    shadowA *= 1.0 - fillCov;
+                // Figma's showShadowBehindNode default (false): the shadow is erased
+                // under the shape's GEOMETRY (incl. stroke outset), so translucent
+                // fills never reveal their own shadow.
+                float geomCov = 1.0 - smoothstep(-aa, aa, d - strokeOutset);
+                shadowA *= 1.0 - geomCov;
 
                 // ---- composite shadow UNDER shape (straight alpha) ----
                 float outA = shapeA + shadowA * (1.0 - shapeA);
