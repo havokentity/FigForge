@@ -269,6 +269,34 @@ $('#sliderOptsCreate').addEventListener('click', () => {
   });
 });
 
+// Progress variants: style (bar / ring / gauge / segments), indeterminate
+// (animated), and/or a live percentage read-out. The Blocks input enables with
+// the Segments style so the other styles' defaults stay obvious.
+const progressPop = wirePopover($('#createProgressBtn') as HTMLElement, document.getElementById('progressOpts'));
+const progressStyle = () =>
+  (document.querySelector('input[name="progressStyle"]:checked') as HTMLInputElement | null)?.value ?? 'bar';
+function syncProgressOptInputs() {
+  const seg = document.getElementById('progressOptSegments') as HTMLInputElement | null;
+  if (seg) seg.disabled = progressStyle() !== 'segments';
+}
+for (const r of Array.from(document.querySelectorAll('input[name="progressStyle"]'))) {
+  r.addEventListener('change', syncProgressOptInputs);
+}
+$('#progressOptsCreate').addEventListener('click', () => {
+  const on = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.checked === true;
+  const segRaw = parseInt((document.getElementById('progressOptSegments') as HTMLInputElement | null)?.value ?? '10', 10);
+  progressPop.hide();
+  setStatus('Creating progress component…');
+  post({
+    type: 'create-canonical', kind: 'progress', componentsPage: compPageOn(),
+    progressOpts: {
+      style: progressStyle(),
+      segments: isNaN(segRaw) ? 10 : Math.min(50, Math.max(2, segRaw)),
+      indeterminate: on('progressOptIndet'), value: on('progressOptValue'),
+    },
+  });
+});
+
 // Table variants: rows × columns, header toggle, scrollbar width.
 const tablePop = wirePopover($('#createTableBtn') as HTMLElement, document.getElementById('tableOpts'));
 $('#tableOptsCreate').addEventListener('click', () => {

@@ -1741,6 +1741,104 @@ export async function exportDesign(
       parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'Ticks', 'HitArea', 'Label', 'Value']) };
   }
 
+  // A progress master's style, read from its Track layer (layer-driven, like the
+  // Indeterminate flag): an arc ELLIPSE → ring/gauge, a frame of ≥2 child blocks
+  // → segments, a plain rect → bar.
+  function progressStyleOf(trackNode: SceneNode): 'bar' | 'ring' | 'segments' {
+    if (trackNode.type === 'ELLIPSE') return 'ring';
+    if ('children' in trackNode && ((trackNode as ChildrenMixin).children as SceneNode[]).length >= 2) return 'segments';
+    return 'bar';
+  }
+
+  // An arc ellipse's geometry mapped to Unity terms: start in degrees from
+  // 12 o'clock (clockwise) + total span in degrees + stroke thickness as a
+  // fraction of the outer radius (1 = a filled pie wedge, no donut hole).
+  // Figma arc radians are 0 at 3 o'clock, clockwise positive (screen y-down).
+  function ringGeometryOf(node: SceneNode): { start: number; span: number; thickness: number } | undefined {
+    const arc = (node as EllipseNode).arcData;
+    if (!arc) return undefined;
+    const span = Math.min(360, Math.abs(arc.endingAngle - arc.startingAngle) * 180 / Math.PI);
+    const start = ((Math.min(arc.startingAngle, arc.endingAngle) * 180 / Math.PI) + 90 + 720) % 360;
+    return { start, span: span > 0 ? span : 360, thickness: 1 - Math.min(1, Math.max(0, arc.innerRadius ?? 0)) };
+  }
+
+  // A node's progress value as a 0..1 ratio, per style: the Fill÷Track width
+  // ratio (bar), the Fill arc's sweep ÷ the Track arc's sweep (ring), or the
+  // VISIBLE Fill block count ÷ the Track block count (segments — instances can't
+  // delete blocks, but they can hide them). undefined when unreadable.
+  function progressRatioOf(node: SceneNode, style: 'bar' | 'ring' | 'segments'): number | undefined {
+    if (style === 'bar') return sliderRatioOf(node);
+    const track = childByName(node, 'Track');
+    const fillN = childByName(node, 'Fill');
+    if (!track || !fillN) return undefined;
+    if (style === 'ring') {
+      const tg = ringGeometryOf(track), fg = ringGeometryOf(fillN);
+      if (!tg || !fg || tg.span <= 0) return undefined;
+      return Math.min(1, Math.max(0, fg.span / tg.span));
+    }
+    const total = 'children' in track ? ((track as ChildrenMixin).children as SceneNode[]).length : 0;
+    if (total <= 0) return undefined;
+    const lit = 'children' in fillN
+      ? ((fillN as ChildrenMixin).children as SceneNode[]).filter((c) => c.visible !== false).length
+      : 0;
+    return Math.min(1, Math.max(0, lit / total));
+  }
+
+  // Capture a progress bar: a slider minus the thumb and input, in three shapes
+  // (bar / ring / segments — gauge is a ring with a partial arc). Track + Fill
+  // colours via plain shapeOf (for segments: the first block of each frame), the
+  // style-specific geometry (arcData for rings, block count + gap for segments),
+  // the initial value (the style's fill ratio, else the tag's authored value —
+  // always a 0..1 ratio, shown as a percentage), and the indeterminate flag: the
+  // PRESENCE of an 'Indeterminate' layer (hidden by convention) marks the master
+  // as animated mode — delete the layer to make it value-driven again.
+  async function captureProgress(master: SceneNode, tag: ReturnType<typeof canonicalTagData>) {
+    const trackNode = childByName(master, 'Track');
+    if (!trackNode) return null;
+    const style = progressStyleOf(trackNode);
+    const fillNode = childByName(master, 'Fill');
+
+    // Shape sources per style: segments read their first block (the frames
+    // themselves have no fill), bar/ring read the layers directly.
+    const trackShapeNode = style === 'segments' && 'children' in trackNode
+      ? ((trackNode as ChildrenMixin).children as SceneNode[])[0]
+      : trackNode;
+    const fillKids = style === 'segments' && fillNode && 'children' in fillNode
+      ? ((fillNode as ChildrenMixin).children as SceneNode[])
+      : undefined;
+    const fillShapeNode = fillKids ? fillKids[0] : fillNode;
+    const trackShape = trackShapeNode ? (shapeOf(trackShapeNode) ?? undefined) : undefined;
+    const fillShape = fillShapeNode ? (shapeOf(fillShapeNode) ?? undefined) : undefined;
+
+    const ring = style === 'ring' ? ringGeometryOf(trackNode) : undefined;
+    let segments: number | undefined;
+    let segmentGap: number | undefined;
+    if (style === 'segments' && 'children' in trackNode) {
+      const kids = (trackNode as ChildrenMixin).children as SceneNode[];
+      segments = kids.length;
+      if (kids.length >= 2) {
+        const a = kids[0] as unknown as { x: number; width: number };
+        const b = kids[1] as unknown as { x: number };
+        segmentGap = Math.max(0, b.x - (a.x + a.width));
+      }
+    }
+
+    const tagRatio = tag.value !== undefined && isFinite(parseFloat(tag.value))
+      ? Math.min(1, Math.max(0, parseFloat(tag.value)))
+      : undefined;
+    const ratio = progressRatioOf(master, style) ?? tagRatio ?? 0.5;
+    return { trackShape, fillShape,
+      progressStyle: style,
+      ringStart: ring?.start, arcSpan: ring?.span, ringThickness: ring?.thickness,
+      segments, segmentGap,
+      value: fmtSliderValue(ratio),
+      indeterminate: childByName(master, 'Indeterminate') ? true : undefined,
+      label: textOf(childByName(master, 'Label')),
+      // 'Value' (optional): a live percentage read-out — Unity rewrites it on
+      // every value change (centered in the dial for rings).
+      parts: partsOf(master, ['Track', 'Fill', 'Label', 'Value']) };
+  }
+
   const stateByNode = new Map<string, CanonicalStates>();
   const shapeByNode = new Map<string, Awaited<ReturnType<typeof captureButtonShape>>>();
   const instShapeByNode = new Map<string, ButtonShape>(); // per-instance shape override (differs from component)
@@ -1889,6 +1987,15 @@ export async function exportDesign(
         const instRaw = sliderRawOf(p.node, s.minValue, s.maxValue, s.slots);
         controlByNode.set(p.node.id, { ...s, value: instRaw !== undefined ? fmtSliderValue(instRaw) : s.value });
       }
+    } else if (ref.kind === 'progress') {
+      const s = await memoMasterCapture(`progress|${master.id}`, () => captureProgress(master, canonicalTagData(master)));
+      if (s) {
+        // THIS instance's fill ratio wins (resize the instance's Fill / hide its
+        // lit blocks to set its own value); spread the rest verbatim (the
+        // maskShape lesson).
+        const instRatio = progressRatioOf(p.node, s.progressStyle ?? 'bar');
+        controlByNode.set(p.node.id, { ...s, value: instRatio !== undefined ? fmtSliderValue(instRatio) : s.value });
+      }
     }
   }
   if (stateDiag.length) {
@@ -1997,7 +2104,7 @@ export async function exportDesign(
       const instanceInputLabel = canonical.kind === 'input' ? canonical.label : undefined;
       const instanceInputPlaceholder = canonical.kind === 'input' ? canonical.placeholder : undefined;
       const instanceInputValue = canonical.kind === 'input' ? canonical.value : undefined;
-      const instanceSliderLabel = canonical.kind === 'slider' ? canonical.label : undefined;
+      const instanceSliderLabel = canonical.kind === 'slider' || canonical.kind === 'progress' ? canonical.label : undefined;
       const toggleLike = canonical.kind === 'toggle' || canonical.kind === 'radio';
       const instanceToggleLabel = toggleLike ? canonical.label : undefined;
       // The instance's own checked state: the variant property when one is
@@ -2019,7 +2126,7 @@ export async function exportDesign(
         // skipped it, exporting the MASTER's label + state for every instance.
         if (instanceToggleLabel !== undefined) canonical.label = instanceToggleLabel;
         if (instanceToggleValue !== undefined) canonical.value = instanceToggleValue;
-      } else if (canonical.kind === 'slider') {
+      } else if (canonical.kind === 'slider' || canonical.kind === 'progress') {
         // The instance's own Label text (possibly overridden in Figma) wins over the
         // master's; the captured per-instance value is already correct from dispatch.
         if (instanceSliderLabel !== undefined) canonical.label = instanceSliderLabel;

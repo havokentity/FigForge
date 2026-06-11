@@ -95,6 +95,21 @@ namespace FigForge
             return _cachedCanvas;
         }
 
+        // Set by the editor importer for the duration of a page build: elements
+        // enable/configure BEFORE BuildPage adds FigForgeScreen + the page
+        // compositor to the root, so the canvas fallback in the sources'
+        // FindOrCreatePageCompositor would mint a stray canvas-level compositor
+        // on every fresh import. While true, sources may still BIND to an
+        // existing ancestor compositor (reuse builds) — only creation is
+        // suppressed; the importer rebinds all sources after the root gets its
+        // compositor (HierarchyBuilder.ConfigurePageCompositor).
+        public static bool SuppressAutoCreate;
+
+        // Registered advanced-blend source count — lets the importer tell an
+        // inert legacy stray (zero sources after the post-build rebind) from a
+        // compositor that hand-made content genuinely registered with.
+        public int RegisteredSourceCount => _advancedLayers.Count;
+
         public void Register(IFigForgeCompositorSource layer)
         {
             if (layer == null || _advancedLayers.Contains(layer)) return;

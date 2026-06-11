@@ -24,6 +24,7 @@ namespace FigForge
 
         [Header("Control (assign the one this prefab is)")]
         public Selectable control;     // Button / Toggle / Slider / TMP_InputField / TMP_Dropdown root
+        public FigForgeProgress progress; // progress bar (value-driven, not a Selectable — takes no input)
         public TMP_Text valueText;     // input display / value label
         public TMP_Dropdown optionsTarget; // dropdown
 
@@ -59,10 +60,13 @@ namespace FigForge
             var slider = control as Slider;
             if (slider != null && float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) slider.value = v;
 
-            // A slider owns its read-out formatting (FigForgeSlider rewrites it on the
-            // value assignment above — integer by default); stamping the raw manifest
-            // string here would override that, showing '0.5' on an integer read-out.
-            if (valueText != null && !string.IsNullOrEmpty(value) && slider == null) valueText.text = value;
+            if (progress != null && float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var pv))
+                progress.SetValueWithoutNotify(pv);
+
+            // A slider/progress owns its read-out formatting (the control rewrites it on
+            // the value assignment above — integer/percent by default); stamping the raw
+            // manifest string here would override that, showing '0.5' instead.
+            if (valueText != null && !string.IsNullOrEmpty(value) && slider == null && progress == null) valueText.text = value;
 
             if (optionsTarget != null && options != null && options.Count > 0)
             {

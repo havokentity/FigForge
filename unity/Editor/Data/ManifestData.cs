@@ -220,6 +220,15 @@ namespace FigForge
         public float minValue;              // slider: range start (default 0)
         public float maxValue;              // slider: range end (default 0 → legacy 0..1)
         public int slots;                   // slider: discrete slot count (>=2 snaps to slots; 0 = continuous)
+        // progress: a slider with no thumb and no input — shares trackShape/fillShape/
+        // value above (value = the 0..1 fill ratio, displayed as a percentage).
+        public bool indeterminate;          // progress: true = animated ('Indeterminate' layer present in the master)
+        public string progressStyle;        // progress: bar (default) | ring | segments — from the Track layer's type
+        public float ringStart;             // ring: arc start in degrees from 12 o'clock, clockwise
+        public float arcSpan;               // ring: total arc span in degrees (360 = closed ring, 270 = gauge; 0 = legacy → 360)
+        public float ringThickness;         // ring: stroke thickness as a fraction of the outer radius (1 = pie wedge; 0 = legacy → 0.25)
+        public int segments;                // segments: total block count
+        public float segmentGap;            // segments: gap between blocks in Figma px
         public CanonicalShape optionShape; // dropdown: option row Regular shape
         public CanonicalShape popupShape;  // dropdown popup shell/background (Options frame)
         public CanonicalShape optionRolloverShape; // dropdown: option row Rollover full shape

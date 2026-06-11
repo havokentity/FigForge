@@ -55,6 +55,9 @@ const KIND_TAGS: Record<string, CanonicalKind> = {
   select: 'dropdown',
   sld: 'slider',
   slider: 'slider',
+  prg: 'progress',
+  progress: 'progress',
+  progressbar: 'progress',
 };
 
 export function parseCanonical(name: string): CanonicalRef | null {

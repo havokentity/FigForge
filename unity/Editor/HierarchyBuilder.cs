@@ -48,17 +48,27 @@ namespace FigForge
             ctx.registered.Clear();
 
             // One Figma frame = one root. If several, wrap them under a page root.
+            // Compositor auto-create is suppressed for the whole element build:
+            // blend elements enable/configure here, BEFORE the root gets its
+            // FigForgeScreen + FigForgePageCompositor below, so their canvas
+            // fallback would mint a stray canvas-level compositor on every
+            // fresh import. ConfigurePageCompositor rebinds them afterwards.
             GameObject pageRoot;
-            if (roots.Count == 1)
+            FigForgePageCompositor.SuppressAutoCreate = true;
+            try
             {
-                pageRoot = BuildElement(roots[0], index, parent, ctx);
+                if (roots.Count == 1)
+                {
+                    pageRoot = BuildElement(roots[0], index, parent, ctx);
+                }
+                else
+                {
+                    pageRoot = NewRect(manifest.screen.name, parent);
+                    Stretch(pageRoot.GetComponent<RectTransform>());
+                    foreach (var r in roots) BuildElement(r, index, pageRoot.transform, ctx);
+                }
             }
-            else
-            {
-                pageRoot = NewRect(manifest.screen.name, parent);
-                Stretch(pageRoot.GetComponent<RectTransform>());
-                foreach (var r in roots) BuildElement(r, index, pageRoot.transform, ctx);
-            }
+            finally { FigForgePageCompositor.SuppressAutoCreate = false; }
 
             // Registry of named controls, for code to fetch by Figma name.
             if (pageRoot != null && ctx.registered.Count > 0)
@@ -87,6 +97,33 @@ namespace FigForge
             if (!needsPageCompositor) return;
             if (pageRoot.GetComponent<FigForgePageCompositor>() == null)
                 pageRoot.AddComponent<FigForgePageCompositor>();
+
+            // Build-time registrations were suppressed (SuppressAutoCreate), so
+            // bind every source now that rule-1 (nearest ancestor) resolves to
+            // the root compositor just added. Sources self-gate on
+            // RequiresPageCompositor/enabled, so rebinding everything is safe.
+            foreach (var source in pageRoot.GetComponentsInChildren<IFigForgeCompositorSource>(true))
+                source.RebindPageCompositor();
+
+            RemoveStrayCanvasCompositor(pageRoot, ctx);
+        }
+
+        // Legacy imports minted a compositor on the shared canvas: a blend
+        // element configured before its page root had FigForgeScreen fell
+        // through to the canvas fallback in FindOrCreatePageCompositor. A
+        // canvas-level compositor is never the designed home for imported pages
+        // (composition is per-screen, on the page root) and double-runs capture
+        // work — repair it, but only when it's inert: hand-made blend content
+        // outside any FigForgeScreen legitimately registers with a canvas-level
+        // compositor and keeps its source count above zero.
+        static void RemoveStrayCanvasCompositor(GameObject pageRoot, BuildContext ctx)
+        {
+            var canvas = pageRoot.GetComponentInParent<Canvas>();
+            if (canvas == null || canvas.gameObject == pageRoot) return;
+            var stray = canvas.GetComponent<FigForgePageCompositor>();
+            if (stray == null || stray.RegisteredSourceCount > 0) return;
+            ctx.log("removed stray canvas-level FigForgePageCompositor (legacy import-order bug; the page compositor lives on the screen root)");
+            UnityEngine.Object.DestroyImmediate(stray);
         }
 
         static void WarnIfAdvancedBlendUnderStencilMask(IFigForgeCompositorSource layer, BuildContext ctx)
@@ -212,6 +249,10 @@ namespace FigForge
                 else if (canonicalKind == "slider")
                 {
                     inst = BuildSlider(e, parent, ctx);
+                }
+                else if (canonicalKind == "progress")
+                {
+                    inst = BuildProgress(e, parent, ctx);
                 }
                 else if (canonicalKind == "list")
                 {
@@ -2661,6 +2702,174 @@ namespace FigForge
             return go;
         }
 
+        // Progress bar: a slider with no thumb and no input, in three visual styles
+        // (the exporter derives the style from the Figma Track layer):
+        //   bar      — Track rail + value-driven Fill (anchorMax.x tracks the value)
+        //   ring     — FigForgeRing track + fill arcs (360 ring / partial gauge / pie)
+        //   segments — N unlit blocks each carrying a lit overlay toggled by value
+        // FigForgeProgress drives the matching fill; indeterminate masters animate in
+        // play mode (sweep / spin / scan). Purely presentational: nothing here
+        // raycasts, so clicks pass through to whatever sits underneath.
+        static GameObject BuildProgress(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Progress" : e.name, parent);
+            var bar = go.AddComponent<FigForgeProgress>();
+            // Authored value range from the Figma component; progress masters carry no
+            // range (both 0) → the plain 0..1 fill ratio.
+            bool hasRange = c.maxValue > c.minValue;
+            bar.minValue = hasRange ? c.minValue : 0f;
+            bar.maxValue = hasRange ? c.maxValue : 1f;
+            string style = string.IsNullOrEmpty(c.progressStyle) ? "bar" : c.progressStyle;
+            bool ring = style == "ring";
+
+            float[] full = { 0f, 0f, 1f, 1f };
+            float[] trackBox = c.parts != null && c.parts.TryGetValue("Track", out var tb) && tb != null && tb.Length >= 4 ? tb : full;
+            float[] fillBox = c.parts != null && c.parts.TryGetValue("Fill", out var fb) && fb != null && fb.Length >= 4 ? fb : trackBox;
+
+            Color trackCol = c.trackShape != null && c.trackShape.fill != null && c.trackShape.fill.Length >= 4
+                ? ToColor(c.trackShape.fill) : new Color(0.85f, 0.86f, 0.9f, 1f);
+            Color fillCol = c.fillShape != null && c.fillShape.fill != null && c.fillShape.fill.Length >= 4
+                ? ToColor(c.fillShape.fill) : new Color(0.49f, 0.36f, 1f, 1f);
+
+            Graphic track = null;
+            if (ring)
+            {
+                // Dial: two stacked FigForgeRing arcs in the captured Track box — the
+                // track at full sweep, the fill driven by value (sweep starts at 0; the
+                // bindings apply the per-instance value, the slider convention).
+                float span = c.arcSpan > 0f ? Mathf.Min(360f, c.arcSpan) : 360f;
+                float thickness = c.ringThickness > 0f ? Mathf.Min(1f, c.ringThickness) : 0.25f;
+                var trackGo = NewRect("Track", go.transform);
+                AnchorPart(trackGo.GetComponent<RectTransform>(), c.parts, "Track");
+                if (trackGo.GetComponent<CanvasRenderer>() == null) trackGo.AddComponent<CanvasRenderer>();
+                var trackRing = trackGo.AddComponent<FigForgeRing>();
+                trackRing.raycastTarget = false;
+                trackRing.color = trackCol;
+                trackRing.StartAngle = c.ringStart; trackRing.SpanAngle = span;
+                trackRing.Thickness = thickness; trackRing.Sweep01 = 1f;
+                track = trackRing;
+
+                var fillGo = NewRect("Fill", go.transform);
+                AnchorPart(fillGo.GetComponent<RectTransform>(), c.parts, "Fill");
+                if (fillGo.GetComponent<CanvasRenderer>() == null) fillGo.AddComponent<CanvasRenderer>();
+                var fillRing = fillGo.AddComponent<FigForgeRing>();
+                fillRing.raycastTarget = false;
+                fillRing.color = fillCol;
+                fillRing.StartAngle = c.ringStart; fillRing.SpanAngle = span;
+                fillRing.Thickness = thickness; fillRing.Sweep01 = 0f;
+                bar.fillRing = fillRing;
+                bar.VisualStyle = FigForgeProgress.Style.Ring;
+            }
+            else if (style == "segments" && c.segments >= 2)
+            {
+                // Blocks: each segment is an unlit shape with a lit overlay that
+                // FigForgeProgress toggles by value (SetActive — no tint/shader
+                // assumptions, the toggle-checkmark convention). Anchor fractions split
+                // the captured Track box; the captured Figma gap stays in pixels.
+                int n = c.segments;
+                float gapPx = Mathf.Max(0f, c.segmentGap) * ctx.scaleFactor;
+                var trackGo = NewRect("Track", go.transform);
+                AnchorPart(trackGo.GetComponent<RectTransform>(), c.parts, "Track");
+                for (int i = 0; i < n; i++)
+                {
+                    var segGo = NewRect("Seg" + (i + 1), trackGo.transform);
+                    var srt = segGo.GetComponent<RectTransform>();
+                    srt.anchorMin = new Vector2((float)i / n, 0f);
+                    srt.anchorMax = new Vector2((float)(i + 1) / n, 1f);
+                    srt.offsetMin = new Vector2(i == 0 ? 0f : gapPx * 0.5f, 0f);
+                    srt.offsetMax = new Vector2(i == n - 1 ? 0f : -gapPx * 0.5f, 0f);
+                    var segG = AddShapeGraphic(segGo, c.trackShape, ctx);
+                    if (track == null) track = segG;
+                    var litGo = NewRect("Lit", segGo.transform);
+                    Stretch(litGo.GetComponent<RectTransform>());
+                    AddShapeGraphic(litGo, c.fillShape ?? c.trackShape, ctx);
+                    litGo.SetActive(false); // value 0 default; bindings light the real count
+                    bar.segmentFills.Add(litGo);
+                }
+                bar.VisualStyle = FigForgeProgress.Style.Segments;
+            }
+            else
+            {
+                // Track — the decorative rail, anchored to the captured part box.
+                var trackGo = NewRect("Track", go.transform);
+                AnchorPart(trackGo.GetComponent<RectTransform>(), c.parts, "Track");
+                track = AddShapeGraphic(trackGo, c.trackShape, ctx);
+
+                // Fill — the slider's Fill Area/Fill pair. The area spans the TRACK
+                // horizontally and keeps the Fill layer's own vertical band;
+                // FigForgeProgress drives the child's x anchors from the value (or
+                // sweeps them when indeterminate). Starts in the value-0 anchor state;
+                // FigForgeBindings applies the per-instance value (the slider convention).
+                if (c.fillShape != null)
+                {
+                    var fillAreaGo = NewRect("Fill Area", go.transform);
+                    var fart = fillAreaGo.GetComponent<RectTransform>();
+                    fart.anchorMin = new Vector2(trackBox[0], fillBox[1]);
+                    fart.anchorMax = new Vector2(trackBox[2], fillBox[3]);
+                    fart.offsetMin = Vector2.zero; fart.offsetMax = Vector2.zero;
+                    var fillGo = NewRect("Fill", fillAreaGo.transform);
+                    var fillRt = fillGo.GetComponent<RectTransform>();
+                    fillRt.anchorMin = Vector2.zero; fillRt.anchorMax = new Vector2(0f, 1f);
+                    fillRt.offsetMin = Vector2.zero; fillRt.offsetMax = Vector2.zero;
+                    AddShapeGraphic(fillGo, c.fillShape, ctx); // render-only
+                    bar.fillRect = fillRt;
+                }
+                bar.VisualStyle = FigForgeProgress.Style.Bar;
+            }
+
+            bar.Indeterminate = c.indeterminate;
+
+            TextMeshProUGUI label = null;
+            if ((c.parts != null && c.parts.ContainsKey("Label")) || !string.IsNullOrEmpty(c.label))
+            {
+                // Ring dials center their label strip; bar/segments keep the captured
+                // left edge. Either way the box extends to the control's edges — it
+                // hugs the authored text, so a longer bound label would clip.
+                label = AddControlLabel(go, "Label", c.label, c.parts, "Label", ctx,
+                    ring ? TextAlignmentOptions.Center : TextAlignmentOptions.Left);
+                var lrt = label.GetComponent<RectTransform>();
+                if (ring) lrt.anchorMin = new Vector2(0f, lrt.anchorMin.y);
+                lrt.anchorMax = new Vector2(1f, lrt.anchorMax.y);
+            }
+
+            // Live percentage read-out — the captured 'Value' layer. FigForgeProgress
+            // rewrites it on every value change. Bar/segments: right-aligned in the
+            // label strip, box extended to the LEFT edge so longer values never clip.
+            // Ring: centered inside the dial, box kept (it scales with the dial).
+            TextMeshProUGUI valueText = null;
+            if (c.parts != null && c.parts.ContainsKey("Value"))
+            {
+                // Initial text formatted like the runtime default (whole percent of the
+                // range) so the prefab preview matches what FigForgeProgress will render.
+                string initialReadout = c.value;
+                if (float.TryParse(c.value, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var iv))
+                {
+                    float ratio = hasRange ? Mathf.InverseLerp(c.minValue, c.maxValue, iv) : Mathf.Clamp01(iv);
+                    initialReadout = (ratio * 100f).ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%";
+                }
+                valueText = AddControlLabel(go, "Value", initialReadout, c.parts, "Value", ctx,
+                    ring ? TextAlignmentOptions.Center : TextAlignmentOptions.Right);
+                if (!ring)
+                {
+                    var vrt = valueText.GetComponent<RectTransform>();
+                    vrt.anchorMin = new Vector2(0f, vrt.anchorMin.y);
+                }
+            }
+
+            bar.tmpTxt_label = label;
+            bar.tmpTxt_value = valueText;
+
+            // Leave value at the default (0): FigForgeBindings.Apply sets the
+            // per-instance initial value, so the shared prefab doesn't bake one
+            // instance's fill (the toggle isOn lesson).
+
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.progress = bar; bind.label = label; bind.valueText = valueText; bind.background = track;
+            return go;
+        }
+
         static FigForgeListRowStyle ToListRowStyle(CanonicalShape sh, float sf)
         {
             var style = new FigForgeListRowStyle { enabled = sh != null };
@@ -2816,6 +3025,7 @@ namespace FigForge
                 : (kind == "input") ? BuildInputField(e, null, ctx)
                 : (kind == "dropdown") ? BuildDropdown(e, null, ctx)
                 : (kind == "slider") ? BuildSlider(e, null, ctx)
+                : (kind == "progress") ? BuildProgress(e, null, ctx)
                 : (kind == "list") ? BuildList(e, null, ctx)
                 : (kind == "table") ? BuildTable(e, null, ctx)
                 : BuildPlaceholderButton(e, null, ctx);
@@ -2940,11 +3150,19 @@ namespace FigForge
         //      sits ≤4px below it — the creator's protective ~2px inset left a white
         //      sliver under the header divider that read as a grey band; rows now
         //      start flush with the header like the placed instances do in Figma.
+        // v49: canonical Progress bar — a slider with no thumb and no input (Track +
+        //      value-driven Fill, FigForgeProgress, optional percentage read-out);
+        //      a hidden 'Indeterminate' layer in the master flags the animated
+        //      sweep mode (play mode only).
+        // v50: Progress styles — ring/gauge (FigForgeRing arc mesh from the Track
+        //      ellipse's arcData: start/span/thickness, pie at thickness 1) and
+        //      segments (N lit/unlit block pairs from the Track frame's children);
+        //      per-style indeterminate animations (spin/bounce/scanner).
         //
         // Counterpart constant: plugin/src/types.ts CANONICAL_SCHEMA — the plugin
         // stamps its number into the manifest (canonicalSchema) and ManifestParser
         // warns when the two differ. Bump BOTH together.
-        internal const int CanonicalSchema = 48;
+        internal const int CanonicalSchema = 50;
 
         // Invariant culture for every signature number: signatures persist in the
         // committed library asset, so a comma-decimal locale (de-DE, fr-FR, …) must
@@ -3064,6 +3282,16 @@ namespace FigForge
             AppendShapeSig(sb, "thm", c.thumbShape);
             sb.Append(";thr=").Append(SigF(c.thumbRollover)).Append(";thp=").Append(SigF(c.thumbPressed));
             sb.Append(";smin=").Append(c.minValue.ToString("0.###", Inv)).Append(";smax=").Append(c.maxValue.ToString("0.###", Inv)).Append(";slt=").Append(c.slots);
+            // Progress: trackShape/fillShape are folded above; the indeterminate flag,
+            // style, and per-style geometry are baked into the generated prefab
+            // (FigForgeProgress/FigForgeRing/segment children), so each must regen.
+            sb.Append(";ind=").Append(c.indeterminate ? 1 : 0);
+            if (!string.IsNullOrEmpty(c.progressStyle)) sb.Append(";pst=").Append(c.progressStyle);
+            sb.Append(";rst=").Append(c.ringStart.ToString("0.##", Inv))
+              .Append(";arc=").Append(c.arcSpan.ToString("0.##", Inv))
+              .Append(";rth=").Append(c.ringThickness.ToString("0.###", Inv))
+              .Append(";sgn=").Append(c.segments)
+              .Append(";sgp=").Append(c.segmentGap.ToString("0.##", Inv));
             if (c.parts != null && c.parts.Count > 0)
             {
                 var keys = new List<string>(c.parts.Keys);

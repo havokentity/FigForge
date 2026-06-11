@@ -237,6 +237,7 @@ namespace FigForge
                     case "dropdown": return "FigForge.FigForgeDropdown";
                     case "input": return "FigForge.FigForgeInputField";
                     case "slider": return "FigForge.FigForgeSlider";
+                    case "progress": return "FigForge.FigForgeProgress";
                     case "list": return "FigForge.FigForgeList";
                     case "table": return "FigForge.FigForgeTable";
                 }

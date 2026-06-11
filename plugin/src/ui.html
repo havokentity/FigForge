@@ -422,6 +422,7 @@
             <button class="chip" id="createInputBtn" title="Create a canonical InputField component">＋ Input</button>
             <button class="chip" id="createDropdownBtn" title="Create a canonical Dropdown component">＋ Dropdown</button>
             <button class="chip" id="createSliderBtn" title="Create a canonical Slider component — resize the master's Fill width to set the initial value">＋ Slider</button>
+            <button class="chip" id="createProgressBtn" title="Create a canonical Progress bar component — a Slider with no thumb and no input; resize the master's Fill width to set the initial value">＋ Progress</button>
             <button class="chip" id="createListBtn" title="Create a canonical scrollable List component — click to pick which parts the list has">＋ List</button>
             <button class="chip" id="createTableBtn" title="Create a canonical scrollable Table component — click to pick rows × columns">＋ Table</button>
           </div>
@@ -446,6 +447,19 @@
             <label class="list-pop-row" title="Number of slots (tick positions) across the range, including both ends"><span>Slots</span><input type="number" id="sliderOptSlots" value="5" min="2" max="100" disabled /></label>
             <label class="list-pop-row" title="Show a live read-out of the current value, right of the label"><input type="checkbox" id="sliderOptValue" /><span>Show value</span></label>
             <button class="list-pop-create" id="sliderOptsCreate" title="Create this Slider variant">＋ Add Slider</button>
+          </div>
+          <!-- Progress options popover — floats under the ＋Progress chip; configurations
+               become separate masters (Progress, Progress Ring Indet, Progress Seg10 V, …). -->
+          <div class="list-pop" id="progressOpts" hidden>
+            <div class="list-pop-title">Progress options</div>
+            <label class="list-pop-row" title="Horizontal rail with a value-driven fill"><input type="radio" name="progressStyle" id="progressStyleBar" value="bar" checked /><span>Bar</span></label>
+            <label class="list-pop-row" title="Radial donut — the fill arc sweeps clockwise from 12 o'clock"><input type="radio" name="progressStyle" id="progressStyleRing" value="ring" /><span>Ring</span></label>
+            <label class="list-pop-row" title="270° dial with the gap at the bottom — a speedometer-style ring"><input type="radio" name="progressStyle" id="progressStyleGauge" value="gauge" /><span>Gauge</span></label>
+            <label class="list-pop-row" title="Discrete blocks that light up left-to-right (battery / step indicator)"><input type="radio" name="progressStyle" id="progressStyleSegments" value="segments" /><span>Segments</span></label>
+            <label class="list-pop-row" title="Number of blocks (Segments style)"><span>Blocks</span><input type="number" id="progressOptSegments" value="10" min="2" max="50" disabled /></label>
+            <label class="list-pop-row" title="Animated mode for work of unknown duration — bar sweeps, ring/gauge spins, segments scan. Adds a hidden 'Indeterminate' layer to the master (delete the layer to make it value-driven again)"><input type="checkbox" id="progressOptIndet" /><span>Indeterminate</span></label>
+            <label class="list-pop-row" title="Show a live percentage read-out — right of the label (bar/segments) or centered in the dial (ring/gauge)"><input type="checkbox" id="progressOptValue" /><span>Show value</span></label>
+            <button class="list-pop-create" id="progressOptsCreate" title="Create this Progress variant">＋ Add Progress</button>
           </div>
           <!-- Table options popover — floats under the ＋Table chip; configurations
                become separate masters (Table, Table 6x4, Table 6x4 NoHeader, …). -->

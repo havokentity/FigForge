@@ -18,7 +18,7 @@ export const MANIFEST_VERSION = '2.0';
 // Canonical-control capture generation this plugin emits — counterpart:
 // unity/Editor/HierarchyBuilder.cs `CanonicalSchema`. Keep the two numbers in
 // lockstep; the importer warns (but continues) when they differ.
-export const CANONICAL_SCHEMA = 48;
+export const CANONICAL_SCHEMA = 50;
 
 // ---------------------------------------------------------------------------
 // Geometry primitives
@@ -156,7 +156,7 @@ export interface TextProps {
 // in Unity as an instance of a named canonical Button definition rather than
 // rebuilt from PNG/text. Scoped to buttons for now; `kind` keeps it extensible.
 // ---------------------------------------------------------------------------
-export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'input' | 'dropdown' | 'slider' | 'list' | 'table';
+export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'input' | 'dropdown' | 'slider' | 'progress' | 'list' | 'table';
 
 /** Exported per-state background sprites for an interactive control. */
 export interface CanonicalStates {
@@ -256,6 +256,18 @@ export interface CanonicalRef {
   minValue?: number;          // slider: range start (absent = 0)
   maxValue?: number;          // slider: range end (absent = 1)
   slots?: number;             // slider: discrete slot count (≥2 snaps + 'Ticks' notches; absent = continuous)
+  // progress: a slider with no thumb and no input — trackShape/fillShape/value
+  // above are shared verbatim (value = the fill ratio, displayed as a
+  // percentage). A hidden 'Indeterminate' layer in the master flags animated mode.
+  // The STYLE is derived from the Track layer itself: an ELLIPSE → ring/gauge
+  // (arc geometry from its arcData), a frame of child blocks → segments, else bar.
+  indeterminate?: boolean;    // progress: true = animated sweep/spinner/scanner, value ignored at runtime
+  progressStyle?: 'bar' | 'ring' | 'segments'; // progress: visual family (default bar)
+  ringStart?: number;         // ring: arc start in degrees from 12 o'clock, clockwise
+  arcSpan?: number;           // ring: total arc span in degrees (360 = closed ring, 270 = gauge)
+  ringThickness?: number;     // ring: stroke thickness as a fraction of the outer radius (1-innerRadius)
+  segments?: number;          // segments: total block count
+  segmentGap?: number;        // segments: gap between blocks in Figma px
   // dropdown: the option row is its own component (DropdownOption) with states; these
   // drive the TMP_Dropdown item template (options[] above are the option texts)
   optionShape?: ButtonShape; // DropdownOption Regular shape (corner/fill/border)

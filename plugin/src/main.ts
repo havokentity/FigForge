@@ -247,7 +247,8 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         const comp = await createCanonical(String((msg as { kind?: string }).kind || ''),
           (msg as { listOpts?: Partial<ListOptions> }).listOpts,
           (msg as { sliderOpts?: Partial<SliderOptions> }).sliderOpts,
-          (msg as { tableOpts?: Partial<TableOptions> }).tableOpts);
+          (msg as { tableOpts?: Partial<TableOptions> }).tableOpts,
+          (msg as { progressOpts?: Partial<ProgressOptions> }).progressOpts);
         const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
         figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group radios under one frame).` });
       } catch (e) {
@@ -627,7 +628,7 @@ function enclosingScreenFrame(nodes: readonly SceneNode[]): FrameNode | undefine
 }
 
 // Canonical master component names FigForge knows how to create.
-const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'Slider', 'List', 'ListItem', 'Table', 'TableRow'];
+const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'Slider', 'Progress', 'List', 'ListItem', 'Table', 'TableRow'];
 
 // Find an existing canonical master by name ANYWHERE in the document (masters no
 // longer need to live on a dedicated page — they can sit loose on any design page,
@@ -674,16 +675,18 @@ function solidRect(name: string, w: number, h: number, r: number, color: RGB, al
   return rect;
 }
 
-// Dispatch a "+Toggle / +Radio / +Dropdown / +Slider / +List / +Table" create request to its builder.
+// Dispatch a "+Toggle / +Radio / +Dropdown / +Slider / +Progress / +List / +Table" create request to its builder.
 async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
                                sliderOpts?: Partial<SliderOptions>,
-                               tableOpts?: Partial<TableOptions>): Promise<ComponentNode> {
+                               tableOpts?: Partial<TableOptions>,
+                               progressOpts?: Partial<ProgressOptions>): Promise<ComponentNode> {
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
     case 'input': return createInputField();
     case 'dropdown': return createDropdown();
     case 'slider': return createSlider(sliderOpts);
+    case 'progress': return createProgress(progressOpts);
     case 'list': return createList({ ...LIST_DEFAULTS, ...(listOpts ?? {}) });
     case 'table': return createTable({ ...TABLE_DEFAULTS, ...(tableOpts ?? {}) });
     default: throw new Error(`unknown canonical kind '${kind}'`);
@@ -1062,6 +1065,207 @@ async function createSlider(optsIn?: Partial<SliderOptions>): Promise<ComponentN
     value: fmtSliderNum(opts.min + (opts.max - opts.min) * ratio),
     minValue: opts.min, maxValue: opts.max,
     slots: opts.slots >= 2 ? opts.slots : undefined,
+  }));
+  parkMaster(comp);
+  placeInstance(comp);
+  return comp;
+}
+
+// Which Progress bar variant to create. Each combination is its own master/
+// canonical ref ('Progress', 'Progress Ring Indet', 'Progress Seg10 V') — the
+// Slider variants convention. Styles:
+//   bar      — the classic horizontal rail (Track + Fill rects)
+//   ring     — radial donut; the Fill is an arc sweeping clockwise from 12 o'clock
+//   gauge    — a ring with a 270° span and the gap at the bottom (speedometer)
+//   segments — N discrete blocks that light up left-to-right (battery/steps)
+export type ProgressStyle = 'bar' | 'ring' | 'gauge' | 'segments';
+export type ProgressOptions = {
+  style: ProgressStyle;
+  segments: number;       // segments style: block count (2..50)
+  indeterminate: boolean; // animated (unknown duration): bar sweeps, ring/gauge spins, segments scan
+  value: boolean;         // live percentage read-out (label strip for bar/segments, centered for ring/gauge)
+};
+const PROGRESS_DEFAULTS: ProgressOptions = { style: 'bar', segments: 10, indeterminate: false, value: false };
+
+function normalizeProgressOptions(o: Partial<ProgressOptions> | undefined): ProgressOptions {
+  const p = { ...PROGRESS_DEFAULTS, ...(o ?? {}) };
+  if (!['bar', 'ring', 'gauge', 'segments'].includes(p.style)) p.style = 'bar';
+  p.segments = Math.min(50, Math.max(2, Math.round(p.segments || 0) || 10));
+  return p;
+}
+
+function progressVariantName(o: ProgressOptions): string {
+  const p: string[] = [];
+  if (o.style === 'ring') p.push('Ring');
+  if (o.style === 'gauge') p.push('Gauge');
+  if (o.style === 'segments') p.push('Seg' + o.segments);
+  if (o.indeterminate) p.push('Indet');
+  if (o.value) p.push('V');
+  return 'Progress' + (p.length ? ' ' + p.join(' ') : '');
+}
+
+const PROGRESS_TRACK_RGB = { r: 0.85, g: 0.86, b: 0.9 };
+const PROGRESS_FILL_RGB = { r: 0.49, g: 0.36, b: 1 };
+const PROGRESS_TEXT_RGB = { r: 0.1, g: 0.1, b: 0.12 };
+
+// An arc ellipse for ring/gauge layers. Figma arc angles are radians with 0 at
+// 3 o'clock, clockwise positive (screen coords, y down).
+function progressArc(name: string, d: number, startRad: number, sweepRad: number,
+                     inner: number, color: RGB, alpha = 1): EllipseNode {
+  const e = figma.createEllipse();
+  e.name = name; e.resize(d, d);
+  e.fills = [{ type: 'SOLID', color, opacity: alpha }];
+  e.arcData = { startingAngle: startRad, endingAngle: startRad + sweepRad, innerRadius: inner };
+  return e;
+}
+
+// Progress bar: a Slider with no Thumb and no input, in four shapes. The Track
+// layer's TYPE picks the style at export: an arc ELLIPSE → ring/gauge (its
+// arcData IS the geometry — re-sweep it to restyle), a frame of blocks →
+// segments, plain rects → bar. The Fill layer carries the initial value: its
+// width ÷ Track width (bar), its arc sweep ÷ the Track's sweep (ring/gauge), or
+// its visible block count (segments — hide blocks to lower the default). Every
+// variant: Label + optional live 'Value' percentage read-out. The Indeterminate
+// variant adds a HIDDEN layer named 'Indeterminate': its PRESENCE flags animated
+// mode (bar sweeps, ring/gauge spins, segments scan) — delete the layer to make
+// the master determinate again, or add one to any progress master to animate it.
+async function createProgress(optsIn?: Partial<ProgressOptions>): Promise<ComponentNode> {
+  const opts = normalizeProgressOptions(optsIn);
+  const name = progressVariantName(opts);
+  const reuse = findMaster(name);
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const ratio = 0.5;
+  const comp = figma.createComponent();
+  comp.name = name; comp.fills = [];
+
+  const ringLike = opts.style === 'ring' || opts.style === 'gauge';
+  // Layout: bar/segments use the horizontal label-strip layout; ring/gauge are a
+  // square dial with the label strip below (and the read-out centered inside).
+  const W = ringLike ? 96 : 240;
+  const LABEL_H = 20;
+  const DIAL = 72, INNER = 0.78; // ring outer diameter / donut hole fraction
+  const ROW = 16, TRACK = 8;
+  const H = ringLike ? DIAL + 8 + LABEL_H : LABEL_H + ROW;
+  comp.resize(W, H);
+  const trackY = LABEL_H + (ROW - TRACK) / 2;
+
+  if (opts.style === 'bar') {
+    const track = solidRect('Track', W, TRACK, TRACK / 2, PROGRESS_TRACK_RGB);
+    track.x = 0; track.y = trackY; track.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+    comp.appendChild(track);
+
+    const fill = solidRect('Fill', W * ratio, TRACK, TRACK / 2, PROGRESS_FILL_RGB);
+    fill.x = 0; fill.y = trackY; fill.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+    comp.appendChild(fill);
+
+    if (opts.indeterminate) {
+      const seg = solidRect('Indeterminate', W * 0.3, TRACK, TRACK / 2, PROGRESS_FILL_RGB, 0.5);
+      seg.visible = false;
+      seg.x = W * 0.35; seg.y = trackY;
+      seg.constraints = { horizontal: 'SCALE', vertical: 'CENTER' };
+      comp.appendChild(seg);
+    }
+  } else if (ringLike) {
+    // Ring: full 360° from 12 o'clock (-π/2). Gauge: 270° with the gap centered
+    // at the bottom — start at 7:30 (3π/4), sweep clockwise to 4:30.
+    const start = opts.style === 'gauge' ? Math.PI * 0.75 : -Math.PI / 2;
+    const span = opts.style === 'gauge' ? Math.PI * 1.5 : Math.PI * 2;
+    const dialX = (W - DIAL) / 2, dialY = 0;
+
+    const track = progressArc('Track', DIAL, start, span, INNER, PROGRESS_TRACK_RGB);
+    track.x = dialX; track.y = dialY;
+    track.constraints = { horizontal: 'SCALE', vertical: 'SCALE' };
+    comp.appendChild(track);
+
+    const fill = progressArc('Fill', DIAL, start, span * ratio, INNER, PROGRESS_FILL_RGB);
+    fill.x = dialX; fill.y = dialY;
+    fill.constraints = { horizontal: 'SCALE', vertical: 'SCALE' };
+    comp.appendChild(fill);
+
+    if (opts.indeterminate) {
+      const seg = progressArc('Indeterminate', DIAL, start, span * 0.3, INNER, PROGRESS_FILL_RGB, 0.5);
+      seg.visible = false;
+      seg.x = dialX; seg.y = dialY;
+      seg.constraints = { horizontal: 'SCALE', vertical: 'SCALE' };
+      comp.appendChild(seg);
+    }
+  } else {
+    // Segments: a Track frame of N grey blocks + a Fill frame holding the lit
+    // overlay blocks (visible count = the initial value; hide blocks per
+    // instance to lower it). Both frames span the row; blocks SCALE with width.
+    const N = opts.segments, GAP = 4, SEG_H = 10;
+    const segW = (W - GAP * (N - 1)) / N;
+    const segY = LABEL_H + (ROW - SEG_H) / 2;
+    const mkRow = (rowName: string, count: number, color: RGB) => {
+      const f = figma.createFrame();
+      f.name = rowName; f.fills = []; f.clipsContent = false;
+      f.resize(W, SEG_H); f.x = 0; f.y = segY;
+      f.constraints = { horizontal: 'STRETCH', vertical: 'CENTER' };
+      for (let i = 0; i < count; i++) {
+        const s = solidRect('Seg', segW, SEG_H, 3, color);
+        s.x = i * (segW + GAP); s.y = 0;
+        s.constraints = { horizontal: 'SCALE', vertical: 'STRETCH' };
+        f.appendChild(s);
+      }
+      return f;
+    };
+    comp.appendChild(mkRow('Track', N, PROGRESS_TRACK_RGB));
+    comp.appendChild(mkRow('Fill', Math.round(N * ratio), PROGRESS_FILL_RGB));
+
+    if (opts.indeterminate) {
+      const seg = solidRect('Indeterminate', segW, SEG_H, 3, PROGRESS_FILL_RGB, 0.5);
+      seg.visible = false;
+      seg.x = 0; seg.y = segY;
+      seg.constraints = { horizontal: 'SCALE', vertical: 'CENTER' };
+      comp.appendChild(seg);
+    }
+  }
+
+  const label = figma.createText();
+  label.fontName = font; label.name = 'Label'; label.characters = 'Progress';
+  label.fontSize = 13; label.fills = [{ type: 'SOLID', color: PROGRESS_TEXT_RGB }];
+  if (ringLike) label.textAlignHorizontal = 'CENTER';
+  comp.appendChild(label);
+  if (ringLike) {
+    label.resize(W, label.height);
+    label.x = 0; label.y = H - LABEL_H + (LABEL_H - label.height) / 2;
+    label.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
+  } else {
+    label.x = 0; label.y = (LABEL_H - label.height) / 2;
+    label.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+  }
+
+  // Live percentage read-out — the initial-value preview; Unity rewrites it on
+  // every value change. Bar/segments: right-aligned in the label strip.
+  // Ring/gauge: centered inside the dial. Appended AFTER Label so the
+  // instance-label capture (first text) stays the Label.
+  if (opts.value) {
+    const val = figma.createText();
+    val.fontName = font; val.name = 'Value';
+    val.characters = `${Math.round(ratio * 100)}%`;
+    val.fills = [{ type: 'SOLID', color: PROGRESS_TEXT_RGB }];
+    comp.appendChild(val);
+    if (ringLike) {
+      val.fontSize = 14;
+      val.textAlignHorizontal = 'CENTER';
+      val.resize(DIAL * INNER, val.height);
+      val.x = (W - DIAL * INNER) / 2; val.y = DIAL / 2 - val.height / 2;
+      val.constraints = { horizontal: 'SCALE', vertical: 'SCALE' };
+    } else {
+      val.fontSize = 13;
+      val.textAlignHorizontal = 'RIGHT';
+      val.x = W - val.width; val.y = (LABEL_H - val.height) / 2;
+      val.constraints = { horizontal: 'MAX', vertical: 'MIN' };
+    }
+  }
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({
+    kind: 'progress', ref: name,
+    value: fmtSliderNum(ratio),
+    style: opts.style === 'gauge' ? 'ring' : opts.style, // gauge IS a ring with a 270° arc
+    indeterminate: opts.indeterminate || undefined,
   }));
   parkMaster(comp);
   placeInstance(comp);

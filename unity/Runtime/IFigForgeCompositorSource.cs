@@ -23,5 +23,6 @@ namespace FigForge
         Vector4 CompositorShapeCorners { get; }   // per-corner radii (tl,tr,br,bl, canvas px) — bounds the blur to the shape
         RectTransform CompositorRectTransform { get; }
         RenderTexture GetCompositorSurface();     // the flattened, premultiplied layer surface
+        void RebindPageCompositor();              // re-run find/register — the importer calls this once the page root owns its compositor
     }
 }

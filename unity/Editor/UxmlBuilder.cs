@@ -191,6 +191,15 @@ namespace FigForge
                         el = $"<ui:Slider name=\"{name}\" label=\"{label}\" low-value=\"{F(lo)}\" high-value=\"{F(hi)}\"{(float.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var sv) ? $" value=\"{F(Mathf.Clamp(sv, lo, hi))}\"" : "")} class=\"{classes}\" />";
                         break;
                     }
+                    case "progress":
+                    {
+                        // Canonical progress value: like the slider, raw within the
+                        // authored range (progress masters carry none → 0..1 ratio).
+                        float lo = e.canonical.minValue, hi = e.canonical.maxValue;
+                        if (hi <= lo) { lo = 0f; hi = 1f; }
+                        el = $"<ui:ProgressBar name=\"{name}\" title=\"{label}\" low-value=\"{F(lo)}\" high-value=\"{F(hi)}\"{(float.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var pv) ? $" value=\"{F(Mathf.Clamp(pv, lo, hi))}\"" : "")} class=\"{classes}\" />";
+                        break;
+                    }
                     default:
                         el = $"<ui:Button name=\"{name}\" text=\"{label}\" class=\"{classes}\" />";
                         break;

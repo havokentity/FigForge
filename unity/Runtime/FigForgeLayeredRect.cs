@@ -1112,6 +1112,10 @@ namespace FigForge
             return comp != null && comp.ShouldRenderLayer(this);
         }
 
+        // IFigForgeCompositorSource — the importer's post-build rebind (build-time
+        // registration is suppressed so no stray canvas compositor gets minted).
+        public void RebindPageCompositor() => UpdatePageCompositorRegistration();
+
         void UpdatePageCompositorRegistration()
         {
             if (_pageCompositor != null)
@@ -1134,6 +1138,10 @@ namespace FigForge
             var comp = GetComponentInParent<FigForgePageCompositor>();
             if (comp != null) return comp;
 
+            // Mid-import-build, the page root doesn't have its compositor yet —
+            // creating one here would land on the canvas (stray). The importer
+            // rebinds after ConfigurePageCompositor; see SuppressAutoCreate.
+            if (FigForgePageCompositor.SuppressAutoCreate) return null;
             var screen = GetComponentInParent<FigForgeScreen>();
             if (screen != null) return screen.gameObject.AddComponent<FigForgePageCompositor>();
 
