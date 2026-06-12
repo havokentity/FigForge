@@ -60,7 +60,7 @@ export interface ExportResult {
 
 export type ProgressFn = (current: number, total: number, label: string) => void;
 
-const INTERACTIVE_HINTS = ['button', 'btn', 'input', 'field', 'toggle', 'checkbox', 'switch'];
+const INTERACTIVE_HINTS = ['button', 'btn', 'input', 'field', 'toggle', 'checkbox', 'switch', 'stepper'];
 const DEFAULT_FONT_FACE_DILATE = 0.15;
 
 // ---------------------------------------------------------------------------
@@ -561,8 +561,8 @@ function gatherTexts(node: SceneNode): string[] {
 
 /** Initial control state from instance variant properties, where detectable. */
 function canonicalValue(node: SceneNode, kind: CanonicalKind): string | undefined {
-  if (kind === 'input') return inputValueText(node);
-  if (kind === 'toggle') {
+  if (kind === 'input' || kind === 'stepper') return inputValueText(node);
+  if (kind === 'toggle' || kind === 'switch') {
     const props = (node as unknown as {
       componentProperties?: Record<string, { value: unknown }>;
     }).componentProperties;
@@ -587,7 +587,9 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
     kind: ref.kind,
     ref: ref.ref,
     instanceName: ref.instanceName,
-    label: textLabel || ref.instanceName,
+    label: ref.kind === 'stepper' ? ref.instanceName
+      : ref.kind === 'switch' ? textLabel
+        : (textLabel || ref.instanceName),
   };
   if (ref.kind === 'input') {
     const placeholder = firstTextUnderNamedChild(node, ['Placeholder', 'Label']) || textLabel;
@@ -1372,6 +1374,35 @@ export async function exportDesign(
     return (ck as unknown as { visible?: boolean }).visible !== false ? 'on' : 'off';
   }
 
+  // Switch: a Toggle with slider-like Track/Fill/Thumb visuals. The Fill's
+  // visibility (or tag value) is the authored on/off state.
+  async function captureSwitch(master: SceneNode, tagValue?: string) {
+    const trackNode = childByName(master, 'Track');
+    if (!trackNode) return null;
+    const fillNode = childByName(master, 'Fill');
+    const thumbNode = childByName(master, 'Thumb');
+    const thumbRoll = childByName(master, 'ThumbRollover');
+    const thumbPress = childByName(master, 'ThumbPressed');
+    const fillVisible = fillNode ? (fillNode as unknown as { visible?: boolean }).visible !== false : false;
+    const value = tagValue === 'on' || tagValue === 'off' ? tagValue : (fillVisible ? 'on' : 'off');
+    return {
+      trackShape: shapeOf(trackNode) ?? undefined,
+      fillShape: fillNode ? (shapeOf(fillNode) ?? undefined) : undefined,
+      thumbShape: thumbNode ? (shapeOf(thumbNode) ?? undefined) : undefined,
+      thumbRollover: thumbRoll ? (stateSolid(thumbRoll) ?? undefined) : undefined,
+      thumbPressed: thumbPress ? (stateSolid(thumbPress) ?? undefined) : undefined,
+      value,
+      label: textOf(childByName(master, 'Label')),
+      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'HitArea', 'Label']),
+    };
+  }
+
+  function switchValueOf(node: SceneNode): string | undefined {
+    const fill = childByName(node, 'Fill');
+    if (!fill) return undefined;
+    return (fill as unknown as { visible?: boolean }).visible !== false ? 'on' : 'off';
+  }
+
   // Capture an input field: Background (TMP_InputField.targetGraphic), Placeholder,
   // optional initial Text value, and normalized child layout.
   async function captureInput(master: SceneNode) {
@@ -1393,6 +1424,39 @@ export async function exportDesign(
       value,
       partTrees: bgTree ? { Background: bgTree } : undefined,
       parts: partsOf(master, ['Background', 'Placeholder', 'Text', 'Value']),
+    };
+  }
+
+  // Capture a numeric Stepper: Minus button, InputField, Plus button, and Text
+  // value. The tag's min/max/slots payload maps to min/max/step.
+  async function captureStepper(master: SceneNode, tag: ReturnType<typeof canonicalTagData>) {
+    const minus = childByName(master, 'Minus');
+    const input = childByName(master, 'InputField') ?? childByName(master, 'Background');
+    const plus = childByName(master, 'Plus');
+    if (!minus || !input || !plus) return null;
+    let minValue = tag.minValue ?? 0;
+    let maxValue = tag.maxValue ?? 100;
+    if (!(maxValue > minValue)) { minValue = 0; maxValue = 100; }
+    const step = tag.slots !== undefined && tag.slots > 0 ? tag.slots : 1;
+    const rawValue = textOf(childByName(master, 'Text')) ?? textOf(childByName(master, 'Value')) ?? tag.value ?? '0';
+    const minusLabel = textOf(childByName(master, 'MinusLabel')) ?? '-';
+    const plusLabel = textOf(childByName(master, 'PlusLabel')) ?? '+';
+    const minusRoll = childByName(master, 'MinusRollover');
+    const minusPress = childByName(master, 'MinusPressed');
+    const plusRoll = childByName(master, 'PlusRollover');
+    const plusPress = childByName(master, 'PlusPressed');
+    return {
+      minusShape: shapeOf(minus) ?? undefined,
+      inputShape: shapeOf(input) ?? undefined,
+      plusShape: shapeOf(plus) ?? undefined,
+      minusRollover: minusRoll ? (stateSolid(minusRoll) ?? undefined) : undefined,
+      minusPressed: minusPress ? (stateSolid(minusPress) ?? undefined) : undefined,
+      plusRollover: plusRoll ? (stateSolid(plusRoll) ?? undefined) : undefined,
+      plusPressed: plusPress ? (stateSolid(plusPress) ?? undefined) : undefined,
+      minValue, maxValue, slots: step,
+      value: rawValue.trim().length === 0 ? '0' : rawValue,
+      minusLabel, plusLabel,
+      parts: partsOf(master, ['Minus', 'MinusLabel', 'InputField', 'Text', 'Value', 'Plus', 'PlusLabel']),
     };
   }
 
@@ -1922,6 +1986,9 @@ export async function exportDesign(
     if (ref.kind === 'toggle' || ref.kind === 'radio') {
       const t = await memoMasterCapture(`${ref.kind}|${master.id}|${ref.value ?? ''}`, () => captureToggle(master, ref.value));
       if (t) controlByNode.set(p.node.id, { shape: t.shape, checkShape: t.checkShape, value: t.value, label: t.label, parts: t.parts, partTrees: t.partTrees });
+    } else if (ref.kind === 'switch') {
+      const s = await memoMasterCapture(`switch|${master.id}|${ref.value ?? ''}`, () => captureSwitch(master, ref.value));
+      if (s) controlByNode.set(p.node.id, { ...s, value: switchValueOf(p.node) ?? s.value });
     } else if (ref.kind === 'input') {
       const i = await memoMasterCapture(`input|${master.id}`, () => captureInput(master));
       controlByNode.set(p.node.id, {
@@ -1932,6 +1999,9 @@ export async function exportDesign(
         partTrees: i.partTrees,
         parts: i.parts,
       });
+    } else if (ref.kind === 'stepper') {
+      const st = await memoMasterCapture(`stepper|${master.id}`, () => captureStepper(master, canonicalTagData(master)));
+      if (st) controlByNode.set(p.node.id, { ...st, value: inputValueText(p.node) ?? st.value });
     } else if (ref.kind === 'dropdown') {
       const d = await memoMasterCapture(`dropdown|${master.id}|${ref.value ?? ''}`, () => captureDropdown(master, ref.value));
       controlByNode.set(p.node.id, {
@@ -2104,14 +2174,18 @@ export async function exportDesign(
       const instanceInputLabel = canonical.kind === 'input' ? canonical.label : undefined;
       const instanceInputPlaceholder = canonical.kind === 'input' ? canonical.placeholder : undefined;
       const instanceInputValue = canonical.kind === 'input' ? canonical.value : undefined;
+      const instanceStepperValue = canonical.kind === 'stepper' ? canonical.value : undefined;
       const instanceSliderLabel = canonical.kind === 'slider' || canonical.kind === 'progress' ? canonical.label : undefined;
       const toggleLike = canonical.kind === 'toggle' || canonical.kind === 'radio';
       const instanceToggleLabel = toggleLike ? canonical.label : undefined;
+      const switchLike = canonical.kind === 'switch';
+      const instanceSwitchLabel = switchLike ? canonical.label : undefined;
       // The instance's own checked state: the variant property when one is
       // detectable (canonicalValue via buildCanonical), else this instance's own
       // Checkmark visibility — the master capture read the MASTER's Checkmark,
       // so a toggle flipped on via instance override exported as 'off'.
       const instanceToggleValue = toggleLike ? (canonical.value ?? toggleValueOf(node)) : undefined;
+      const instanceSwitchValue = switchLike ? (canonical.value ?? switchValueOf(node)) : undefined;
       Object.assign(canonical, controlByNode.get(node.id));
       if (canonical.kind === 'dropdown') {
         if (instanceDropdownLabel !== undefined) canonical.label = instanceDropdownLabel;
@@ -2126,6 +2200,11 @@ export async function exportDesign(
         // skipped it, exporting the MASTER's label + state for every instance.
         if (instanceToggleLabel !== undefined) canonical.label = instanceToggleLabel;
         if (instanceToggleValue !== undefined) canonical.value = instanceToggleValue;
+      } else if (switchLike) {
+        if (instanceSwitchLabel !== undefined) canonical.label = instanceSwitchLabel;
+        if (instanceSwitchValue !== undefined) canonical.value = instanceSwitchValue;
+      } else if (canonical.kind === 'stepper') {
+        if (instanceStepperValue !== undefined) canonical.value = instanceStepperValue;
       } else if (canonical.kind === 'slider' || canonical.kind === 'progress') {
         // The instance's own Label text (possibly overridden in Figma) wins over the
         // master's; the captured per-instance value is already correct from dispatch.

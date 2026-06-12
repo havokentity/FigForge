@@ -162,9 +162,14 @@ namespace FigForge
                             Respond(res, 401, "{\"ok\":false,\"error\":\"unauthorized\"}");
                             break;
                         }
+                        // The wire is always UTF-8 (the plugin posts JSON via fetch,
+                        // which encodes JS strings as UTF-8). Request.ContentEncoding
+                        // is NOT trustworthy: without an explicit charset in the
+                        // Content-Type it falls back to a legacy default that turns
+                        // each non-ASCII byte into '?' — "TEA → PCA" (U+2192, three
+                        // UTF-8 bytes) arrived as "TEA ??? PCA".
                         string body;
-                        using (var sr = new StreamReader(ctx.Request.InputStream,
-                                   ctx.Request.ContentEncoding ?? Encoding.UTF8))
+                        using (var sr = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
                             body = sr.ReadToEnd();
                         lock (_gate) _inbox.Enqueue(body);
                         Respond(res, 202, "{\"ok\":true,\"queued\":true}");

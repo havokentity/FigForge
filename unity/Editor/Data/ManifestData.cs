@@ -188,8 +188,8 @@ namespace FigForge
         public CanonicalStateColors instanceStateColors; // THIS instance's hover/press fills when they differ from the component
         public CanonicalStateShapes stateShapes; // full Regular/RollOver/Pressed rounded-rect styles
         public CanonicalStateShapes instanceStateShapes; // THIS instance's full state styles when they differ
-        // --- control-specific (toggle/radio/dropdown/list) ---
-        public CanonicalShape checkShape; // toggle/radio: the "on" indicator (Toggle.graphic), shown when value=on
+        // --- control-specific (toggle/radio/switch/dropdown/list) ---
+        public CanonicalShape checkShape; // toggle/radio/switch: the "on" indicator (Toggle.graphic), shown when value=on
         public List<string> items;        // list: legacy row texts (back-compat; prefer listItems)
         public List<ListItemData> listItems; // list: per-row data (title + optional subtitle)
         public CanonicalShape itemShape;  // list: the row background shape (from the 'Item' template's Regular)
@@ -220,6 +220,15 @@ namespace FigForge
         public float minValue;              // slider: range start (default 0)
         public float maxValue;              // slider: range end (default 0 → legacy 0..1)
         public int slots;                   // slider: discrete slot count (>=2 snaps to slots; 0 = continuous)
+        public CanonicalShape minusShape;   // stepper: minus button background ('Minus')
+        public CanonicalShape plusShape;    // stepper: plus button background ('Plus')
+        public CanonicalShape inputShape;   // stepper: input field background ('InputField')
+        public float[] minusRollover;       // stepper: minus button hover colour ('MinusRollover')
+        public float[] minusPressed;        // stepper: minus button pressed colour ('MinusPressed')
+        public float[] plusRollover;        // stepper: plus button hover colour ('PlusRollover')
+        public float[] plusPressed;         // stepper: plus button pressed colour ('PlusPressed')
+        public string minusLabel;           // stepper: minus glyph/text
+        public string plusLabel;            // stepper: plus glyph/text
         // progress: a slider with no thumb and no input — shares trackShape/fillShape/
         // value above (value = the 0..1 fill ratio, displayed as a percentage).
         public bool indeterminate;          // progress: true = animated ('Indeterminate' layer present in the master)

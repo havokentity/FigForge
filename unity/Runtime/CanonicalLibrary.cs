@@ -11,7 +11,7 @@ using UnityEngine;
 
 namespace FigForge
 {
-    public enum CanonicalKind { Button, Toggle, Input, Dropdown, Slider, Radio, List }
+    public enum CanonicalKind { Button, Toggle, Input, Dropdown, Slider, Radio, List, Switch, Stepper }
 
     [CreateAssetMenu(fileName = "FigForgeCanonicalLibrary", menuName = "FigForge/Canonical Library")]
     public class CanonicalLibrary : ScriptableObject
@@ -67,7 +67,9 @@ namespace FigForge
                 case "button": kind = CanonicalKind.Button; return true;
                 case "toggle": kind = CanonicalKind.Toggle; return true;
                 case "radio": kind = CanonicalKind.Radio; return true;
+                case "switch": kind = CanonicalKind.Switch; return true;
                 case "input": kind = CanonicalKind.Input; return true;
+                case "stepper": kind = CanonicalKind.Stepper; return true;
                 case "dropdown": kind = CanonicalKind.Dropdown; return true;
                 case "slider": kind = CanonicalKind.Slider; return true;
                 case "list": kind = CanonicalKind.List; return true;

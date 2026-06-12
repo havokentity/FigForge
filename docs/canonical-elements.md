@@ -2,7 +2,8 @@
 
 Define a control **once** and reference it by name across every Figma page.
 FigForge can generate reusable uGUI controls for buttons, toggles/radios,
-input fields, dropdowns, and lists.
+switches, input fields, steppers, dropdowns, sliders, progress bars, lists, and
+tables.
 
 ## The naming convention
 
@@ -12,7 +13,7 @@ input fields, dropdowns, and lists.
 
 | Token | Example | Meaning |
 |------|---------|---------|
-| `<Kind>` | `Btn` | Kind tag (case-insensitive, e.g. `Btn`, `Tgl`, `Inp`, `Drp`). |
+| `<Kind>` | `Btn` | Kind tag (case-insensitive, e.g. `Btn`, `Tgl`, `Sw`, `Inp`, `Step`, `Drp`). |
 | `<instanceName>` | `Save` | This element's design-specific name (may contain `_`). |
 | `<canonicalRef>` | `PrimaryButton` | The **last** token — the canonical definition to instantiate. |
 
@@ -24,6 +25,8 @@ Examples:
 | `Btn_Cancel_Secondary` | button | Cancel | Secondary |
 | `Button_NextStep_Primary` | button | NextStep | Primary |
 | `Inp_Email_InputField` | input | Email | InputField |
+| `Sw_AirplaneMode_Switch` | switch | AirplaneMode | Switch |
+| `Step_Quantity_Stepper` | stepper | Quantity | Stepper |
 
 The plugin records `canonical: { kind, ref, instanceName, label }` on the element
 (the `label` is the first text found inside the layer, else the instance name)

@@ -18,7 +18,7 @@ export const MANIFEST_VERSION = '2.0';
 // Canonical-control capture generation this plugin emits — counterpart:
 // unity/Editor/HierarchyBuilder.cs `CanonicalSchema`. Keep the two numbers in
 // lockstep; the importer warns (but continues) when they differ.
-export const CANONICAL_SCHEMA = 50;
+export const CANONICAL_SCHEMA = 53;
 
 // ---------------------------------------------------------------------------
 // Geometry primitives
@@ -156,7 +156,7 @@ export interface TextProps {
 // in Unity as an instance of a named canonical Button definition rather than
 // rebuilt from PNG/text. Scoped to buttons for now; `kind` keeps it extensible.
 // ---------------------------------------------------------------------------
-export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'input' | 'dropdown' | 'slider' | 'progress' | 'list' | 'table';
+export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'switch' | 'input' | 'stepper' | 'dropdown' | 'slider' | 'progress' | 'list' | 'table';
 
 /** Exported per-state background sprites for an interactive control. */
 export interface CanonicalStates {
@@ -222,8 +222,8 @@ export interface CanonicalRef {
   instanceStateColors?: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA }; // THIS instance's hover/press fills when they differ from the component
   stateShapes?: CanonicalStateShapes; // full Regular/RollOver/Pressed rounded-rect styles
   instanceStateShapes?: CanonicalStateShapes; // THIS instance's full state styles when they differ
-  // --- control-specific (toggle/radio/dropdown/list) ---
-  checkShape?: ButtonShape; // toggle/radio: the "on" indicator (UGUI Toggle.graphic), shown when value=on
+  // --- control-specific (toggle/radio/switch/dropdown/list) ---
+  checkShape?: ButtonShape; // toggle/radio/switch: the "on" indicator (Toggle.graphic), shown when value=on
   items?: string[];         // list: legacy row texts (kept for back-compat; prefer listItems)
   listItems?: ListItemData[]; // list: per-row data (title + optional subtitle), the rows to render
   itemShape?: ButtonShape;  // list: the row background shape (from the 'Item' template's Regular)
@@ -256,6 +256,17 @@ export interface CanonicalRef {
   minValue?: number;          // slider: range start (absent = 0)
   maxValue?: number;          // slider: range end (absent = 1)
   slots?: number;             // slider: discrete slot count (≥2 snaps + 'Ticks' notches; absent = continuous)
+  // stepper: numeric +/- control with an input field. `value` above is the initial
+  // numeric text; min/max/slots reuse slider's numeric range fields (slots = step).
+  minusShape?: ButtonShape;   // stepper: minus button background ('Minus')
+  plusShape?: ButtonShape;    // stepper: plus button background ('Plus')
+  inputShape?: ButtonShape;   // stepper: input field background ('InputField')
+  minusRollover?: RGBA;       // stepper: minus button hover colour ('MinusRollover')
+  minusPressed?: RGBA;        // stepper: minus button pressed colour ('MinusPressed')
+  plusRollover?: RGBA;        // stepper: plus button hover colour ('PlusRollover')
+  plusPressed?: RGBA;         // stepper: plus button pressed colour ('PlusPressed')
+  minusLabel?: string;        // stepper: minus glyph/text
+  plusLabel?: string;         // stepper: plus glyph/text
   // progress: a slider with no thumb and no input — trackShape/fillShape/value
   // above are shared verbatim (value = the fill ratio, displayed as a
   // percentage). A hidden 'Indeterminate' layer in the master flags animated mode.

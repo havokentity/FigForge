@@ -628,7 +628,7 @@ function enclosingScreenFrame(nodes: readonly SceneNode[]): FrameNode | undefine
 }
 
 // Canonical master component names FigForge knows how to create.
-const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'InputField', 'Dropdown', 'Slider', 'Progress', 'List', 'ListItem', 'Table', 'TableRow'];
+const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'Switch', 'InputField', 'Stepper', 'Dropdown', 'Slider', 'Progress', 'List', 'ListItem', 'Table', 'TableRow'];
 
 // Find an existing canonical master by name ANYWHERE in the document (masters no
 // longer need to live on a dedicated page — they can sit loose on any design page,
@@ -683,7 +683,9 @@ async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
+    case 'switch': return createSwitch();
     case 'input': return createInputField();
+    case 'stepper': return createStepper();
     case 'dropdown': return createDropdown();
     case 'slider': return createSlider(sliderOpts);
     case 'progress': return createProgress(progressOpts);
@@ -731,6 +733,48 @@ async function createToggleLike(kind: CanonicalKind, ref: string, circular: bool
     parkMaster(comp);
   }
   placeInstance(comp); // each click drops another instance on your page (so you can make many / group radios)
+  return comp;
+}
+
+// Switch: an iOS-style Toggle. Track is the off rail, Fill is the on tint, and
+// Thumb slides between the two ends in Unity while the Toggle value plumbing
+// remains the same as checkbox/radio.
+async function createSwitch(): Promise<ComponentNode> {
+  const reuse = findMaster('Switch');
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const W = 56, H = 32, PAD = 3, THUMB = 26;
+  const comp = figma.createComponent();
+  comp.name = 'Switch'; comp.resize(W, H); comp.fills = [];
+
+  const track = solidRect('Track', W, H, H / 2, { r: 0.82, g: 0.84, b: 0.88 });
+  track.x = 0; track.y = 0; track.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(track);
+
+  const fill = solidRect('Fill', W, H, H / 2, { r: 0.2, g: 0.78, b: 0.35 });
+  fill.x = 0; fill.y = 0; fill.visible = false; fill.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(fill);
+
+  const thumb = solidRect('Thumb', THUMB, THUMB, THUMB / 2, { r: 1, g: 1, b: 1 });
+  thumb.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.22 }, offset: { x: 0, y: 1 }, radius: 3, spread: 0, visible: true, blendMode: 'NORMAL' }];
+  thumb.x = PAD; thumb.y = PAD; thumb.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+  comp.appendChild(thumb);
+
+  const roll = solidRect('ThumbRollover', THUMB, THUMB, THUMB / 2, { r: 0.95, g: 0.94, b: 1 });
+  roll.visible = false; roll.x = thumb.x; roll.y = thumb.y; roll.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+  comp.appendChild(roll);
+
+  const press = solidRect('ThumbPressed', THUMB, THUMB, THUMB / 2, { r: 0.88, g: 0.86, b: 1 });
+  press.visible = false; press.x = thumb.x; press.y = thumb.y; press.constraints = { horizontal: 'MIN', vertical: 'CENTER' };
+  comp.appendChild(press);
+
+  const hit = solidRect('HitArea', W, H, 0, { r: 0, g: 0, b: 0 }, 0);
+  hit.x = 0; hit.y = 0; hit.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(hit);
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'switch', ref: 'Switch', value: 'off' }));
+  parkMaster(comp);
+  placeInstance(comp);
   return comp;
 }
 
@@ -804,6 +848,65 @@ async function normalizeInputFieldMaster(comp: ComponentNode): Promise<void> {
     placeholder.x = 12;
     placeholder.y = 0;
   }
+}
+
+// Stepper: numeric input with canonical - / + buttons. The InputField child reuses
+// the input value binding; min/max/step are stored in the tag as slider-style
+// numeric fields (slots = step).
+async function createStepper(): Promise<ComponentNode> {
+  const reuse = findMaster('Stepper');
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const BTN = 40, FIELD = 72, H = 40, W = BTN * 2 + FIELD, R = 8;
+  const comp = figma.createComponent();
+  comp.name = 'Stepper'; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
+
+  const makeButton = (name: string, x: number, label: string): void => {
+    const bg = solidRect(name, BTN, H, R, { r: 0.96, g: 0.97, b: 1 });
+    bg.strokes = [{ type: 'SOLID', color: { r: 0.72, g: 0.74, b: 0.82 } }];
+    bg.strokeWeight = 1; bg.x = x; bg.y = 0; bg.constraints = { horizontal: name === 'Minus' ? 'MIN' : 'MAX', vertical: 'STRETCH' };
+    comp.appendChild(bg);
+    const roll = solidRect(name + 'Rollover', BTN, H, R, { r: 0.93, g: 0.95, b: 1 });
+    roll.visible = false; roll.x = x; roll.y = 0; roll.constraints = bg.constraints;
+    comp.appendChild(roll);
+    const press = solidRect(name + 'Pressed', BTN, H, R, { r: 0.85, g: 0.89, b: 1 });
+    press.visible = false; press.x = x; press.y = 0; press.constraints = bg.constraints;
+    comp.appendChild(press);
+    const t = figma.createText();
+    t.fontName = font; t.name = name + 'Label'; t.characters = label;
+    t.fontSize = 18; t.textAlignHorizontal = 'CENTER'; t.textAlignVertical = 'CENTER';
+    t.fills = [{ type: 'SOLID', color: { r: 0.2, g: 0.22, b: 0.28 } }];
+    t.textAutoResize = 'NONE'; t.resize(BTN, H);
+    t.x = x; t.y = 0; t.constraints = { horizontal: name === 'Minus' ? 'MIN' : 'MAX', vertical: 'STRETCH' };
+    comp.appendChild(t);
+  };
+
+  makeButton('Minus', 0, '-');
+
+  const input = solidRect('InputField', FIELD, H, 0, { r: 1, g: 1, b: 1 });
+  input.strokes = [{ type: 'SOLID', color: { r: 0.72, g: 0.74, b: 0.82 } }];
+  input.strokeWeight = 1; input.x = BTN; input.y = 0; input.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(input);
+
+  const text = figma.createText();
+  text.fontName = font; text.name = 'Text'; text.characters = '0';
+  text.fontSize = 14; text.textAlignHorizontal = 'CENTER'; text.textAlignVertical = 'CENTER';
+  text.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
+  text.textAutoResize = 'NONE'; text.resize(FIELD, H);
+  text.x = BTN; text.y = 0; text.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(text);
+
+  makeButton('Plus', BTN + FIELD, '+');
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({
+    kind: 'stepper', ref: 'Stepper',
+    value: '0',
+    minValue: 0, maxValue: 100, slots: 1,
+  }));
+  parkMaster(comp);
+  placeInstance(comp);
+  return comp;
 }
 
 // The reusable dropdown option row — its own component (Regular/Rollover/Pressed/

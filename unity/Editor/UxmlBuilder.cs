@@ -176,8 +176,14 @@ namespace FigForge
                     case "toggle":
                         el = $"<ui:Toggle name=\"{name}\" label=\"{label}\"{(val == "true" ? " value=\"true\"" : "")} class=\"{classes}\" />";
                         break;
+                    case "switch":
+                        el = $"<ui:Toggle name=\"{name}\" label=\"{label}\"{((val == "true" || val == "on") ? " value=\"true\"" : "")} class=\"{classes}\" />";
+                        break;
                     case "input":
                         el = $"<ui:TextField name=\"{name}\" label=\"{label}\" value=\"{Attr(val)}\" class=\"{classes}\" />";
+                        break;
+                    case "stepper":
+                        el = $"<ui:FloatField name=\"{name}\" value=\"{Attr(val)}\" class=\"{classes}\" />";
                         break;
                     case "dropdown":
                         el = $"<ui:DropdownField name=\"{name}\" label=\"{label}\" class=\"{classes}\" />"; // choices set in code

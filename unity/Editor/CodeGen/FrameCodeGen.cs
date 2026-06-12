@@ -234,8 +234,10 @@ namespace FigForge
                     case "button": return "FigForge.FigForgeButton";
                     case "toggle":
                     case "radio": return "FigForge.FigForgeToggle";
+                    case "switch": return "FigForge.FigForgeSwitch";
                     case "dropdown": return "FigForge.FigForgeDropdown";
                     case "input": return "FigForge.FigForgeInputField";
+                    case "stepper": return "FigForge.FigForgeStepper";
                     case "slider": return "FigForge.FigForgeSlider";
                     case "progress": return "FigForge.FigForgeProgress";
                     case "list": return "FigForge.FigForgeList";

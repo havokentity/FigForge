@@ -13,14 +13,16 @@ wired — only structure, references, and navigation *data*.
 |---|---|---|---|
 | `Btn` `Button` | button | `Button` | `Button` |
 | `Tgl` `Chk` | toggle | `Toggle` | `Toggle` |
+| `Sw` `Switch` | switch | `FigForgeSwitch` | `Toggle` |
 | `Inp` `Field` | input | `TMP_InputField` | `TextField` |
+| `Step` `Stepper` `Num` | stepper | `FigForgeStepper` | `FloatField` |
 | `Drp` `Select` | dropdown | `TMP_Dropdown` | `DropdownField` |
 | `Sld` | slider | `Slider` | `Slider` |
 
 ## 2. Manifest additions
 
-- `canonical.kind` ∈ button | toggle | input | dropdown | slider
-- `canonical.value?` — initial state (toggle on/off, slider value, input text) when detectable
+- `canonical.kind` ∈ button | toggle | switch | input | stepper | dropdown | slider
+- `canonical.value?` — initial state (toggle/switch on/off, slider/stepper value, input text) when detectable
 - `canonical.placeholder?` — placeholder text for input fields
 - `canonical.options?` — string[] for dropdowns (from Figma list children; heuristic)
 - `element.nav?` — `{ target: "<screenName>", trigger: "click" }` from Figma prototype reactions (data only)

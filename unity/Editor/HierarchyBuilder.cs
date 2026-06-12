@@ -35,6 +35,14 @@ namespace FigForge
         public readonly List<KeyValuePair<string, GameObject>> registered = new List<KeyValuePair<string, GameObject>>();
         // element id → built GameObject, so the codegen can register members for typed wiring.
         public readonly Dictionary<string, GameObject> byElementId = new Dictionary<string, GameObject>();
+        // "kind|ref" keys whose canonical prefab was already resolved during THIS page
+        // build. A manifest carries ONE definition per ref, so only the first element
+        // of a ref may regenerate the shared prefab. A later same-ref element whose
+        // signature still differs is per-instance data leaking into the signature —
+        // regenerating again would SaveAsPrefabAsset under the instances already
+        // placed this build, resetting their name/rect/binding overrides to prefab
+        // defaults (the page's first inputs came out as default-sized 'inputfield').
+        public readonly HashSet<string> resolvedCanonicalRefs = new HashSet<string>();
     }
 
     public static class HierarchyBuilder
@@ -46,6 +54,7 @@ namespace FigForge
             if (roots.Count == 0) { ctx.log("no root element in manifest"); return null; }
 
             ctx.registered.Clear();
+            ctx.resolvedCanonicalRefs.Clear();
 
             // One Figma frame = one root. If several, wrap them under a page root.
             // Compositor auto-create is suppressed for the whole element build:
@@ -238,9 +247,17 @@ namespace FigForge
                 {
                     inst = BuildToggle(e, parent, ctx);
                 }
+                else if (canonicalKind == "switch")
+                {
+                    inst = BuildSwitch(e, parent, ctx);
+                }
                 else if (canonicalKind == "input")
                 {
                     inst = BuildInputField(e, parent, ctx);
+                }
+                else if (canonicalKind == "stepper")
+                {
+                    inst = BuildStepper(e, parent, ctx);
                 }
                 else if (canonicalKind == "dropdown")
                 {
@@ -1918,6 +1935,82 @@ namespace FigForge
             return go;
         }
 
+        // Switch: Toggle plumbing with slider-like Track/Fill/Thumb visuals. The Fill
+        // object is shown only when on; FigForgeSwitch slides the Thumb between ends.
+        static GameObject BuildSwitch(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Switch" : e.name, parent);
+            var sw = go.AddComponent<FigForgeSwitch>();
+            sw.transition = Selectable.Transition.None;
+
+            float[] full = { 0f, 0f, 1f, 1f };
+            float[] trackBox = c.parts != null && c.parts.TryGetValue("Track", out var tb) && tb != null && tb.Length >= 4 ? tb : full;
+            float[] thumbBox = c.parts != null && c.parts.TryGetValue("Thumb", out var hb) && hb != null && hb.Length >= 4 ? hb : null;
+            float ctrlW = e.rect != null ? e.rect.w * sf : 0f;
+            float ctrlH = e.rect != null ? e.rect.h * sf : 0f;
+            float thumbW = thumbBox != null && ctrlW > 0f ? (thumbBox[2] - thumbBox[0]) * ctrlW : 26f * sf;
+
+            var trackGo = NewRect("Track", go.transform);
+            AnchorPart(trackGo.GetComponent<RectTransform>(), c.parts, "Track");
+            var track = AddShapeGraphic(trackGo, c.trackShape, ctx);
+
+            Graphic fill = null;
+            if (c.fillShape != null)
+            {
+                var fillGo = NewRect("Fill", go.transform);
+                AnchorPart(fillGo.GetComponent<RectTransform>(), c.parts, "Fill");
+                fill = AddShapeGraphic(fillGo, c.fillShape, ctx);
+            }
+
+            var slideGo = NewRect("Thumb Slide Area", go.transform);
+            var srt = slideGo.GetComponent<RectTransform>();
+            srt.anchorMin = new Vector2(trackBox[0], thumbBox != null ? thumbBox[1] : trackBox[1]);
+            srt.anchorMax = new Vector2(trackBox[2], thumbBox != null ? thumbBox[3] : trackBox[3]);
+            srt.offsetMin = new Vector2(thumbW * 0.5f, 0f);
+            srt.offsetMax = new Vector2(-thumbW * 0.5f, 0f);
+
+            var handleGo = NewRect("Thumb", slideGo.transform);
+            var hrt = handleGo.GetComponent<RectTransform>();
+            hrt.anchorMin = new Vector2(0f, 0f); hrt.anchorMax = new Vector2(0f, 1f);
+            hrt.sizeDelta = new Vector2(thumbW, 0f); hrt.anchoredPosition = Vector2.zero;
+            var thumbShape = c.thumbShape ?? new CanonicalShape
+            { cornerRadius = sf > 0f ? thumbW * 0.5f / sf : 13f, fill = new float[] { 1f, 1f, 1f, 1f } };
+            var thumbVisual = AddShapeGraphic(handleGo, thumbShape, ctx);
+
+            var thumbReg = thumbShape.fill != null && thumbShape.fill.Length >= 4
+                ? ToColor(thumbShape.fill) : Color.white;
+            var states = go.AddComponent<FigForgeScrollbarStates>();
+            states.bound = thumbVisual;
+            states.regular = FigForgeFill.Solid(thumbReg);
+            states.rollover = FigForgeFill.Solid(c.thumbRollover != null
+                ? ToColor(c.thumbRollover)
+                : new Color(thumbReg.r * 0.96f, thumbReg.g * 0.96f, thumbReg.b * 0.98f, thumbReg.a));
+            states.pressed = FigForgeFill.Solid(c.thumbPressed != null
+                ? ToColor(c.thumbPressed)
+                : new Color(thumbReg.r * 0.88f, thumbReg.g * 0.88f, thumbReg.b * 0.92f, thumbReg.a));
+            states.hasRollover = true;
+            states.hasPressed = true;
+
+            TextMeshProUGUI label = null;
+            if ((c.parts != null && c.parts.ContainsKey("Label")) || !string.IsNullOrEmpty(c.label))
+                label = AddControlLabel(go, "Label", c.label, c.parts, "Label", ctx, TextAlignmentOptions.Left);
+
+            var hit = AddHitArea(go.transform, c.parts);
+            sw.targetGraphic = hit;
+            sw.fillGraphic = fill;
+            sw.thumb = hrt;
+            sw.tmpTxt_label = label;
+            sw.checkmark = fill;
+            sw.isOn = false;
+            if (fill != null) fill.gameObject.SetActive(false);
+
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.control = sw; bind.label = label; bind.background = track;
+            return go;
+        }
+
         // InputField: Background + text viewport + placeholder + value text.
         static GameObject BuildInputField(ElementData e, Transform parent, BuildContext ctx)
         {
@@ -1986,6 +2079,97 @@ namespace FigForge
             var bind = go.AddComponent<FigForgeBindings>();
             bind.control = input; bind.label = placeholder; bind.valueText = text; bind.background = bg;
             return go;
+        }
+
+        // Stepper: two canonical Buttons plus a numeric TMP input field bound by a
+        // FigForgeStepper runtime component.
+        static GameObject BuildStepper(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Stepper" : e.name, parent);
+            var stepper = go.AddComponent<FigForgeStepper>();
+            stepper.minValue = c.minValue;
+            stepper.maxValue = c.maxValue > c.minValue ? c.maxValue : 100f;
+            stepper.step = c.slots > 0 ? c.slots : 1f;
+
+            Button BuildStepButton(string part, CanonicalShape shape, float[] rollover, float[] pressed)
+            {
+                var btnGo = NewRect(part, go.transform);
+                AnchorPart(btnGo.GetComponent<RectTransform>(), c.parts, part);
+                var bg = AddShapeGraphic(btnGo, shape, ctx);
+                MakeClickTarget(bg, ctx);
+                ApplyStepperButtonStates(btnGo, bg, shape, rollover, pressed);
+                var btn = btnGo.AddComponent<Button>();
+                btn.transition = Selectable.Transition.None;
+                btn.targetGraphic = bg;
+                return btn;
+            }
+
+            stepper.minusButton = BuildStepButton("Minus", c.minusShape, c.minusRollover, c.minusPressed);
+            stepper.plusButton = BuildStepButton("Plus", c.plusShape, c.plusRollover, c.plusPressed);
+
+            var inputGo = NewRect("InputField", go.transform);
+            AnchorPart(inputGo.GetComponent<RectTransform>(), c.parts, "InputField");
+            var input = inputGo.AddComponent<FigForgeInputField>();
+            input.transition = Selectable.Transition.None;
+            input.lineType = TMP_InputField.LineType.SingleLine;
+            input.contentType = TMP_InputField.ContentType.DecimalNumber;
+            input.customCaretColor = true;
+            input.caretColor = new Color(0.1f, 0.1f, 0.12f, 1f);
+            input.selectionColor = new Color(0.49f, 0.36f, 1f, 0.28f);
+            var inputBg = AddShapeGraphic(inputGo, c.inputShape, ctx);
+            input.targetGraphic = inputBg;
+            MakeClickTarget(inputBg, ctx);
+
+            var area = NewRect("Text Area", inputGo.transform);
+            Stretch(area.GetComponent<RectTransform>());
+            area.AddComponent<RectMask2D>();
+            input.textViewport = area.GetComponent<RectTransform>();
+
+            var textGo = NewRect("Text", area.transform);
+            Stretch(textGo.GetComponent<RectTransform>());
+            var text = textGo.AddComponent<TextMeshProUGUI>();
+            text.text = "";
+            text.alignment = TextAlignmentOptions.Center;
+            text.color = new Color(0.1f, 0.1f, 0.12f, 1f);
+            text.fontSize = 14f * sf;
+            text.raycastTarget = false;
+            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.overflowMode = TextOverflowModes.Overflow;
+            ApplyFont(text, c.defLabelFont, ctx);
+            MatchTextWeight(text);
+            input.textComponent = text;
+
+            AddControlLabel(go, "MinusLabel", string.IsNullOrEmpty(c.minusLabel) ? "-" : c.minusLabel, c.parts, "MinusLabel", ctx, TextAlignmentOptions.Center);
+            AddControlLabel(go, "PlusLabel", string.IsNullOrEmpty(c.plusLabel) ? "+" : c.plusLabel, c.parts, "PlusLabel", ctx, TextAlignmentOptions.Center);
+
+            stepper.input = input;
+            stepper.SetValueFromString(c.value ?? "0");
+
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.stepper = stepper; bind.control = input; bind.valueText = text; bind.background = inputBg;
+            return go;
+        }
+
+        static void ApplyStepperButtonStates(GameObject button, Graphic bg, CanonicalShape shape, float[] rollover, float[] pressed)
+        {
+            if (button == null || bg == null || (rollover == null && pressed == null)) return;
+            if (bg is FigForgeRoundedRect || bg is FigForgeLayeredRect)
+            {
+                var baseFill = ShapeFills(shape).Count > 0 ? ShapeFills(shape)[0] : FigForgeFill.Solid(bg.color);
+                var states = button.AddComponent<FigForgeButtonStateColors>();
+                states.normal = baseFill;
+                states.highlighted = rollover != null ? FigForgeFill.Solid(ToColor(rollover)) : baseFill;
+                states.pressed = pressed != null ? FigForgeFill.Solid(ToColor(pressed)) : states.highlighted;
+                return;
+            }
+
+            var graphicStates = button.AddComponent<FigForgeGraphicStateColors>();
+            graphicStates.target = bg;
+            graphicStates.normal = bg.color;
+            graphicStates.highlighted = rollover != null ? ToColor(rollover) : bg.color;
+            graphicStates.pressed = pressed != null ? ToColor(pressed) : graphicStates.highlighted;
         }
 
         // Dropdown: Background + caption + arrow + a standard (hidden) TMP_Dropdown template.
@@ -2973,6 +3157,9 @@ namespace FigForge
             if (string.IsNullOrEmpty(refName)) return null;
             string sig = CanonicalSignature(e, kind, ctx.scaleFactor);
             bool signatureShare = CanShareCanonicalBySignature(e, kind);
+            // Only the FIRST element of a (kind, ref) in a build may regenerate the
+            // shared prefab — see BuildContext.resolvedCanonicalRefs.
+            bool firstThisBuild = ctx.resolvedCanonicalRefs.Add(kind + "|" + refName);
 
             // Candidate prefab: a library-mapped one (hand-made or previously
             // generated) wins lookup; else an existing generated prefab on disk.
@@ -2997,10 +3184,15 @@ namespace FigForge
                 string prevSig = !string.IsNullOrEmpty(refEntry != null ? refEntry.signature : null)
                     ? refEntry.signature
                     : (stamp != null ? stamp.signature : null);
-                bool stale = managed && prevSig != sig;
+                bool stale = managed && prevSig != sig && firstThisBuild;
                 if (!stale)
                 {
-                    RegisterInLibrary(ctx, kind, refName, candidate, signatureShare && managed ? sig : null);
+                    // Never let a same-ref element overwrite the stored definition
+                    // signature with its own non-matching one (per-instance noise) —
+                    // the next import's first element would mismatch and regenerate
+                    // every time, replacing the asset under its live instances.
+                    string keep = !string.IsNullOrEmpty(prevSig) && prevSig != sig ? prevSig : sig;
+                    RegisterInLibrary(ctx, kind, refName, candidate, signatureShare && managed ? keep : null);
                     return candidate;
                 }
                 ctx.log($"canonical {kind} '{refName}' definition changed — regenerating prefab.");
@@ -3022,7 +3214,9 @@ namespace FigForge
                 (kind == "button" && e.canonical.shape != null) ? BuildShapeButton(e, null, ctx)   // crisp SDF shader
                 : (kind == "button" && e.canonical.states != null) ? BuildStateButton(e, null, ctx) // exported state PNGs
                 : ((kind == "toggle" || kind == "radio") && e.canonical.shape != null) ? BuildToggle(e, null, ctx)
+                : (kind == "switch") ? BuildSwitch(e, null, ctx)
                 : (kind == "input") ? BuildInputField(e, null, ctx)
+                : (kind == "stepper") ? BuildStepper(e, null, ctx)
                 : (kind == "dropdown") ? BuildDropdown(e, null, ctx)
                 : (kind == "slider") ? BuildSlider(e, null, ctx)
                 : (kind == "progress") ? BuildProgress(e, null, ctx)
@@ -3034,7 +3228,7 @@ namespace FigForge
 
             // Wire binding slots so per-instance label/value apply onto the prefab.
             var bind = temp.GetComponent<FigForgeBindings>() ?? temp.AddComponent<FigForgeBindings>();
-            if (kind != "list" && kind != "table") // a list/table has no single label/Selectable — rows are data-driven via SetItems/SetRows
+            if (kind != "list" && kind != "table" && kind != "stepper") // data-driven controls without one label/Selectable manage their own slots
             {
                 bind.label = temp.GetComponentInChildren<TMP_Text>(true);
                 bind.control = temp.GetComponent<Selectable>();
@@ -3158,11 +3352,22 @@ namespace FigForge
         //      ellipse's arcData: start/span/thickness, pie at thickness 1) and
         //      segments (N lit/unlit block pairs from the Track frame's children);
         //      per-style indeterminate animations (spin/bounce/scanner).
+        // v51: canonical Switch — Toggle plumbing with Track/Fill/Thumb visuals
+        //      (FigForgeSwitch slides the thumb, fill shows when on).
+        // v52: canonical Stepper — Minus/Plus canonical buttons around a numeric
+        //      input (FigForgeStepper, min/max/step from the tag).
+        // v53: input signature no longer folds per-instance placeholder/value —
+        //      five inputs with distinct placeholders regenerated the shared
+        //      prefab four times in ONE build, and each SaveAsPrefabAsset reset
+        //      the instances already placed (default 100×100 'inputfield' roots,
+        //      prefab-default placeholder). Regen is also gated to the first
+        //      same-ref element per build, and a plain reuse can no longer
+        //      overwrite the stored definition signature.
         //
         // Counterpart constant: plugin/src/types.ts CANONICAL_SCHEMA — the plugin
         // stamps its number into the manifest (canonicalSchema) and ManifestParser
         // warns when the two differ. Bump BOTH together.
-        internal const int CanonicalSchema = 50;
+        internal const int CanonicalSchema = 53;
 
         // Invariant culture for every signature number: signatures persist in the
         // committed library asset, so a comma-decimal locale (de-DE, fr-FR, …) must
@@ -3209,8 +3414,11 @@ namespace FigForge
                 AppendShapeSig(sb, "ssh", c.stateShapes.highlighted);
                 AppendShapeSig(sb, "ssp", c.stateShapes.pressed);
             }
-            if (kind == "input")
-                sb.Append(";ph=").Append(c.placeholder ?? "").Append(";iv=").Append(c.value ?? "");
+            // Input placeholder/value are deliberately NOT folded: both are
+            // per-instance (the exporter's instance override wins over the master
+            // capture), and FigForgeBindings.Apply stamps them on every instance at
+            // build time. Folding them made every differently-placeholdered input on
+            // a page regenerate the shared prefab mid-build (v53).
             if (c.checkShape != null)
             {
                 var cs = c.checkShape;
@@ -3282,6 +3490,12 @@ namespace FigForge
             AppendShapeSig(sb, "thm", c.thumbShape);
             sb.Append(";thr=").Append(SigF(c.thumbRollover)).Append(";thp=").Append(SigF(c.thumbPressed));
             sb.Append(";smin=").Append(c.minValue.ToString("0.###", Inv)).Append(";smax=").Append(c.maxValue.ToString("0.###", Inv)).Append(";slt=").Append(c.slots);
+            AppendShapeSig(sb, "stm", c.minusShape);
+            AppendShapeSig(sb, "stp", c.plusShape);
+            AppendShapeSig(sb, "sti", c.inputShape);
+            sb.Append(";stmr=").Append(SigF(c.minusRollover)).Append(";stmp=").Append(SigF(c.minusPressed))
+              .Append(";stpr=").Append(SigF(c.plusRollover)).Append(";stpp=").Append(SigF(c.plusPressed));
+            sb.Append(";stml=").Append(c.minusLabel ?? "").Append(";stpl=").Append(c.plusLabel ?? "");
             // Progress: trackShape/fillShape are folded above; the indeterminate flag,
             // style, and per-style geometry are baked into the generated prefab
             // (FigForgeProgress/FigForgeRing/segment children), so each must regen.

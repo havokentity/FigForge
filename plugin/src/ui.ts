@@ -178,7 +178,9 @@ $('#createBtnBtn').addEventListener('click', () => {
 });
 for (const [id, kind] of [
   ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
+  ['createSwitchBtn', 'switch'],
   ['createInputBtn', 'input'],
+  ['createStepperBtn', 'stepper'],
   ['createDropdownBtn', 'dropdown'],
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
@@ -628,7 +630,10 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-FigForge-Token': unityToken() },
+      // charset is explicit so Unity's HttpListener decodes the body as UTF-8 —
+      // without it, ContentEncoding falls back to a legacy default that mangles
+      // every non-ASCII char (e.g. "→") into '?'.
+      headers: { 'Content-Type': 'application/json;charset=utf-8', 'X-FigForge-Token': unityToken() },
       body: JSON.stringify({ project, screens: wireScreens }),
     });
     if (res.ok) setStatus(`Sent ${screens.length} screen(s) → Unity. Building in the FigForge importer.`);
