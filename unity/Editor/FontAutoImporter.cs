@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using TMPro;
 using UnityEditor;
@@ -99,6 +100,7 @@ namespace FigForge
                 if (tmp.atlasTextures != null)
                     foreach (var tex in tmp.atlasTextures) if (tex != null) AssetDatabase.AddObjectToAsset(tex, tmp);
                 ApplyFigForgeFontDefaults(tmp);
+                EnsurePopularGlyphs(tmp, log);
                 AssetDatabase.SaveAssets();
                 AssetDatabase.ImportAsset(outPath);
                 log?.Invoke($"auto-imported font '{family} {style}' → {outPath} (source: {src})");
@@ -109,6 +111,163 @@ namespace FigForge
                 Debug.LogWarning($"[FigForge] font auto-import failed for '{family} {style}': {e}");
                 log?.Invoke($"font auto-import failed for '{family} {style}': {e.Message} — using default");
                 return null;
+            }
+        }
+
+        public static void EnsurePopularGlyphs(TMP_FontAsset asset, Action<string> log)
+        {
+            EnsurePopularGlyphs(asset, log, true);
+        }
+
+        static PopularGlyphBakeResult EnsurePopularGlyphs(TMP_FontAsset asset, Action<string> log, bool logMissing)
+        {
+            var result = new PopularGlyphBakeResult();
+            if (asset == null) return result;
+
+            asset.ReadFontAssetDefinition();
+            result.AlreadyPresent = CountPresentPopularGlyphs(asset);
+            if (asset.HasCharacters(PopularGlyphs.All))
+            {
+                result.AlreadyComplete = true;
+                return result;
+            }
+
+            int beforePresent = result.AlreadyPresent;
+            int beforeAtlasPages = asset.atlasTextures != null ? asset.atlasTextures.Count(t => t != null) : 0;
+            bool enabledMultiAtlas = !asset.isMultiAtlasTexturesEnabled;
+
+            // The curated set can overflow a single default TMP atlas; dynamic assets
+            // still need extra pages to survive a project reload.
+            asset.isMultiAtlasTexturesEnabled = true;
+            asset.TryAddCharacters(PopularGlyphs.All, out _);
+            asset.ReadFontAssetDefinition();
+
+            int afterPresent = CountPresentPopularGlyphs(asset);
+            result.Added = Math.Max(0, afterPresent - beforePresent);
+            // TMP can report the full request when there were no new glyphs to add;
+            // the post-bake character table is the reliable designer-facing list.
+            result.Missing = MissingPopularGlyphs(asset);
+            result.EmbeddedAtlasPages = EmbedMissingAtlasTextures(asset);
+
+            int afterAtlasPages = asset.atlasTextures != null ? asset.atlasTextures.Count(t => t != null) : 0;
+            result.Changed = result.Added > 0 || result.EmbeddedAtlasPages > 0 || enabledMultiAtlas || afterAtlasPages != beforeAtlasPages;
+
+            if (logMissing && !string.IsNullOrEmpty(result.Missing))
+                log?.Invoke($"font '{asset.name}' is missing popular glyphs in its source font: {FormatGlyphList(result.Missing)}");
+
+            if (result.Changed)
+            {
+                ApplyFigForgeFontDefaults(asset);
+                EditorUtility.SetDirty(asset);
+                if (asset.material != null) EditorUtility.SetDirty(asset.material);
+            }
+
+            return result;
+        }
+
+        [MenuItem("Window/FigForge/Bake Popular Glyphs")]
+        static void BakePopularGlyphsMenu()
+        {
+            TextureImportHelper.EnsureFolder(FontFolder);
+
+            int touched = 0;
+            foreach (var guid in AssetDatabase.FindAssets("t:TMP_FontAsset", new[] { FontFolder }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!path.StartsWith(FontFolder + "/", StringComparison.Ordinal)) continue;
+
+                var asset = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(path);
+                if (asset == null) continue;
+
+                var result = EnsurePopularGlyphs(asset, null, false);
+                int missingCount = string.IsNullOrEmpty(result.Missing) ? 0 : result.Missing.Length;
+
+                if (result.Changed)
+                {
+                    touched++;
+                    Debug.Log($"[FigForge] Baked popular glyphs for {path}: added {result.Added}, already present {result.AlreadyPresent}, missing in source font {missingCount}{FormatMissingSuffix(result.Missing)}", asset);
+                }
+                else if (result.AlreadyComplete)
+                {
+                    Debug.Log($"[FigForge] Popular glyphs already baked for {path}: already present {result.AlreadyPresent}, missing in source font 0", asset);
+                }
+                else
+                {
+                    Debug.Log($"[FigForge] Popular glyphs unchanged for {path}: added 0, already present {result.AlreadyPresent}, missing in source font {missingCount}{FormatMissingSuffix(result.Missing)}", asset);
+                }
+            }
+
+            if (touched > 0)
+                AssetDatabase.SaveAssets();
+
+            Debug.Log($"[FigForge] Popular glyph bake complete: updated {touched} generated font asset(s) under {FontFolder}.");
+        }
+
+        struct PopularGlyphBakeResult
+        {
+            public int AlreadyPresent;
+            public int Added;
+            public string Missing;
+            public int EmbeddedAtlasPages;
+            public bool Changed;
+            public bool AlreadyComplete;
+        }
+
+        static int CountPresentPopularGlyphs(TMP_FontAsset asset)
+        {
+            int count = 0;
+            foreach (char c in PopularGlyphs.All)
+                if (asset.characterLookupTable.ContainsKey(c))
+                    count++;
+            return count;
+        }
+
+        static string MissingPopularGlyphs(TMP_FontAsset asset)
+        {
+            var builder = new StringBuilder();
+            foreach (char c in PopularGlyphs.All)
+                if (!asset.characterLookupTable.ContainsKey(c))
+                    builder.Append(c);
+            return builder.ToString();
+        }
+
+        static int EmbedMissingAtlasTextures(TMP_FontAsset asset)
+        {
+            int embedded = 0;
+            string assetPath = AssetDatabase.GetAssetPath(asset);
+            if (string.IsNullOrEmpty(assetPath) || asset.atlasTextures == null) return embedded;
+
+            foreach (var tex in asset.atlasTextures)
+            {
+                if (tex == null || AssetDatabase.GetAssetPath(tex) == assetPath) continue;
+                AssetDatabase.AddObjectToAsset(tex, asset);
+                embedded++;
+            }
+
+            return embedded;
+        }
+
+        static string FormatMissingSuffix(string missing) =>
+            string.IsNullOrEmpty(missing) ? "" : $": {FormatGlyphList(missing)}";
+
+        static string FormatGlyphList(string glyphs)
+        {
+            var parts = new List<string>();
+            foreach (char c in glyphs)
+                parts.Add($"{PrintableGlyph(c)} U+{(int)c:X4}");
+            return string.Join(", ", parts);
+        }
+
+        static string PrintableGlyph(char c)
+        {
+            switch (c)
+            {
+                case ' ':
+                    return "<space>";
+                case '\u00A0':
+                    return "<no-break space>";
+                default:
+                    return c.ToString();
             }
         }
 
