@@ -35,7 +35,11 @@ namespace FigForge
         // Set in play mode; null in the editor.
         internal static FrameManager Active { get; private set; }
 
-        protected void Awake() { Active = this; }
+        protected void Awake()
+        {
+            Active = this;
+            BindAll();
+        }
         protected void OnDestroy() { if (Active == this) Active = null; }
 
         // The active manager, or — when none is set (edit mode) — the one in the open
@@ -62,7 +66,16 @@ namespace FigForge
 
         public void Register(FigForgeFrame screen)
         {
-            if (screen != null && !screens.Contains(screen)) screens.Add(screen);
+            if (screen == null) return;
+            if (!screens.Contains(screen)) screens.Add(screen);
+            if (Application.isPlaying) screen.BindOnce();
+        }
+
+        public void BindAll()
+        {
+            for (int i = 0; i < screens.Count; i++)
+                if (screens[i] != null)
+                    screens[i].BindOnce();
         }
 
         public bool Show(string screenName) => Show(Find(screenName), screenName);
@@ -74,6 +87,7 @@ namespace FigForge
 
         bool Show(FigForgeFrame target, string label)
         {
+            BindAll();
             foreach (var s in screens)
                 if (s != null) s.SetVisible(s == target);
             if (target != null)

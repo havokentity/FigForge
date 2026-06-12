@@ -78,6 +78,7 @@ namespace FigForge
             sb.AppendLine("// Show/hide any accessor from code: FigForge controls have an `IsVisible` property;");
             sb.AppendLine("// every element (Image/TMP/RectTransform too) has SetVisible(bool)/GetVisible()");
             sb.AppendLine("// extensions (using FigForge;). Both drive GameObject.SetActive.");
+            sb.AppendLine("// Add click listeners in `public override void OnBind()` for hidden-at-start frames.");
             sb.AppendLine("using TMPro;");
             sb.AppendLine("using UnityEngine;");
             sb.AppendLine("using UnityEngine.UI;");
@@ -107,7 +108,7 @@ namespace FigForge
                     sb.AppendLine("        {");
                     sb.AppendLine("            readonly " + f.className + " _frame;");
                     sb.AppendLine("            internal " + group.groupTypeName + "(" + f.className + " frame) { _frame = frame; }");
-                    sb.AppendLine("            public RectTransform __rectTransform => _frame." + group.FieldName + ";");
+                    sb.AppendLine("            public RectTransform __rectTransform => _frame.__Get(ref _frame." + group.FieldName + ", \"" + Escape(group.Key) + "\");");
                     sb.AppendLine("            public bool IsVisible { get => __rectTransform != null && __rectTransform.gameObject.activeSelf; set => SetVisible(value); }");
                     sb.AppendLine("            public void SetVisible(bool visible) { if (__rectTransform != null && __rectTransform.gameObject.activeSelf != visible) __rectTransform.gameObject.SetActive(visible); }");
                     sb.AppendLine("            public bool GetVisible() => __rectTransform != null && __rectTransform.gameObject.activeSelf;");
@@ -138,7 +139,7 @@ namespace FigForge
 
         static string AccessExpr(string frame, FrameMember m)
         {
-            if (!m.isGroup) return frame + m.FieldName;
+            if (!m.isGroup) return frame + "__Get(ref " + frame + m.FieldName + ", \"" + Escape(m.Key) + "\")";
             var owner = string.IsNullOrEmpty(frame) ? "this" : frame.TrimEnd('.');
             return frame + m.FieldName + "Scope ?? (" + frame + m.FieldName + "Scope = new " + m.groupTypeName + "(" + owner + "))";
         }
@@ -219,6 +220,9 @@ namespace FigForge
             sb.AppendLine();
             sb.AppendLine("        // Typed + null-safe navigation: Frames.Show(Frames.Settings). (Or Frames.Settings.Show().)");
             sb.AppendLine("        public static void Show(FigForge.FigForgeFrame frame) { if (frame != null) frame.Show(); }");
+            sb.AppendLine();
+            sb.AppendLine("        // Ensure every registered frame has run OnBind(), including inactive pages.");
+            sb.AppendLine("        public static void BindAll() { FigForge.FrameManager.Resolve()?.BindAll(); }");
             sb.AppendLine();
             sb.AppendLine("        // Run an action after a delay, chainable: Frames.After(1f, A).After(2f, B).");
             sb.AppendLine("        public static DelayChain After(float seconds, System.Action action)");

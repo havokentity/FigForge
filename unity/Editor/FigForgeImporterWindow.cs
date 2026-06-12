@@ -694,18 +694,36 @@ namespace FigForge
 
         // Generate the strongly-typed accessor layer for a freshly-built frame and register
         // each member by its identifier so the post-compile hook can wire the subclass.
-        // Skipped for reused/null-context frames (their accessors already exist).
+        // Reused unchanged frames still get rewired from their FigForgeScreen registry; this
+        // repairs stale/null serialized refs without forcing a rebuild.
         void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section)
         {
-            if (page == null || m == null || ctx == null) return;
-            var model = FrameCodeGenDriver.Generate(m, section ?? "", _includeGroupsInAccessors);
+            if (page == null || m == null) return;
+            var model = ctx != null
+                ? FrameCodeGenDriver.Generate(m, section ?? "", _includeGroupsInAccessors)
+                : FrameCodeGenDriver.BuildModel(m, section ?? "", _includeGroupsInAccessors);
             if (frame != null) frame.generatedType = FrameCodeGen.GeneratedNamespace + "." + model.className;
             var reg = page.GetComponent<FigForgeScreen>();
             if (reg != null)
+            {
                 foreach (var mem in model.members)
-                    if (ctx.byElementId.TryGetValue(mem.sourceName, out var memGo) && memGo != null)
+                {
+                    GameObject memGo = null;
+                    if (ctx != null)
+                        ctx.byElementId.TryGetValue(mem.sourceName, out memGo);
+                    else
+                        memGo = reg.Get(mem.Key) ?? reg.Get(mem.sourceName);
+                    if (memGo != null)
                         reg.Register(mem.Key, memGo);
-            Log($"generated accessors for frame '{model.className}' ({model.members.Count} member(s))", MessageType.Info);
+                }
+                EditorUtility.SetDirty(reg);
+            }
+            if (frame != null && frame.GetType() != typeof(FigForgeFrame))
+            {
+                frame.__WireFrame(reg);
+                EditorUtility.SetDirty(frame);
+            }
+            Log($"{(ctx != null ? "generated" : "rewired")} accessors for frame '{model.className}' ({model.members.Count} member(s))", MessageType.Info);
             // When the generated code is unchanged, no compile follows this import and the
             // [DidReloadScripts] upgrade never fires — the rebuilt page would stay on the
             // base FigForgeFrame (Frames.X resolves null). Upgrade now; if a compile IS
