@@ -7,6 +7,7 @@ using System.IO;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace FigForge
 {
@@ -66,7 +67,7 @@ namespace FigForge
                 _dumpCount++;
                 string path = Path.Combine(dir, _seq.ToString("D3") + "_f" + Time.frameCount + "_" + Sanitize(label) + ".png");
                 WriteRtPng(rt, path);
-                File.AppendAllText(logPath, "frame=" + Time.frameCount + " seq=" + _seq + " wrote " + Path.GetFileName(path) + "\n");
+                File.AppendAllText(logPath, "frame=" + Time.frameCount + " seq=" + _seq + " queued " + Path.GetFileName(path) + "\n");
                 if (_dumpCount >= MaxDumpFiles) DisarmRebuildDump();
             };
             Debug.Log("[FigForge] rebuild dump ARMED -> " + dir);
@@ -82,17 +83,15 @@ namespace FigForge
 
         static void WriteRtPng(RenderTexture rt, string path)
         {
-            var prev = RenderTexture.active;
-            var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
-            RenderTexture.active = rt;
-            tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-            tex.Apply(false);
-            RenderTexture.active = prev;
-            var px = tex.GetPixels32();
-            for (int i = 0; i < px.Length; i++) px[i].a = 255;
-            tex.SetPixels32(px);
-            File.WriteAllBytes(path, tex.EncodeToPNG());
-            Object.DestroyImmediate(tex);
+            RequestRtPixels(rt, "debug rebuild dump", pixels =>
+            {
+                for (int i = 0; i < pixels.colors.Length; i++) pixels.colors[i].a = 255;
+                var tex = new Texture2D(pixels.width, pixels.height, TextureFormat.RGBA32, false);
+                tex.SetPixels32(pixels.colors);
+                tex.Apply(false);
+                File.WriteAllBytes(path, tex.EncodeToPNG());
+                Object.DestroyImmediate(tex);
+            });
         }
 
         // Disable the marquee/animated objects so the page stops re-marking the
@@ -294,47 +293,47 @@ namespace FigForge
 
         static void DumpRt(RenderTexture rt, string basePath, StringBuilder sb, string label)
         {
-            var prev = RenderTexture.active;
-            var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
-            RenderTexture.active = rt;
-            tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-            tex.Apply(false);
-            RenderTexture.active = prev;
-            var px = tex.GetPixels32();
-
-            bool srgb = rt.sRGB && QualitySettings.activeColorSpace == ColorSpace.Linear;
-            var view = new Color32[px.Length];
-            var unpre = new Color32[px.Length];
-            var over = new Color32[px.Length];
-            int overshoot = 0; float maxRatio = 0f; long covered = 0;
-            for (int i = 0; i < px.Length; i++)
+            sb.AppendLine(label + ": queued async GPU readback " + rt.width + "x" + rt.height);
+            RequestRtPixels(rt, label, pixels =>
             {
-                var p = px[i];
-                view[i] = new Color32(p.r, p.g, p.b, 255);
-                float a = p.a / 255f;
-                if (p.a > 0)
+                var px = pixels.colors;
+                bool srgb = pixels.srgb && QualitySettings.activeColorSpace == ColorSpace.Linear;
+                var view = new Color32[px.Length];
+                var unpre = new Color32[px.Length];
+                var over = new Color32[px.Length];
+                int overshoot = 0; float maxRatio = 0f; long covered = 0;
+                for (int i = 0; i < px.Length; i++)
                 {
-                    covered++;
-                    // decode stored bytes to linear premult, compare against alpha
-                    float lr = Lin(p.r / 255f, srgb), lg = Lin(p.g / 255f, srgb), lb = Lin(p.b / 255f, srgb);
-                    float mx = Mathf.Max(lr, Mathf.Max(lg, lb));
-                    float ratio = mx / a;
-                    if (ratio > 1.05f) { overshoot++; if (ratio > maxRatio) maxRatio = ratio; }
-                    unpre[i] = new Color32(Enc(lr / a, srgb), Enc(lg / a, srgb), Enc(lb / a, srgb), 255);
-                    over[i] = ratio > 1.05f ? new Color32(255, 0, 0, 255) : new Color32(0, 0, 0, 255);
+                    var p = px[i];
+                    view[i] = new Color32(p.r, p.g, p.b, 255);
+                    float a = p.a / 255f;
+                    if (p.a > 0)
+                    {
+                        covered++;
+                        // decode stored bytes to linear premult, compare against alpha
+                        float lr = Lin(p.r / 255f, srgb), lg = Lin(p.g / 255f, srgb), lb = Lin(p.b / 255f, srgb);
+                        float mx = Mathf.Max(lr, Mathf.Max(lg, lb));
+                        float ratio = mx / a;
+                        if (ratio > 1.05f) { overshoot++; if (ratio > maxRatio) maxRatio = ratio; }
+                        unpre[i] = new Color32(Enc(lr / a, srgb), Enc(lg / a, srgb), Enc(lb / a, srgb), 255);
+                        over[i] = ratio > 1.05f ? new Color32(255, 0, 0, 255) : new Color32(0, 0, 0, 255);
+                    }
+                    else
+                    {
+                        unpre[i] = new Color32(255, 0, 255, 255);
+                        over[i] = new Color32(0, 0, 0, 255);
+                    }
                 }
-                else
-                {
-                    unpre[i] = new Color32(255, 0, 255, 255);
-                    over[i] = new Color32(0, 0, 0, 255);
-                }
-            }
-            Write(basePath + "_premul.png", tex, view);
-            Write(basePath + "_unpre.png", tex, unpre);
-            Write(basePath + "_overshoot.png", tex, over);
-            sb.AppendLine(label + ": " + rt.width + "x" + rt.height + " covered=" + covered + "/" + px.Length
-                + " overshoot(>1.05)=" + overshoot + " maxRatio=" + maxRatio.ToString("F2"));
-            Object.DestroyImmediate(tex);
+                var tex = new Texture2D(pixels.width, pixels.height, TextureFormat.RGBA32, false);
+                Write(basePath + "_premul.png", tex, view);
+                Write(basePath + "_unpre.png", tex, unpre);
+                Write(basePath + "_overshoot.png", tex, over);
+                Object.DestroyImmediate(tex);
+
+                string stats = label + ": " + pixels.width + "x" + pixels.height + " covered=" + covered + "/" + px.Length
+                    + " overshoot(>1.05)=" + overshoot + " maxRatio=" + maxRatio.ToString("F2");
+                File.WriteAllText(basePath + "_stats.txt", stats + "\n");
+            });
         }
 
         static float Lin(float v, bool srgb) => srgb ? Mathf.GammaToLinearSpace(v) : v;
@@ -347,7 +346,58 @@ namespace FigForge
         static void Write(string path, Texture2D tex, Color32[] px)
         {
             tex.SetPixels32(px);
+            tex.Apply(false);
             File.WriteAllBytes(path, tex.EncodeToPNG());
+        }
+
+        readonly struct RtPixels
+        {
+            public readonly int width;
+            public readonly int height;
+            public readonly bool srgb;
+            public readonly Color32[] colors;
+
+            public RtPixels(int width, int height, bool srgb, Color32[] colors)
+            {
+                this.width = width;
+                this.height = height;
+                this.srgb = srgb;
+                this.colors = colors;
+            }
+        }
+
+        static void RequestRtPixels(RenderTexture rt, string label, System.Action<RtPixels> onReady)
+        {
+            if (rt == null || onReady == null) return;
+
+            var copy = RenderTexture.GetTemporary(rt.width, rt.height, 0, RenderTextureFormat.ARGB32);
+            copy.filterMode = rt.filterMode;
+            copy.wrapMode = TextureWrapMode.Clamp;
+            Graphics.Blit(rt, copy);
+
+            int width = copy.width;
+            int height = copy.height;
+            bool srgb = rt.sRGB;
+            AsyncGPUReadback.Request(copy, 0, TextureFormat.RGBA32, request =>
+            {
+                try
+                {
+                    if (request.hasError)
+                    {
+                        Debug.LogWarning("[FigForge] Async GPU readback failed for " + label);
+                        return;
+                    }
+
+                    var data = request.GetData<Color32>();
+                    var colors = new Color32[data.Length];
+                    data.CopyTo(colors);
+                    onReady(new RtPixels(width, height, srgb, colors));
+                }
+                finally
+                {
+                    RenderTexture.ReleaseTemporary(copy);
+                }
+            });
         }
     }
 }

@@ -46,6 +46,8 @@ namespace FigForge
         {
             var frames = Resources.FindObjectsOfTypeAll<FigForgeFrame>();
             bool any = false;
+            var managers = new System.Collections.Generic.HashSet<FrameManager>();
+            var roots = new System.Collections.Generic.List<GameObject>();
             foreach (var f in frames)
             {
                 if (f == null) continue;
@@ -56,16 +58,31 @@ namespace FigForge
                 var t = ResolveType(f.generatedType);
                 if (t == null || !typeof(FigForgeFrame).IsAssignableFrom(t)) continue; // not compiled yet
 
-                if (UpgradeFrame(f, t)) any = true;
+                if (UpgradeFrame(f, t, out var manager, out var upgraded))
+                {
+                    any = true;
+                    if (manager != null) managers.Add(manager);
+                    if (upgraded != null) roots.Add(upgraded.gameObject);
+                }
             }
-            if (any)
-                EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            if (!any) return;
+
+            foreach (var manager in managers)
+                if (manager != null)
+                    EditorUtility.SetDirty(manager);
+
+            int batchSize = FigForgeImporterWindow.WarmUpBatchSizePref;
+            foreach (var root in roots)
+                HierarchyBuilder.WarmUpGeneratedGraphics(root, batchSize);
+
+            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
         }
 
-        static bool UpgradeFrame(FigForgeFrame baseFrame, Type t)
+        static bool UpgradeFrame(FigForgeFrame baseFrame, Type t, out FrameManager manager, out FigForgeFrame upgraded)
         {
+            manager = null;
+            upgraded = null;
             var go = baseFrame.gameObject;
-            string screenName = baseFrame.screenName;
             bool usesShell = baseFrame.usesShell;
             string genType = baseFrame.generatedType;
             var reg = go.GetComponent<FigForgeScreen>();
@@ -78,7 +95,6 @@ namespace FigForge
             UnityEngine.Object.DestroyImmediate(baseFrame);
             if (!(go.AddComponent(t) is FigForgeFrame comp)) return false;
 
-            comp.screenName = screenName;
             comp.usesShell = usesShell;
             comp.generatedType = genType;
             comp.__WireFrame(reg);
@@ -91,6 +107,8 @@ namespace FigForge
                 EditorUtility.SetDirty(mgr);
             }
             EditorUtility.SetDirty(comp);
+            manager = mgr;
+            upgraded = comp;
             return true;
         }
 

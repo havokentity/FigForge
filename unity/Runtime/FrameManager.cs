@@ -29,6 +29,9 @@ namespace FigForge
         [Tooltip("Persistent chrome (top/nav menus). Shown only while a screen with usesShell=true is active.")]
         public GameObject shell;
 
+        [Tooltip("Editor-only import layout: number of root screens per row when pages are spread out for authoring.")]
+        public int editorColumns = 5;
+
         public FigForgeFrame Current { get; private set; }
 
         // The active manager — the generated `Frames` accessors resolve through this.
@@ -47,16 +50,52 @@ namespace FigForge
         internal static FrameManager Resolve()
             => Active != null ? Active : FindFirstObjectByType<FrameManager>();
 
-        // Resolve a registered frame by its screenName (used by generated accessors).
-        public FigForgeFrame Find(string screenName)
+        // Resolve a registered frame by GameObject name. Matching also accepts the
+        // sanitized Figma key used by generated accessors and prototype navigation.
+        public FigForgeFrame Find(string frameName)
         {
             for (int i = 0; i < screens.Count; i++)
-                if (screens[i] != null && screens[i].screenName == screenName) return screens[i];
+            {
+                var screen = screens[i];
+                if (screen == null) continue;
+                if (Matches(screen.ScreenKey, frameName)) return screen;
+            }
             return null;
         }
 
+        static bool Matches(string candidate, string requested)
+        {
+            if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(requested)) return false;
+            return candidate == requested || SanitizeKey(candidate) == requested || candidate == SanitizeKey(requested);
+        }
+
+        static string SanitizeKey(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return "";
+            var chars = new char[raw.Length];
+            int count = 0;
+            bool lastUnderscore = true;
+            for (int i = 0; i < raw.Length; i++)
+            {
+                char c = char.ToLowerInvariant(raw[i]);
+                bool keep = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+                if (keep)
+                {
+                    chars[count++] = c;
+                    lastUnderscore = false;
+                }
+                else if (!lastUnderscore)
+                {
+                    chars[count++] = '_';
+                    lastUnderscore = true;
+                }
+            }
+            if (count > 0 && chars[count - 1] == '_') count--;
+            return count > 0 ? new string(chars, 0, count) : "node";
+        }
+
         // Static convenience: the named frame on the Active manager (null if none).
-        public static FigForgeFrame Frame(string screenName) => Active != null ? Active.Find(screenName) : null;
+        public static FigForgeFrame Frame(string frameName) => Active != null ? Active.Find(frameName) : null;
 
         void Start()
         {
@@ -78,12 +117,12 @@ namespace FigForge
                     screens[i].BindOnce();
         }
 
-        public bool Show(string screenName) => Show(Find(screenName), screenName);
+        public bool Show(string frameName) => Show(Find(frameName), frameName);
 
         // Show a registered frame directly (reference equality, no name lookup).
         public bool Show(FigForgeFrame frame)
             => Show(frame != null && screens.Contains(frame) ? frame : null,
-                    frame != null ? frame.screenName : "<none>");
+                    frame != null ? frame.ScreenKey : "<none>");
 
         bool Show(FigForgeFrame target, string label)
         {

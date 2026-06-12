@@ -1455,6 +1455,13 @@ namespace FigForge
             NormalizeLists();
             RefreshRecipe();
             ReleaseCachedSurface();
+            if (FigForgePageCompositor.SuppressAutoCreate)
+            {
+                base.OnValidate();
+                SetVerticesDirty();
+                SetMaterialDirty();
+                return;
+            }
             // UpdatePageCompositorRegistration can AddComponent (FindOrCreatePageCompositor),
             // which Unity disallows inside OnValidate ("SendMessage cannot be called during
             // OnValidate") — defer it to the next editor tick, guarding against the

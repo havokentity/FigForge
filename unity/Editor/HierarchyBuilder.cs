@@ -30,6 +30,7 @@ namespace FigForge
         public Func<string, string, TMP_FontAsset> resolveFont;
         public CanonicalLibrary canonical;
         public bool disableRaycasts = true;
+        public int warmUpBatchSize = 256;
         public Action<string> log = _ => { };
         // name → GameObject collected during a build, applied to the page's FigForgeScreen.
         public readonly List<KeyValuePair<string, GameObject>> registered = new List<KeyValuePair<string, GameObject>>();
@@ -86,7 +87,7 @@ namespace FigForge
                 foreach (var kv in ctx.registered) reg.Register(kv.Key, kv.Value);
             }
             ConfigurePageCompositor(pageRoot, ctx);
-            WarmUpGeneratedGraphics(pageRoot);
+            WarmUpGeneratedGraphics(pageRoot, ctx.warmUpBatchSize);
             return pageRoot;
         }
 
@@ -160,55 +161,62 @@ namespace FigForge
             return string.Join("/", parts.ToArray());
         }
 
-        // Warm the generated SDF graphics so the SceneView shows them crisp right after
-        // import. Done ASYNC: a big page would stall the editor if we built every
-        // gradient texture + dirtied every mesh + forced a canvas rebuild in one tick.
-        // The SDF shaders are SINGLE-VARIANT, so we compile each shader ONCE (not per
-        // rect), then spread the per-rect texture/dirty work across editor frames.
-        const int WarmUpBatchPerTick = 64;
-
-        static void WarmUpGeneratedGraphics(GameObject pageRoot)
+        // Warm the generated SDF graphics during editor import so the SceneView does
+        // not spend the next several seconds rebuilding visible chunks of the page.
+        // Batches still run inside the import call; the size only controls how often
+        // Unity gets a canvas flush while building cached textures/meshes.
+        internal static void WarmUpGeneratedGraphics(GameObject pageRoot, int batchSize)
         {
             if (pageRoot == null) return;
 
-            EditorApplication.delayCall += () =>
+            var rects = pageRoot.GetComponentsInChildren<FigForgeRoundedRect>(true);
+            var layered = pageRoot.GetComponentsInChildren<FigForgeLayeredRect>(true);
+
+            var all = new List<Graphic>(rects.Length + layered.Length);
+            for (int i = 0; i < rects.Length; i++) if (rects[i] != null) all.Add(rects[i]);
+            for (int i = 0; i < layered.Length; i++) if (layered[i] != null) all.Add(layered[i]);
+            if (all.Count == 0) return;
+
+            WarmShaderOnce(rects.Length > 0 ? rects[0] : null);
+            WarmShaderOnce(layered.Length > 0 ? layered[0] : null);
+
+            batchSize = Mathf.Max(1, batchSize);
+            var tmpTexts = pageRoot.GetComponentsInChildren<TMP_Text>(true);
+            for (int i = 0; i < tmpTexts.Length; i++)
             {
-                if (pageRoot == null) return;
-                var rects = pageRoot.GetComponentsInChildren<FigForgeRoundedRect>(true);
-                var layered = pageRoot.GetComponentsInChildren<FigForgeLayeredRect>(true);
+                if (tmpTexts[i] == null) continue;
+                tmpTexts[i].ForceMeshUpdate(true, true);
+            }
 
-                var all = new List<Graphic>(rects.Length + layered.Length);
-                for (int i = 0; i < rects.Length; i++) if (rects[i] != null) all.Add(rects[i]);
-                for (int i = 0; i < layered.Length; i++) if (layered[i] != null) all.Add(layered[i]);
-                if (all.Count == 0) return;
+            Canvas.ForceUpdateCanvases();
 
-                // One-time shader compile per shader (single variant → first SetPass compiles,
-                // the rest were redundant). Warming the first instance of each type is enough.
-                WarmShaderOnce(rects.Length > 0 ? rects[0] : null);
-                WarmShaderOnce(layered.Length > 0 ? layered[0] : null);
-
-                // Build gradient textures (deduped/cached) + dirty meshes in small batches,
-                // re-scheduling onto the next editor tick — Unity's per-tick canvas update
-                // then rebuilds each batch, so the cost is amortized instead of one stall.
-                int idx = 0;
-                void Step()
-                {
-                    if (pageRoot == null) return;
-                    int end = Mathf.Min(idx + WarmUpBatchPerTick, all.Count);
-                    for (; idx < end; idx++)
-                    {
-                        var g = all[idx];
-                        if (g == null) continue;
-                        _ = g.mainTexture; // builds/caches the gradient texture (deduped)
-                        g.SetVerticesDirty();
-                        g.SetMaterialDirty();
-                    }
-                    if (idx < all.Count) { EditorApplication.delayCall += Step; return; }
+            var sources = pageRoot.GetComponentsInChildren<IFigForgeCompositorSource>(true);
+            int warmedSources = 0;
+            for (int i = 0; i < sources.Length; i++)
+            {
+                var source = sources[i];
+                if (source == null || !source.isActiveAndEnabled) continue;
+                _ = source.GetCompositorSurface();
+                warmedSources++;
+                if (warmedSources % batchSize == 0)
                     Canvas.ForceUpdateCanvases();
-                    SceneView.RepaintAll();
-                }
-                Step();
-            };
+            }
+
+            for (int i = 0; i < all.Count; i++)
+            {
+                var g = all[i];
+                if (g == null) continue;
+                _ = g.mainTexture; // builds/caches the gradient texture (deduped)
+                g.SetVerticesDirty();
+                g.SetMaterialDirty();
+
+                if ((i + 1) % batchSize == 0)
+                    Canvas.ForceUpdateCanvases();
+            }
+
+            Canvas.ForceUpdateCanvases();
+            Canvas.ForceUpdateCanvases();
+            SceneView.RepaintAll();
         }
 
         static void WarmShaderOnce(Graphic g)
@@ -341,6 +349,11 @@ namespace FigForge
 
             var go = NewRect(ObjectName(e, e.type), parent);
             if (!string.IsNullOrEmpty(e.id)) ctx.byElementId[e.id] = go;
+            if (IsStructuralContainer(e))
+            {
+                var frameElement = go.GetComponent<FigForgeFrameElement>() ?? go.AddComponent<FigForgeFrameElement>();
+                frameElement.ConfigureType(e.type);
+            }
             var rt = go.GetComponent<RectTransform>();
             ApplyTransform(rt, e, ctx);
 
@@ -371,6 +384,9 @@ namespace FigForge
         }
 
         // -----------------------------------------------------------------------
+        static bool IsStructuralContainer(ElementData e)
+            => e != null && (e.type == "FRAME" || e.type == "GROUP");
+
         static void ApplyTransform(RectTransform rt, ElementData e, BuildContext ctx)
         {
             float sf = ctx.scaleFactor;

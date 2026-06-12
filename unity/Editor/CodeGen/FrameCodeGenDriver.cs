@@ -64,19 +64,23 @@ namespace FigForge
             var members = new List<FrameMember>(picked.Count);
             for (int i = 0; i < picked.Count; i++)
             {
-                string scopeParentId = includeGroups ? NearestGroupAncestorId(picked[i], index) : null;
+                string scopeParentId = includeGroups ? NearestGroupAncestorId(picked[i], index, rootId) : null;
+                bool isScope = includeGroups && IsScopeContainer(picked[i]);
                 members.Add(new FrameMember
                 {
                     identifier = ids[i],
-                    csharpType = FrameCodeGen.CSharpType(picked[i]),
+                    csharpType = isScope
+                        ? "FigForge.FigForgeFrameElement"
+                        : FrameCodeGen.CSharpType(picked[i]),
                     sourceName = picked[i].id, // element id — stable handle for prefab wiring
+                    sourceType = picked[i].type,
                     parentId = picked[i].parentId,
                     scopeParentId = scopeParentId,
                     exposeOnFrame = string.IsNullOrEmpty(scopeParentId),
-                    isGroup = picked[i].type == "GROUP",
+                    isGroup = isScope,
                 });
             }
-            AssignGroupTypeNames(members);
+            AssignScopeTypeNames(members);
 
             return new FrameModel
             {
@@ -89,17 +93,22 @@ namespace FigForge
         }
 
         // Which elements get a typed accessor: canonical controls + text + image/graphics.
-        // Groups can also be surfaced as generated child scopes when the importer option is on.
+        // Structural Figma containers can also be surfaced as generated child scopes
+        // when the importer option is on. Treat FRAME like GROUP here: a nested
+        // frame with an image fill is still a scope, not just an Image leaf.
         static bool IsMember(ElementData e, bool includeGroups)
         {
             if (e.canonical != null && !string.IsNullOrEmpty(e.canonical.kind)) return true;
             if (e.type == "TEXT") return true;
             if (e.components != null && (e.components.Contains("TextMeshProUGUI") || e.components.Contains("Image"))) return true;
-            if (includeGroups && e.type == "GROUP") return true;
+            if (includeGroups && IsScopeContainer(e)) return true;
             return false;
         }
 
-        static void AssignGroupTypeNames(List<FrameMember> members)
+        static bool IsScopeContainer(ElementData e)
+            => e != null && (e.type == "GROUP" || e.type == "FRAME");
+
+        static void AssignScopeTypeNames(List<FrameMember> members)
         {
             var taken = new HashSet<string>();
             foreach (var member in members)
@@ -111,7 +120,8 @@ namespace FigForge
                 if (!m.isGroup) continue;
 
                 string stem = (m.identifier ?? "").TrimStart('@');
-                string baseName = IdentifierUtil.ToIdentifier(stem + "Group").TrimStart('@');
+                string typeSuffix = m.sourceType == "FRAME" ? "Frame" : "Group";
+                string baseName = IdentifierUtil.ToIdentifier(stem + typeSuffix).TrimStart('@');
                 string typeName = baseName;
                 int suffix = 2;
                 while (!taken.Add(typeName))
@@ -122,14 +132,14 @@ namespace FigForge
             }
         }
 
-        static string NearestGroupAncestorId(ElementData e, Dictionary<string, ElementData> index)
+        static string NearestGroupAncestorId(ElementData e, Dictionary<string, ElementData> index, string rootId)
         {
             string parentId = e != null ? e.parentId : null;
             var seen = new HashSet<string>();
             while (!string.IsNullOrEmpty(parentId) && seen.Add(parentId))
             {
                 if (!index.TryGetValue(parentId, out var parent) || parent == null) return null;
-                if (parent.type == "GROUP") return parent.id;
+                if (parent.id != rootId && IsScopeContainer(parent)) return parent.id;
                 parentId = parent.parentId;
             }
             return null;
@@ -138,23 +148,26 @@ namespace FigForge
         public static void WriteFiles(FrameModel f)
         {
             Directory.CreateDirectory(FramesDir);
-            WriteIfChanged(GenRoot + "/FigForge.Generated.asmdef", FrameCodeGen.EmitAsmdef());
+            bool changed = false;
+            changed |= WriteIfChanged(GenRoot + "/FigForge.Generated.asmdef", FrameCodeGen.EmitAsmdef());
 
             string frameCs = FramesDir + "/" + f.className + ".g.cs";
-            WriteIfChanged(frameCs, FrameCodeGen.EmitFrameClass(f));
-            WriteIfChanged(frameCs + ".meta", FrameCodeGen.EmitScriptMeta(f.scriptGuid));
+            changed |= WriteIfChanged(frameCs, FrameCodeGen.EmitFrameClass(f));
+            changed |= WriteIfChanged(frameCs + ".meta", FrameCodeGen.EmitScriptMeta(f.scriptGuid));
 
-            WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f));
-            WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
+            changed |= WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f));
+            changed |= WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
 
             // Compile on the next tick — never mid-import (a domain reload would abort it).
-            EditorApplication.delayCall += () => AssetDatabase.Refresh();
+            if (changed)
+                EditorApplication.delayCall += () => AssetDatabase.Refresh();
         }
 
-        static void WriteIfChanged(string path, string content)
+        static bool WriteIfChanged(string path, string content)
         {
-            if (File.Exists(path) && File.ReadAllText(path) == content) return;
+            if (File.Exists(path) && File.ReadAllText(path) == content) return false;
             File.WriteAllText(path, content);
+            return true;
         }
     }
 }

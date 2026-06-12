@@ -142,6 +142,7 @@ namespace FigForge
         void OnValidate()
         {
             appearanceOpacity = Mathf.Clamp01(appearanceOpacity);
+            if (FigForgePageCompositor.SuppressAutoCreate) return;
             // Reconfigure can AddComponent (FindOrCreatePageCompositor), which Unity
             // disallows inside OnValidate ("SendMessage cannot be called during
             // OnValidate") — defer it to the next editor tick, guarding against the

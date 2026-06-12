@@ -25,7 +25,8 @@ namespace FigForge
         public string identifier;  // case-preserved C# identifier, e.g. "button_default"
         public string csharpType;  // fully-qualified, e.g. "FigForge.FigForgeButton"
         public string sourceName;  // manifest element id used to wire the generated field
-        public string parentId;    // manifest parent id, used for generated group scopes
+        public string sourceType;  // manifest element type, e.g. GROUP or FRAME
+        public string parentId;    // manifest parent id, used for generated container scopes
         public string scopeParentId;
         public bool exposeOnFrame;
         public bool isGroup;
@@ -41,7 +42,7 @@ namespace FigForge
     internal struct FrameModel
     {
         public string className;   // case-preserved, e.g. "LaunchPage"
-        public string screenKey;   // runtime FigForgeFrame.screenName (the Find() key)
+        public string screenKey;   // runtime FrameManager.Find key (object name or sanitized object name)
         public string section;     // enclosing section identifier, "" if none
         public string scriptGuid;  // deterministic 32-hex GUID for the generated .cs
         public List<FrameMember> members;
@@ -108,10 +109,13 @@ namespace FigForge
                     sb.AppendLine("        {");
                     sb.AppendLine("            readonly " + f.className + " _frame;");
                     sb.AppendLine("            internal " + group.groupTypeName + "(" + f.className + " frame) { _frame = frame; }");
-                    sb.AppendLine("            public RectTransform __rectTransform => _frame.__Get(ref _frame." + group.FieldName + ", \"" + Escape(group.Key) + "\");");
-                    sb.AppendLine("            public bool IsVisible { get => __rectTransform != null && __rectTransform.gameObject.activeSelf; set => SetVisible(value); }");
-                    sb.AppendLine("            public void SetVisible(bool visible) { if (__rectTransform != null && __rectTransform.gameObject.activeSelf != visible) __rectTransform.gameObject.SetActive(visible); }");
-                    sb.AppendLine("            public bool GetVisible() => __rectTransform != null && __rectTransform.gameObject.activeSelf;");
+                    sb.AppendLine("            public FigForge.FigForgeFrameElement Element => _frame.__Get(ref _frame." + group.FieldName + ", \"" + Escape(group.Key) + "\");");
+                    sb.AppendLine("            public RectTransform __rectTransform => Element != null ? Element.RectTransform : null;");
+                    sb.AppendLine("            public RectTransform RectTransform => __rectTransform;");
+                    sb.AppendLine("            public GameObject GameObject => Element != null ? Element.GameObject : null;");
+                    sb.AppendLine("            public bool IsVisible { get => Element != null && Element.IsVisible; set => SetVisible(value); }");
+                    sb.AppendLine("            public void SetVisible(bool visible) { if (Element != null) Element.SetVisible(visible); }");
+                    sb.AppendLine("            public bool GetVisible() => Element != null && Element.GetVisible();");
                     foreach (var child in f.members)
                     {
                         if (child.scopeParentId != group.sourceName) continue;

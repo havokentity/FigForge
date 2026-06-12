@@ -32,6 +32,7 @@
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 
 namespace FigForge
@@ -827,23 +828,36 @@ namespace FigForge
                 return;
             }
 
-            var prev = RenderTexture.active;
-            var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
-            RenderTexture.active = rt;
-            tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-            tex.Apply(false);
-            RenderTexture.active = prev;
-            RenderTexture.ReleaseTemporary(rt);
-
-            var px = tex.GetPixels32();
-            for (int i = 0; i < px.Length; i++) px[i].a = 255;
-            tex.SetPixels32(px);
-
             string path = System.IO.Path.GetFullPath(
                 System.IO.Path.Combine(Application.dataPath, "..", "FigForgePageCapture.png"));
-            System.IO.File.WriteAllBytes(path, tex.EncodeToPNG());
-            DestroyImmediate(tex);
-            Debug.Log("[FigForge] Page capture saved (" + culled.Count + " Tier-2 source(s) hidden): " + path, this);
+            int hiddenCount = culled.Count;
+            AsyncGPUReadback.Request(rt, 0, TextureFormat.RGBA32, request =>
+            {
+                try
+                {
+                    if (request.hasError)
+                    {
+                        Debug.LogWarning("[FigForge] Async GPU readback failed for page capture.", this);
+                        return;
+                    }
+
+                    var data = request.GetData<Color32>();
+                    var px = new Color32[data.Length];
+                    data.CopyTo(px);
+                    for (int i = 0; i < px.Length; i++) px[i].a = 255;
+
+                    var tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
+                    tex.SetPixels32(px);
+                    tex.Apply(false);
+                    System.IO.File.WriteAllBytes(path, tex.EncodeToPNG());
+                    DestroyImmediate(tex);
+                    Debug.Log("[FigForge] Page capture saved (" + hiddenCount + " Tier-2 source(s) hidden): " + path, this);
+                }
+                finally
+                {
+                    RenderTexture.ReleaseTemporary(rt);
+                }
+            });
         }
 #endif
     }

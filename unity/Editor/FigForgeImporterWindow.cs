@@ -18,6 +18,17 @@ namespace FigForge
 {
     public class FigForgeImporterWindow : EditorWindow
     {
+        internal const int DefaultWarmUpBatchSize = 256;
+        const int DefaultEditorColumns = 5;
+        const string PrefWarmUpBatchSize = "FigForge.ImportWarmUpBatchSize";
+        const string PrefEditorColumns = "FigForge.EditorColumns";
+        internal static int WarmUpBatchSizePref
+            => Mathf.Clamp(EditorPrefs.GetInt(PrefWarmUpBatchSize, DefaultWarmUpBatchSize), 1, 8192);
+        internal static int EditorColumnsPref
+            => Mathf.Clamp(EditorPrefs.GetInt(PrefEditorColumns, DefaultEditorColumns), 1, 50);
+        internal static void SetEditorColumnsPref(int columns)
+            => EditorPrefs.SetInt(PrefEditorColumns, Mathf.Clamp(columns, 1, 50));
+
         // ---- discovered manifests ----
         List<string> _manifestPaths = new List<string>();
         int _selected = 0;
@@ -42,6 +53,8 @@ namespace FigForge
         bool _connectedScene = true;       // build under a shared FrameManager
         bool _disableRaycasts = true;
         bool _includeGroupsInAccessors = true;
+        int _warmUpBatchSize = DefaultWarmUpBatchSize;
+        int _editorColumns = DefaultEditorColumns;
         string _spriteFolder = "Assets/FigForge/Sprites";
         string _prefabFolder = "Assets/FigForge/Prefabs";
 
@@ -92,6 +105,8 @@ namespace FigForge
 
         void OnEnable()
         {
+            _warmUpBatchSize = WarmUpBatchSizePref;
+            _editorColumns = EditorColumnsPref;
             RefreshManifests();
             RefreshFonts();
         }
@@ -372,7 +387,13 @@ namespace FigForge
                     if (_scalePreset == ScalePreset.Custom)
                         _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
                     _disableRaycasts = EditorGUILayout.ToggleLeft("Disable raycast targets on non-interactive graphics", _disableRaycasts);
-                    _includeGroupsInAccessors = EditorGUILayout.ToggleLeft("Generate C# accessors for Figma groups", _includeGroupsInAccessors);
+                    _includeGroupsInAccessors = EditorGUILayout.ToggleLeft("Generate C# accessors for Figma groups/frames", _includeGroupsInAccessors);
+                    int warmUpBatchSize = Mathf.Clamp(EditorGUILayout.DelayedIntField("Import warmup batch size", _warmUpBatchSize), 1, 8192);
+                    if (warmUpBatchSize != _warmUpBatchSize)
+                    {
+                        _warmUpBatchSize = warmUpBatchSize;
+                        EditorPrefs.SetInt(PrefWarmUpBatchSize, _warmUpBatchSize);
+                    }
                     if (_output != OutputMode.Scene)
                         _prefabFolder = EditorGUILayout.TextField("Prefab folder", _prefabFolder);
                 }
@@ -474,6 +495,7 @@ namespace FigForge
         {
             _log.Clear();
             FontAutoImporter.ClearCache();
+            _editorColumns = EditorColumnsPref;
             if (_manifest?.screen == null) { Log("manifest has no screen", MessageType.Error); return; }
             ApplyManifestSettings(_manifest);
             if (_backend == UIBackend.UIToolkit) { BuildUITK(); return; }
@@ -495,6 +517,7 @@ namespace FigForge
                 if (_connectedScene)
                 {
                     mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
+                    mgr.editorColumns = _editorColumns;
                 }
 
                 float refH = ReferenceHeight(_manifest.screen.figmaSize.h);
@@ -507,6 +530,7 @@ namespace FigForge
                     sprites = sprites,
                     canonical = _canonicalLibrary,
                     disableRaycasts = _disableRaycasts,
+                    warmUpBatchSize = _warmUpBatchSize,
                     resolveFont = ResolveFontAsset,
                     log = m => Log(m, MessageType.Warning),
                 };
@@ -515,13 +539,18 @@ namespace FigForge
                 if (page == null) { Log("build produced no page", MessageType.Error); return; }
 
                 var screen = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
-                screen.screenName = _manifest.screen.name;
-                if (mgr != null) { mgr.Register(screen); Log($"registered page '{screen.screenName}' on FrameManager", MessageType.Info); }
+                if (mgr != null)
+                {
+                    mgr.Register(screen);
+                    Log($"registered page '{screen.ScreenKey}' on FrameManager", MessageType.Info);
+                }
 
                 // Generate + wire the strongly-typed accessor layer (Frames.<Frame> + the
                 // FigForgeFrame subclass). Compile is deferred a tick (a mid-import reload would
                 // abort the build); the post-compile hook swaps in the subclass + wires its refs.
                 GenerateAndWireFrame(page, _manifest, ctx, screen, "");
+                if (mgr != null)
+                    FigForgeFrameSceneTools.ArrangeRootFrames(canvas.GetComponent<FigForgeCanvasHelper>(), false);
 
                 if (_output != OutputMode.Scene) SavePrefab(page);
                 if (_output == OutputMode.Prefab) DestroyImmediate(page);
@@ -535,6 +564,7 @@ namespace FigForge
                     Undo.RegisterCreatedObjectUndo(page, "FigForge Build");
                 Undo.SetCurrentGroupName("FigForge Build");
                 EditorUtility.SetDirty(canvas);
+                if (mgr != null) EditorUtility.SetDirty(mgr);
                 if (_output != OutputMode.Prefab)
                     UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
                         UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
@@ -563,6 +593,7 @@ namespace FigForge
             return new BuildContext
             {
                 scaleFactor = sf, sprites = sprites, canonical = _canonicalLibrary, disableRaycasts = _disableRaycasts,
+                warmUpBatchSize = _warmUpBatchSize,
                 exportScale = m.screen != null ? m.screen.exportScale : 1f,
                 resolveFont = ResolveFontAsset,
                 log = mm => Log(mm, MessageType.Warning),
@@ -699,9 +730,7 @@ namespace FigForge
         void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section)
         {
             if (page == null || m == null) return;
-            var model = ctx != null
-                ? FrameCodeGenDriver.Generate(m, section ?? "", _includeGroupsInAccessors)
-                : FrameCodeGenDriver.BuildModel(m, section ?? "", _includeGroupsInAccessors);
+            var model = FrameCodeGenDriver.Generate(m, section ?? "", _includeGroupsInAccessors);
             if (frame != null) frame.generatedType = FrameCodeGen.GeneratedNamespace + "." + model.className;
             var reg = page.GetComponent<FigForgeScreen>();
             if (reg != null)
@@ -714,7 +743,15 @@ namespace FigForge
                     else
                         memGo = reg.Get(mem.Key) ?? reg.Get(mem.sourceName);
                     if (memGo != null)
+                    {
+                        if (mem.isGroup)
+                        {
+                            var frameElement = memGo.GetComponent<FigForgeFrameElement>() ?? memGo.AddComponent<FigForgeFrameElement>();
+                            frameElement.ConfigureType(mem.sourceType);
+                            EditorUtility.SetDirty(frameElement);
+                        }
                         reg.Register(mem.Key, memGo);
+                    }
                 }
                 EditorUtility.SetDirty(reg);
             }
@@ -723,7 +760,7 @@ namespace FigForge
                 frame.__WireFrame(reg);
                 EditorUtility.SetDirty(frame);
             }
-            Log($"{(ctx != null ? "generated" : "rewired")} accessors for frame '{model.className}' ({model.members.Count} member(s))", MessageType.Info);
+            Log($"{(ctx != null ? "generated" : "refreshed")} accessors for frame '{model.className}' ({model.members.Count} member(s))", MessageType.Info);
             // When the generated code is unchanged, no compile follows this import and the
             // [DidReloadScripts] upgrade never fires — the rebuilt page would stay on the
             // base FigForgeFrame (Frames.X resolves null). Upgrade now; if a compile IS
@@ -739,10 +776,9 @@ namespace FigForge
             rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
         }
 
-        // Lay a root frame out side-by-side (top-left anchored) for design visibility, so
-        // the frames don't overlap in the editor. Authoring-only: at runtime
-        // FrameManager.Show snaps the active frame to fill the canvas.
-        void SpreadFrame(GameObject page, int index, Manifest m)
+        // Lay a root frame out in an authoring grid (top-left anchored) so the frames
+        // don't overlap in the editor. Runtime FrameManager.Show still fills one frame.
+        void SpreadFrame(GameObject page, int index, Manifest m, int columns)
         {
             var rt = page.GetComponent<RectTransform>();
             if (rt == null) return;
@@ -756,16 +792,38 @@ namespace FigForge
             float w = fw * sf;
             float h = fh * sf;
             const float gap = 80f;
+            columns = Mathf.Max(1, columns);
+            int col = index % columns;
+            int row = index / columns;
             rt.anchorMin = rt.anchorMax = new Vector2(0f, 1f); // canvas top-left
             rt.pivot = new Vector2(0f, 1f);
             rt.sizeDelta = new Vector2(w, h);
-            rt.anchoredPosition = new Vector2(index * (w + gap), 0f);
+            rt.anchoredPosition = new Vector2(col * (w + gap), -row * (h + gap));
+            EditorUtility.SetDirty(rt);
+            EditorUtility.SetDirty(page);
+        }
+
+        void WarmUpImportedFrames(FrameManager mgr)
+        {
+            if (mgr == null) return;
+            var warmed = new HashSet<GameObject>();
+            for (int i = 0; i < mgr.screens.Count; i++)
+            {
+                var frame = mgr.screens[i];
+                if (frame == null || !warmed.Add(frame.gameObject)) continue;
+                HierarchyBuilder.WarmUpGeneratedGraphics(frame.gameObject, _warmUpBatchSize);
+            }
+            if (mgr.shell != null && warmed.Add(mgr.shell))
+                HierarchyBuilder.WarmUpGeneratedGraphics(mgr.shell, _warmUpBatchSize);
+            Canvas.ForceUpdateCanvases();
+            SceneView.RepaintAll();
         }
 
         void BuildPageProject(string projectPath)
         {
             _log.Clear();
             FontAutoImporter.ClearCache();
+            _editorColumns = EditorColumnsPref;
             var proj = ManifestParser.LoadProject(projectPath);
             if (proj == null || proj.screens.Count == 0) { Log("project.json is empty or invalid", MessageType.Error); return; }
             var baseDir = Path.GetDirectoryName(projectPath).Replace('\\', '/');
@@ -794,6 +852,7 @@ namespace FigForge
 
                 var canvas = ResolveCanvas(out bool canvasCreated);
                 var mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
+                mgr.editorColumns = _editorColumns;
                 mgr.screens.Clear();
                 mgr.shell = null;
                 RemoveStaleImported(canvas.transform, proj.name, new HashSet<string>(loaded.Select(s => s.importKey)));
@@ -830,21 +889,22 @@ namespace FigForge
                     var page = ReuseOrBuildScreen(loaded[i], proj.name, parent, sprites, usesShell, out var frameCtx);
                     if (page == null) continue;
                     var bs = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
-                    bs.screenName = m.screen.name;
                     bs.usesShell = usesShell;
                     GenerateAndWireFrame(page, m, frameCtx, bs, loaded[i].ps.section);
                     mgr.Register(bs);
-                    if (!usesShell) SpreadFrame(page, built, m); // side-by-side design layout (runtime Show fills)
+                    if (!usesShell) SpreadFrame(page, built, m, mgr.editorColumns); // editor design grid (runtime Show fills)
                     built++;
                 }
 
-                var init = mgr.screens.Find(s => s != null && s.screenName == proj.initial);
-                mgr.initialScreen = init;
+                mgr.initialScreen = mgr.Find(proj.initial);
                 if (canvas.GetComponent<FigForgeNavBinder>() == null) canvas.gameObject.AddComponent<FigForgeNavBinder>();
 
-                // Editor convenience: show only the initial screen + the shell if it uses one.
-                foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(s == init);
-                if (mgr.shell != null) mgr.shell.SetActive(init != null && init.usesShell);
+                // Editor convenience: keep every imported frame visible/editable.
+                // Runtime Start() still switches to one active frame via Show().
+                foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(true);
+                if (mgr.shell != null) mgr.shell.SetActive(true);
+                FigForgeFrameSceneTools.ArrangeRootFrames(canvas.GetComponent<FigForgeCanvasHelper>(), false);
+                WarmUpImportedFrames(mgr);
 
                 // Only a canvas THIS import created gets creation-undo (a reused one
                 // must survive Ctrl+Z); freshly-built screens are registered in
@@ -853,6 +913,7 @@ namespace FigForge
                     Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build Page");
                 Undo.SetCurrentGroupName("FigForge Build Page");
                 EditorUtility.SetDirty(canvas);
+                EditorUtility.SetDirty(mgr);
                 UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
                     UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
                 Log($"built page '{proj.name}' — {built} screen(s){(mgr.shell != null ? " + shell" : "")}, initial '{proj.initial}' ✓", MessageType.Info);
@@ -1041,7 +1102,16 @@ namespace FigForge
             // by the blend compositor, and in the Scene view it renders at screen-pixel scale
             // (content shrinks into a corner) — Camera mode is consistent in edit + play.
             ConfigureCanvasForCamera(canvas);
+            EnsureCanvasHelper(canvas);
             return canvas;
+        }
+
+        static void EnsureCanvasHelper(Canvas canvas)
+        {
+            if (canvas == null) return;
+            if (canvas.GetComponent<FigForgeCanvasHelper>() != null) return;
+            canvas.gameObject.AddComponent<FigForgeCanvasHelper>();
+            EditorUtility.SetDirty(canvas.gameObject);
         }
 
         Canvas ResolveCanvasObject(out bool created)
