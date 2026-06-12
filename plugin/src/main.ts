@@ -250,7 +250,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
           (msg as { tableOpts?: Partial<TableOptions> }).tableOpts,
           (msg as { progressOpts?: Partial<ProgressOptions> }).progressOpts);
         const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
-        figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group radios under one frame).` });
+        figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group related radios together).` });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create failed: ' + String((e as Error)?.message || e) });
       }
@@ -697,7 +697,7 @@ async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
 
 // Toggle / Radio: a Background box (UGUI Toggle.targetGraphic) + a Checkmark shown
 // when on (Toggle.graphic) + HitArea + Label. Radio is circular and grouped in Unity
-// by its parent frame. Off by default.
+// by its parent frame/group. Off by default.
 async function createToggleLike(kind: CanonicalKind, ref: string, circular: boolean): Promise<ComponentNode> {
   let comp = findMaster(ref);
   if (!comp) {

@@ -28,6 +28,13 @@ Examples:
 | `Sw_AirplaneMode_Switch` | switch | AirplaneMode | Switch |
 | `Step_Quantity_Stepper` | stepper | Quantity | Stepper |
 
+## Radio groups
+
+Radio buttons are mutually exclusive inside a group. To make a radio set, select
+the related radio instances in Figma and group them with `Cmd+G` / `Ctrl+G`, or
+place them under the same frame. FigForge groups radios that share the same
+Unity parent.
+
 The plugin records `canonical: { kind, ref, instanceName, label }` on the element
 (the `label` is the first text found inside the layer, else the instance name)
 and lists distinct refs in `manifest.canonicalRefs`.

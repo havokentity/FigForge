@@ -35,7 +35,7 @@ auto-reconnects, so the dot goes green as soon as the bridge server is up.
 | Figma | Unity |
 |------|------|
 | Frame / Group / Component with a fill or stroke | `Image` (sprite or procedural fill) |
-| Pure container (no fill/stroke) | structural `RectTransform` only |
+| Pure container (no fill/stroke) | structural `FigForgeFrameElement` + `RectTransform` |
 | Vector / shape / icon group | rasterized PNG → `Image` |
 | Text | `TextMeshProUGUI` (or PNG if forced) |
 | `Btn_<instance>_<ref>` | canonical prefab instance |
