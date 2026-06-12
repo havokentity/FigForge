@@ -27,14 +27,14 @@ namespace FigForge
 
         /// <summary>Generate the accessor layer for one imported frame. Returns the model
         /// so the caller can wire the prefab against the same identifiers.</summary>
-        public static FrameModel Generate(Manifest m, string section = "")
+        public static FrameModel Generate(Manifest m, string section = "", bool includeGroups = true)
         {
-            var model = BuildModel(m, section);
+            var model = BuildModel(m, section, includeGroups);
             WriteFiles(model);
             return model;
         }
 
-        public static FrameModel BuildModel(Manifest m, string section)
+        public static FrameModel BuildModel(Manifest m, string section, bool includeGroups = true)
         {
             string className = IdentifierUtil.ToIdentifier(
                 !string.IsNullOrEmpty(m.screen.displayName) ? m.screen.displayName : m.screen.name);
@@ -49,21 +49,34 @@ namespace FigForge
             var rawIds = new List<string>();
             foreach (var e in m.elements)
             {
-                if (e == null || e.id == rootId || !IsMember(e)) continue;
+                if (e == null || e.id == rootId || !IsMember(e, includeGroups)) continue;
                 picked.Add(e);
                 rawIds.Add(IdentifierUtil.ToIdentifier(!string.IsNullOrEmpty(e.displayName) ? e.displayName : e.name));
             }
             var ids = IdentifierUtil.Dedupe(rawIds, (orig, renamed) =>
                 Debug.LogWarning($"[FigForge] frame '{className}': duplicate accessor name '{orig}' → '{renamed}'."));
 
+            var index = new Dictionary<string, ElementData>();
+            foreach (var e in m.elements)
+                if (e != null && !string.IsNullOrEmpty(e.id))
+                    index[e.id] = e;
+
             var members = new List<FrameMember>(picked.Count);
             for (int i = 0; i < picked.Count; i++)
+            {
+                string scopeParentId = includeGroups ? NearestGroupAncestorId(picked[i], index) : null;
                 members.Add(new FrameMember
                 {
                     identifier = ids[i],
                     csharpType = FrameCodeGen.CSharpType(picked[i]),
                     sourceName = picked[i].id, // element id — stable handle for prefab wiring
+                    parentId = picked[i].parentId,
+                    scopeParentId = scopeParentId,
+                    exposeOnFrame = string.IsNullOrEmpty(scopeParentId),
+                    isGroup = picked[i].type == "GROUP",
                 });
+            }
+            AssignGroupTypeNames(members);
 
             return new FrameModel
             {
@@ -76,13 +89,50 @@ namespace FigForge
         }
 
         // Which elements get a typed accessor: canonical controls + text + image/graphics.
-        // Plain structural containers are skipped (they're layout, not handles).
-        static bool IsMember(ElementData e)
+        // Groups can also be surfaced as generated child scopes when the importer option is on.
+        static bool IsMember(ElementData e, bool includeGroups)
         {
             if (e.canonical != null && !string.IsNullOrEmpty(e.canonical.kind)) return true;
             if (e.type == "TEXT") return true;
             if (e.components != null && (e.components.Contains("TextMeshProUGUI") || e.components.Contains("Image"))) return true;
+            if (includeGroups && e.type == "GROUP") return true;
             return false;
+        }
+
+        static void AssignGroupTypeNames(List<FrameMember> members)
+        {
+            var taken = new HashSet<string>();
+            foreach (var member in members)
+                taken.Add((member.identifier ?? "").TrimStart('@'));
+
+            for (int i = 0; i < members.Count; i++)
+            {
+                var m = members[i];
+                if (!m.isGroup) continue;
+
+                string stem = (m.identifier ?? "").TrimStart('@');
+                string baseName = IdentifierUtil.ToIdentifier(stem + "Group").TrimStart('@');
+                string typeName = baseName;
+                int suffix = 2;
+                while (!taken.Add(typeName))
+                    typeName = baseName + suffix++;
+
+                m.groupTypeName = typeName;
+                members[i] = m;
+            }
+        }
+
+        static string NearestGroupAncestorId(ElementData e, Dictionary<string, ElementData> index)
+        {
+            string parentId = e != null ? e.parentId : null;
+            var seen = new HashSet<string>();
+            while (!string.IsNullOrEmpty(parentId) && seen.Add(parentId))
+            {
+                if (!index.TryGetValue(parentId, out var parent) || parent == null) return null;
+                if (parent.type == "GROUP") return parent.id;
+                parentId = parent.parentId;
+            }
+            return null;
         }
 
         public static void WriteFiles(FrameModel f)

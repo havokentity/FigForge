@@ -41,6 +41,7 @@ namespace FigForge
         Canvas _existingCanvas;
         bool _connectedScene = true;       // build under a shared FrameManager
         bool _disableRaycasts = true;
+        bool _includeGroupsInAccessors = true;
         string _spriteFolder = "Assets/FigForge/Sprites";
         string _prefabFolder = "Assets/FigForge/Prefabs";
 
@@ -371,6 +372,7 @@ namespace FigForge
                     if (_scalePreset == ScalePreset.Custom)
                         _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
                     _disableRaycasts = EditorGUILayout.ToggleLeft("Disable raycast targets on non-interactive graphics", _disableRaycasts);
+                    _includeGroupsInAccessors = EditorGUILayout.ToggleLeft("Generate C# accessors for Figma groups", _includeGroupsInAccessors);
                     if (_output != OutputMode.Scene)
                         _prefabFolder = EditorGUILayout.TextField("Prefab folder", _prefabFolder);
                 }
@@ -601,7 +603,7 @@ namespace FigForge
             return $"{role}|{section}|{name}";
         }
 
-        static string ManifestHash(Manifest m, ProjectScreen ps)
+        static string ManifestHash(Manifest m, ProjectScreen ps, bool includeGroupsInAccessors)
         {
             string exportedAt = m.exportedAt;
             m.exportedAt = "";
@@ -614,7 +616,8 @@ namespace FigForge
                 // busts the screen-level reuse cache and forces a rebuild even when
                 // the Figma design itself is unchanged.
                 return StableHash(JsonConvert.SerializeObject(m) + "\nrole=" + role + "\nsection=" + section
-                    + "\nbuild=" + HierarchyBuilder.CanonicalSchema);
+                    + "\nbuild=" + HierarchyBuilder.CanonicalSchema
+                    + "\nincludeGroupsInAccessors=" + includeGroupsInAccessors);
             }
             finally
             {
@@ -695,7 +698,7 @@ namespace FigForge
         void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section)
         {
             if (page == null || m == null || ctx == null) return;
-            var model = FrameCodeGenDriver.Generate(m, section ?? "");
+            var model = FrameCodeGenDriver.Generate(m, section ?? "", _includeGroupsInAccessors);
             if (frame != null) frame.generatedType = FrameCodeGen.GeneratedNamespace + "." + model.className;
             var reg = page.GetComponent<FigForgeScreen>();
             if (reg != null)
@@ -761,7 +764,7 @@ namespace FigForge
                     srcDir = Path.GetDirectoryName(mp),
                     ps = ps,
                     importKey = ImportKey(ps, m),
-                    manifestHash = ManifestHash(m, ps),
+                    manifestHash = ManifestHash(m, ps, _includeGroupsInAccessors),
                 });
             }
             if (loaded.Count == 0) { Log("no buildable screens in bundle", MessageType.Error); return; }

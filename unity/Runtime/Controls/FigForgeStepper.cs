@@ -29,7 +29,7 @@ namespace FigForge
             set => SetValue(value, true);
         }
 
-        public bool Visible
+        public bool IsVisible
         {
             get => gameObject.activeSelf;
             set => gameObject.SetActive(value);

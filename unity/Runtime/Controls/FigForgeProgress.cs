@@ -114,10 +114,10 @@ namespace FigForge
             set { if (tmpTxt_label != null) tmpTxt_label.text = value; }
         }
 
-        /// <summary>Show/hide the whole control — `bar.Visible = false`. Drives
+        /// <summary>Show/hide the whole control — `bar.IsVisible = false`. Drives
         /// GameObject.SetActive, so a hidden control stops rendering and contributing
         /// to layout.</summary>
-        public bool Visible
+        public bool IsVisible
         {
             get => gameObject.activeSelf;
             set => gameObject.SetActive(value);

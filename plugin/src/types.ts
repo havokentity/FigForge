@@ -18,7 +18,7 @@ export const MANIFEST_VERSION = '2.0';
 // Canonical-control capture generation this plugin emits — counterpart:
 // unity/Editor/HierarchyBuilder.cs `CanonicalSchema`. Keep the two numbers in
 // lockstep; the importer warns (but continues) when they differ.
-export const CANONICAL_SCHEMA = 53;
+export const CANONICAL_SCHEMA = 58;
 
 // ---------------------------------------------------------------------------
 // Geometry primitives

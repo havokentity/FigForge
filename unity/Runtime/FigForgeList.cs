@@ -66,10 +66,10 @@ namespace FigForge
 
         public IReadOnlyList<FigForgeListItem> Items => _items;
 
-        /// <summary>Show/hide the whole control — `list.Visible = false`. Drives
+        /// <summary>Show/hide the whole control — `list.IsVisible = false`. Drives
         /// GameObject.SetActive, so a hidden control stops rendering, receiving input,
         /// and contributing to layout.</summary>
-        public bool Visible
+        public bool IsVisible
         {
             get => gameObject.activeSelf;
             set => gameObject.SetActive(value);

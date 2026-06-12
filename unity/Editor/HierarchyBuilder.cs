@@ -72,7 +72,7 @@ namespace FigForge
                 }
                 else
                 {
-                    pageRoot = NewRect(manifest.screen.name, parent);
+                    pageRoot = NewRect(ScreenObjectName(manifest), parent);
                     Stretch(pageRoot.GetComponent<RectTransform>());
                     foreach (var r in roots) BuildElement(r, index, pageRoot.transform, ctx);
                 }
@@ -233,7 +233,7 @@ namespace FigForge
                 if (prefab != null)
                 {
                     inst = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, parent);
-                    inst.name = e.name;
+                    inst.name = ObjectName(e, canonicalKind);
                 }
                 else if (canonicalKind == "button" && e.canonical.shape != null)
                 {
@@ -339,7 +339,7 @@ namespace FigForge
                 return inst;
             }
 
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? e.type : e.name, parent);
+            var go = NewRect(ObjectName(e, e.type), parent);
             if (!string.IsNullOrEmpty(e.id)) ctx.byElementId[e.id] = go;
             var rt = go.GetComponent<RectTransform>();
             ApplyTransform(rt, e, ctx);
@@ -896,7 +896,7 @@ namespace FigForge
         // stays shared.
         static GameObject BuildStateButton(ElementData e, Transform parent, BuildContext ctx)
         {
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Button" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Button"), parent);
             var st = e.canonical.states;
 
             var normal = SpriteByFile(st.normal, ctx);
@@ -940,7 +940,7 @@ namespace FigForge
         {
             var sh = e.canonical.shape;
             EnsureSdfShaderIncluded();
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Button" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Button"), parent);
 
             var sc = e.canonical.stateColors;
             var regularShape = e.canonical.stateShapes != null && e.canonical.stateShapes.normal != null
@@ -1866,7 +1866,7 @@ namespace FigForge
         static GameObject BuildToggle(ElementData e, Transform parent, BuildContext ctx)
         {
             var c = e.canonical;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Toggle" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Toggle"), parent);
             var toggle = go.AddComponent<FigForgeToggle>();
             toggle.transition = Selectable.Transition.None;
 
@@ -1941,7 +1941,7 @@ namespace FigForge
         {
             var c = e.canonical;
             float sf = ctx.scaleFactor;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Switch" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Switch"), parent);
             var sw = go.AddComponent<FigForgeSwitch>();
             sw.transition = Selectable.Transition.None;
 
@@ -2016,7 +2016,7 @@ namespace FigForge
         {
             var c = e.canonical;
             float sf = ctx.scaleFactor;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "InputField" : e.name, parent);
+            var go = NewRect(ObjectName(e, "InputField"), parent);
             var input = go.AddComponent<FigForgeInputField>();
             input.transition = Selectable.Transition.None;
             input.lineType = TMP_InputField.LineType.SingleLine;
@@ -2087,7 +2087,7 @@ namespace FigForge
         {
             var c = e.canonical;
             float sf = ctx.scaleFactor;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Stepper" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Stepper"), parent);
             var stepper = go.AddComponent<FigForgeStepper>();
             stepper.minValue = c.minValue;
             stepper.maxValue = c.maxValue > c.minValue ? c.maxValue : 100f;
@@ -2176,7 +2176,7 @@ namespace FigForge
         static GameObject BuildDropdown(ElementData e, Transform parent, BuildContext ctx)
         {
             var c = e.canonical;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Dropdown" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Dropdown"), parent);
             var dd = go.AddComponent<FigForgeDropdown>();
             dd.transition = Selectable.Transition.None;
 
@@ -2435,7 +2435,7 @@ namespace FigForge
         {
             var c = e.canonical;
             float sf = ctx.scaleFactor;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? kindLabel : e.name, parent);
+            var go = NewRect(ObjectName(e, kindLabel), parent);
             // Rounded container background — full render-only subtree when present (added
             // first so it sits behind the scrollable viewport/content), else the flat shape.
             Graphic bg;
@@ -2740,7 +2740,7 @@ namespace FigForge
         {
             var c = e.canonical;
             float sf = ctx.scaleFactor;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Slider" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Slider"), parent);
             var slider = go.AddComponent<FigForgeSlider>();
             slider.transition = Selectable.Transition.None;
             slider.direction = Slider.Direction.LeftToRight;
@@ -2897,7 +2897,7 @@ namespace FigForge
         static GameObject BuildProgress(ElementData e, Transform parent, BuildContext ctx)
         {
             var c = e.canonical;
-            var go = NewRect(string.IsNullOrEmpty(e.name) ? "Progress" : e.name, parent);
+            var go = NewRect(ObjectName(e, "Progress"), parent);
             var bar = go.AddComponent<FigForgeProgress>();
             // Authored value range from the Figma component; progress masters carry no
             // range (both 0) → the plain 0..1 fill ratio.
@@ -3078,7 +3078,7 @@ namespace FigForge
 
         static GameObject BuildPlaceholderButton(ElementData e, Transform parent, BuildContext ctx)
         {
-            var go = NewRect(e.name, parent);
+            var go = NewRect(ObjectName(e, "Button"), parent);
             var img = go.AddComponent<Image>();
             img.color = new Color(0.45f, 0.36f, 1f, 1f);
             var btn = go.AddComponent<FigForgeButton>();
@@ -3363,11 +3363,18 @@ namespace FigForge
         //      prefab-default placeholder). Regen is also gated to the first
         //      same-ref element per build, and a plain reuse can no longer
         //      overwrite the stored definition signature.
+        // v54: imported GameObject names prefer displayName (the original Figma
+        //      layer casing/spelling) instead of sanitized manifest names; group
+        //      accessors become scoped APIs instead of also leaking children flat.
+        // v55: generated group scopes and FigForge controls expose IsVisible.
+        // v56: remove the old Visible aliases from generated groups/controls.
+        // v57: generated Frames core exposes After(seconds, action) delay helper.
+        // v58: Frames.After returns a chainable delay sequence with Cancel().
         //
         // Counterpart constant: plugin/src/types.ts CANONICAL_SCHEMA — the plugin
         // stamps its number into the manifest (canonicalSchema) and ManifestParser
         // warns when the two differ. Bump BOTH together.
-        internal const int CanonicalSchema = 53;
+        internal const int CanonicalSchema = 58;
 
         // Invariant culture for every signature number: signatures persist in the
         // committed library asset, so a comma-decimal locale (de-DE, fr-FR, …) must
@@ -3703,6 +3710,20 @@ namespace FigForge
             var go = new GameObject(name, typeof(RectTransform));
             go.GetComponent<RectTransform>().SetParent(parent, false);
             return go;
+        }
+        static string ObjectName(ElementData e, string fallback)
+        {
+            if (e != null && !string.IsNullOrEmpty(e.displayName)) return e.displayName;
+            if (e != null && !string.IsNullOrEmpty(e.name)) return e.name;
+            return !string.IsNullOrEmpty(fallback) ? fallback : "Node";
+        }
+        static string ScreenObjectName(Manifest manifest)
+        {
+            if (manifest != null && manifest.screen != null && !string.IsNullOrEmpty(manifest.screen.displayName))
+                return manifest.screen.displayName;
+            if (manifest != null && manifest.screen != null && !string.IsNullOrEmpty(manifest.screen.name))
+                return manifest.screen.name;
+            return "Screen";
         }
         static void Stretch(RectTransform rt)
         {

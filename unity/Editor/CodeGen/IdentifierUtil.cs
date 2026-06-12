@@ -1,8 +1,9 @@
 // =============================================================================
 // FigForge — C# identifier helper for the frame codegen. Turns a designer's Figma
-// layer name into a valid C# identifier while PRESERVING the original casing (only
-// illegal characters are swapped for '_'); dedupes names within a scope with
-// _2/_3 suffixes in document order and reports collisions for a console warning.
+// layer name into a valid C# identifier while PRESERVING the original casing and
+// intentional underscores (characters C# cannot use are removed); dedupes
+// names within a scope with _2/_3 suffixes in document order and reports
+// collisions for a console warning.
 // =============================================================================
 
 using System;
@@ -30,31 +31,25 @@ namespace FigForge
 
         /// <summary>
         /// Convert a Figma display name to a valid C# identifier, preserving case.
-        /// Illegal chars become '_'; runs of '_' collapse; a leading digit gets a '_'
-        /// prefix; a reserved keyword gets an '@' prefix. Empty/garbage falls back to "_".
+        /// Characters C# cannot use are removed; intentional underscores are preserved;
+        /// a leading digit gets a '_' prefix; a reserved keyword gets an '@' prefix.
+        /// Empty/garbage falls back to "_".
         /// </summary>
         public static string ToIdentifier(string raw)
         {
             if (string.IsNullOrEmpty(raw)) return "_";
 
             var sb = new StringBuilder(raw.Length);
-            bool lastUnderscore = false;
             foreach (char c in raw)
             {
                 bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
                 if (ok)
                 {
                     sb.Append(c);
-                    lastUnderscore = c == '_';
-                }
-                else if (!lastUnderscore) // swap illegal char for '_', collapsing runs
-                {
-                    sb.Append('_');
-                    lastUnderscore = true;
                 }
             }
 
-            string s = sb.ToString().Trim('_');
+            string s = sb.ToString();
             if (s.Length == 0) return "_";
             if (s[0] >= '0' && s[0] <= '9') s = "_" + s;
             if (Keywords.Contains(s)) s = "@" + s;
