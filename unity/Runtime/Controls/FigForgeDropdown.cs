@@ -24,10 +24,10 @@ namespace FigForge
             set { if (captionText != null) captionText.text = value; }
         }
 
-        /// <summary>Show/hide the whole control — `dropdown.IsVisible = false`. Drives
+        /// <summary>Show/hide the whole control — `dropdown.isVisible = false`. Drives
         /// GameObject.SetActive, so a hidden control stops rendering, receiving input,
         /// and contributing to layout.</summary>
-        public bool IsVisible
+        public bool isVisible
         {
             get => gameObject.activeSelf;
             set => gameObject.SetActive(value);

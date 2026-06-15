@@ -25,10 +25,10 @@ namespace FigForge
             set { var t = tmpTxt_placeholder; if (t != null) t.text = value; }
         }
 
-        /// <summary>Show/hide the whole control — `input.IsVisible = false`. Drives
+        /// <summary>Show/hide the whole control — `input.isVisible = false`. Drives
         /// GameObject.SetActive, so a hidden control stops rendering, receiving input,
         /// and contributing to layout.</summary>
-        public bool IsVisible
+        public bool isVisible
         {
             get => gameObject.activeSelf;
             set => gameObject.SetActive(value);

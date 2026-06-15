@@ -22,7 +22,7 @@ namespace FigForge
 
         bool _bound;
 
-        public bool IsVisible => gameObject.activeSelf;
+        public bool isVisible => gameObject.activeSelf;
         public bool IsBound => _bound;
         public string ScreenKey => name;
 

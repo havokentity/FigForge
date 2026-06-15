@@ -3382,7 +3382,7 @@ namespace FigForge
         // v54: imported GameObject names prefer displayName (the original Figma
         //      layer casing/spelling) instead of sanitized manifest names; group
         //      accessors become scoped APIs instead of also leaking children flat.
-        // v55: generated group scopes and FigForge controls expose IsVisible.
+        // v55: generated group scopes and FigForge controls expose visibility helpers.
         // v56: remove the old Visible aliases from generated groups/controls.
         // v57: generated Frames core exposes After(seconds, action) delay helper.
         // v58: Frames.After returns a chainable delay sequence with Cancel().

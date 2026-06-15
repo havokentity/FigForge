@@ -33,7 +33,7 @@ namespace FigForge
         public RectTransform RectTransform => transform as RectTransform;
         public GameObject GameObject => gameObject;
 
-        public bool IsVisible
+        public bool isVisible
         {
             get => gameObject.activeSelf;
             set => SetVisible(value);

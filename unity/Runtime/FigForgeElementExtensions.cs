@@ -7,7 +7,7 @@
 //     if (Frames.LaunchPage.MySlider.GetVisible()) { ... }
 //
 // Backed by GameObject.SetActive, so a hidden element stops rendering, receiving
-// input, and contributing to layout. The FigForge control classes' `IsVisible`
+// input, and contributing to layout. The FigForge control classes' `isVisible`
 // property is sugar over the same mechanism.
 // =============================================================================
 

@@ -51,9 +51,19 @@ namespace FigForge
             var toggle = control as Toggle;
             if (toggle != null && value != null)
             {
-                if (bool.TryParse(value, out var on)) toggle.isOn = on;
-                else if (value == "on" || value == "1") toggle.isOn = true;
-                else if (value == "off" || value == "0") toggle.isOn = false;
+                bool parsed = true;
+                bool on = false;
+                if (bool.TryParse(value, out var boolValue)) on = boolValue;
+                else if (value == "on" || value == "1") on = true;
+                else if (value == "off" || value == "0") on = false;
+                else parsed = false;
+
+                if (parsed)
+                {
+                    var figForgeToggle = toggle as FigForgeToggle;
+                    if (figForgeToggle != null) figForgeToggle.isOn = on;
+                    else toggle.isOn = on;
+                }
             }
 
             // Manifest values are invariant-format ("1.5") — parse culture-invariant so
