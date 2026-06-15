@@ -11,8 +11,15 @@ namespace FigForge
     [DisallowMultipleComponent]
     public class FigForgeFrame : MonoBehaviour
     {
-        [Tooltip("If true this screen mounts inside the persistent Shell's content slot; the Shell stays visible. If false it's full-screen and the Shell hides.")]
+        [Tooltip("If true this frame is persistent chrome for screens with the same Shell Key. Shell frames can also be shown directly.")]
+        public bool isShell;
+
+        [Tooltip("If true this screen mounts inside its shell's content slot; the matching shell stays visible. If false it's full-screen and shells hide.")]
         public bool usesShell;
+
+        [Tooltip("Importer shell group key. For shell frames this identifies the shell; for shell-mounted screens this identifies which shell to show.")]
+        [ReadOnly]
+        public string shellKey;
 
         [Tooltip("Full name of the importer-generated FigForgeFrame subclass for this page " +
                  "(e.g. FigForge.Generated.LaunchPage). The editor swaps this plain base for that " +

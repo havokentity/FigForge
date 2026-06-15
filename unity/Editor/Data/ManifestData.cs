@@ -20,6 +20,7 @@ namespace FigForge
         public List<ElementData> elements = new List<ElementData>();
         public List<AssetEntry> assets = new List<AssetEntry>();
         public List<FontEntry> fonts = new List<FontEntry>();
+        public AssetDiagnosticsReport diagnostics = new AssetDiagnosticsReport();
         public ManifestSettings settings = new ManifestSettings();
         public List<string> canonicalRefs = new List<string>();
     }
@@ -164,7 +165,41 @@ namespace FigForge
         public List<ShadowData> effects;  // all visible Figma effects
     }
     public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }
-    public class CanonicalStateShapes { public CanonicalShape normal; public CanonicalShape highlighted; public CanonicalShape pressed; }
+    public class CanonicalStateShapes
+    {
+        public CanonicalShape normal;
+        public CanonicalShape highlighted;
+        public CanonicalShape pressed;
+        public CanonicalShape selected;
+        public CanonicalShape disabled;
+        public CanonicalShape focused;
+    }
+
+    public class CanonicalVariantAxis
+    {
+        public string axis;
+        public string value;
+        public string originalName;
+        public string originalValue;
+        public string source;
+        public string type;
+        public List<string> options;
+    }
+
+    public class CanonicalVariantProps
+    {
+        public Dictionary<string, string> axes;
+        public Dictionary<string, string> original;
+        public List<CanonicalVariantAxis> raw;
+        public string state;
+        public string value;
+        public string size;
+        public string tone;
+        public string intent;
+        public string severity;
+        public string source;
+        public List<string> diagnostics;
+    }
 
     public class CanonicalRef
     {
@@ -172,15 +207,27 @@ namespace FigForge
         [JsonProperty("ref")] public string Ref;
         public string instanceName;
         public string label;
+        public string iconAsset;         // PNG sprite captured from a child named "Icon"
         public string value;             // initial state (toggle on/off, slider value, input text)
         public string placeholder;       // input placeholder text
         public List<string> options;     // dropdown options
+        public string body;              // modal/toast body text
+        public string primaryLabel;      // modal primary action label
+        public string secondaryLabel;    // modal secondary action label
+        public string severity;          // toast: info | success | warning | error
+        public string position;          // toast host position
+        public float? duration;          // toast auto-dismiss seconds
+        public CanonicalVariantProps variantProps; // normalized Figma component variant metadata
         public CanonicalStates states;   // per-state sprite filenames (button)
         public CanonicalLabelFont labelFont;    // THIS instance's label font (per-instance override when it differs)
         public CanonicalLabelFont defLabelFont; // the canonical COMPONENT's label font (the prefab/definition uses this)
         public float? labelFontSize;     // THIS instance's Label font size
         public float? defLabelFontSize;  // the canonical COMPONENT's Label font size
         public CanonicalShape shape;            // procedural background (SDF shader) — overrides the state PNGs when present
+        public CanonicalShape backdropShape;    // modal backdrop
+        public CanonicalShape panelShape;       // modal panel
+        public CanonicalShape toastShape;       // toast card
+        public float[] accentColor;             // toast accent/severity fallback
         public CanonicalShape instanceShape;    // THIS instance's background when it differs from the component (per-instance override)
         public CanonicalShape rootShape;        // root component visuals/effects shared behind every state
         public CanonicalShape instanceRootShape; // THIS instance's root visuals/effects when they differ
@@ -329,6 +376,23 @@ namespace FigForge
 
     public class AssetEntry { public string file; public string nodeId; public float scale = 1f; }
     public class FontEntry { public string family; public List<string> styles = new List<string>(); }
+
+    public class AssetDiagnosticIssue
+    {
+        public string category;          // missingFonts|unsupportedFills|rasterFallbacks|oversizedPngs|blendModeCaveats
+        public string severity;          // info|warning
+        public string nodeId;
+        public string nodeName;
+        public string asset;
+        public string message;
+        public Dictionary<string, object> details;
+    }
+
+    public class AssetDiagnosticsReport
+    {
+        public Dictionary<string, int> summary = new Dictionary<string, int>();
+        public List<AssetDiagnosticIssue> issues = new List<AssetDiagnosticIssue>();
+    }
 
     // ---- project bundle (whole-page export) -------------------------------
     public class ProjectScreen

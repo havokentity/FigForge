@@ -2,7 +2,16 @@
 // FigForge — UI thread (iframe)
 // =============================================================================
 
-import { MANIFEST_VERSION, type BinaryAsset, type ElementConfig, type ExportOptions, type ExportScale, type TreeNode } from './types';
+import {
+  MANIFEST_VERSION,
+  PROJECT_SCHEMA,
+  type BinaryAsset,
+  type ElementConfig,
+  type ExportOptions,
+  type ExportScale,
+  type Project,
+  type TreeNode,
+} from './types';
 import { bytesToBase64 } from './base64';
 
 declare const JSZip: any;
@@ -180,8 +189,9 @@ for (const [id, kind] of [
   ['createToggleBtn', 'toggle'], ['createRadioBtn', 'radio'],
   ['createSwitchBtn', 'switch'],
   ['createInputBtn', 'input'],
-  ['createStepperBtn', 'stepper'],
   ['createDropdownBtn', 'dropdown'],
+  ['createModalBtn', 'modal'],
+  ['createToastBtn', 'toast'],
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
     setStatus(`Creating ${kind} component…`);
@@ -225,6 +235,23 @@ function wirePopover(btn: HTMLElement, pop: HTMLElement | null): { hide: () => v
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
   return { hide };
 }
+
+// Stepper variants: horizontal (default) or vertical. Each orientation gets its
+// own master so switching orientation never reuses the other layout.
+const stepperPop = wirePopover($('#createStepperBtn') as HTMLElement, document.getElementById('stepperOpts'));
+function stepperOrientation() {
+  const value = (document.querySelector('input[name="stepperOrientation"]:checked') as HTMLInputElement | null)?.value;
+  return value === 'vertical' ? 'vertical' : 'horizontal';
+}
+$('#stepperOptsCreate').addEventListener('click', () => {
+  const orientation = stepperOrientation();
+  stepperPop.hide();
+  setStatus(`Creating ${orientation} stepper component…`);
+  post({
+    type: 'create-canonical', kind: 'stepper', componentsPage: compPageOn(),
+    stepperOpts: { orientation },
+  });
+});
 
 // List variants: part toggles (header/icons/subtitles) + scrollbar width.
 const listPop = wirePopover($('#createListBtn') as HTMLElement, document.getElementById('listOpts'));
@@ -314,6 +341,37 @@ $('#tableOptsCreate').addEventListener('click', () => {
       rows: int('tableOptRows', 4, 1, 100), cols: int('tableOptCols', 3, 1, 12),
       header: (document.getElementById('tableOptHeader') as HTMLInputElement | null)?.checked !== false,
       scrollbarWidth: int('tableOptSbWidth', 10, 2, 40),
+    },
+  });
+});
+
+// Shell scaffold: Section + persistent Shell + Content slot + sample screens.
+type ShellPlacement = 'left' | 'top' | 'right' | 'bottom';
+const shellPop = wirePopover($('#createShellBtn') as HTMLElement, document.getElementById('shellOpts'));
+function readShellPlacement(id: string, fallback: ShellPlacement): ShellPlacement {
+  const value = (document.getElementById(id) as HTMLSelectElement | null)?.value;
+  return value === 'left' || value === 'top' || value === 'right' || value === 'bottom' ? value : fallback;
+}
+function readShellSize(id: string, fallback: number, min: number): number {
+  const value = parseInt((document.getElementById(id) as HTMLInputElement | null)?.value ?? '', 10);
+  return Number.isFinite(value) ? Math.min(10000, Math.max(min, value)) : fallback;
+}
+function readShellName(): string {
+  const value = (document.getElementById('shellOptName') as HTMLInputElement | null)?.value.trim();
+  return value || 'App Shell';
+}
+$('#shellOptsCreate').addEventListener('click', () => {
+  shellPop.hide();
+  setStatus('Creating shell scaffold…');
+  post({
+    type: 'create-shell',
+    componentsPage: compPageOn(),
+    shellOpts: {
+      name: readShellName(),
+      nav: readShellPlacement('shellOptNav', 'left'),
+      header: readShellPlacement('shellOptHeader', 'top'),
+      width: readShellSize('shellOptWidth', 1920, 320),
+      height: readShellSize('shellOptHeight', 1080, 240),
     },
   });
 });
@@ -704,14 +762,14 @@ async function downloadProjectBundle(project: { name: string; initial: string },
   try {
     const zip = new JSZip();
     const used = new Set<string>();
-    const index = {
-      schema: 'figforge/project',
+    const index: Project = {
+      schema: PROJECT_SCHEMA,
       version: MANIFEST_VERSION,
       generator: 'FigForge',
       name: project.name,
       exportedAt: new Date().toISOString(),
       initial: project.initial,
-      screens: [] as { name: string; manifest: string; section: string; role: string }[],
+      screens: [],
     };
     for (const s of screens) {
       let folder = s.name || 'screen';
@@ -816,13 +874,30 @@ function connectMcp() {
     };
     socket.onerror = () => bridgeLog('socket error');
     socket.onmessage = (ev) => {
-      try { post({ type: 'mcp-request', payload: JSON.parse(ev.data) }); }
+      try { post({ type: 'mcp-request', payload: withCurrentExportSettings(JSON.parse(ev.data)) }); }
       catch { bridgeLog('bad message from server'); }
     };
   } catch (e) {
     bridgeLog('connect failed: ' + String(e));
     if (wantConnected) scheduleReconnect();
   }
+}
+
+function withCurrentExportSettings(payload: { type?: string; params?: Record<string, unknown> }) {
+  if (payload.type !== 'export_unity' && payload.type !== 'export_project_unity') return payload;
+  const params = payload.params || {};
+  const options = params.options && typeof params.options === 'object'
+    ? { ...currentOptions(), ...(params.options as Record<string, unknown>) }
+    : currentOptions();
+  return {
+    ...payload,
+    params: {
+      ...params,
+      scale: params.scale || parseScale(),
+      options,
+      elementConfigs: Array.isArray(params.elementConfigs) ? params.elementConfigs : collectConfigs(),
+    },
+  };
 }
 
 function disconnectMcp() {

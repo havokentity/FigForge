@@ -12,6 +12,66 @@ import { Bridge } from './bridge.js';
 import type { PluginSender, RpcRequest, RpcResponse } from './types.js';
 import { BRIDGE_PORT, VERSION } from './version.js';
 
+export const RPC_MAX_BODY_BYTES = 1_048_576;
+
+export class RpcBodyTooLargeError extends Error {
+  constructor(limitBytes = RPC_MAX_BODY_BYTES) {
+    super(`RPC body exceeds ${limitBytes} bytes.`);
+    this.name = 'RpcBodyTooLargeError';
+  }
+}
+
+export function readRpcBody(req: http.IncomingMessage, limitBytes = RPC_MAX_BODY_BYTES): Promise<string> {
+  const contentLength = req.headers['content-length'];
+  const declaredBytes = typeof contentLength === 'string' ? Number(contentLength) : undefined;
+  if (declaredBytes !== undefined && Number.isFinite(declaredBytes) && declaredBytes > limitBytes) {
+    req.on('error', () => { /* discard errors while draining rejected body */ });
+    req.resume();
+    return Promise.reject(new RpcBodyTooLargeError(limitBytes));
+  }
+
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let receivedBytes = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('error', onError);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      chunks.length = 0;
+      cleanup();
+      req.on('error', () => { /* discard errors while draining rejected body */ });
+      req.resume();
+      reject(error);
+    };
+    const onData = (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      receivedBytes += buffer.length;
+      if (receivedBytes > limitBytes) {
+        fail(new RpcBodyTooLargeError(limitBytes));
+        return;
+      }
+      chunks.push(buffer);
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(Buffer.concat(chunks, receivedBytes).toString('utf8'));
+    };
+    const onError = (error: Error) => fail(error);
+
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+  });
+}
+
 export class Leader implements PluginSender {
   private server: http.Server;
   private wss: WebSocketServer;
@@ -51,23 +111,29 @@ export class Leader implements PluginSender {
       return;
     }
     if (req.method === 'POST' && req.url === '/rpc') {
-      let body = '';
-      req.on('data', (c) => (body += c));
-      req.on('end', async () => {
-        let result: RpcResponse;
-        try {
-          const rpc = JSON.parse(body) as RpcRequest;
-          result = await this.bridge.send(rpc.tool, rpc.nodeIds, rpc.params);
-        } catch (e) {
-          result = { error: e instanceof Error ? e.message : String(e) };
-        }
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(result));
-      });
+      void this.handleRpc(req, res);
       return;
     }
     res.writeHead(404);
     res.end();
+  }
+
+  private async handleRpc(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    let result: RpcResponse;
+    try {
+      const body = await readRpcBody(req);
+      const rpc = JSON.parse(body) as RpcRequest;
+      result = await this.bridge.send(rpc.tool, rpc.nodeIds, rpc.params);
+    } catch (e) {
+      if (e instanceof RpcBodyTooLargeError) {
+        res.writeHead(413, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+        return;
+      }
+      result = { error: e instanceof Error ? e.message : String(e) };
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(result));
   }
 
   close(): void {

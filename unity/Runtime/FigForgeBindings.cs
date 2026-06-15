@@ -36,9 +36,14 @@ namespace FigForge
         [HideInInspector] public string signature;
 
         /// <summary>Apply manifest canonical data to the bound slots. Editor-time.</summary>
-        public void Apply(string labelText, string value, List<string> options)
+        public void Apply(string labelText, string value, List<string> options, Sprite iconSprite = null)
         {
             if (label != null && !string.IsNullOrEmpty(labelText)) label.text = labelText;
+            if (icon != null && iconSprite != null)
+            {
+                icon.sprite = iconSprite;
+                icon.enabled = true;
+            }
 
             var input = control as TMP_InputField;
             if (input != null)

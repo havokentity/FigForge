@@ -83,7 +83,9 @@ namespace FigForge
             manager = null;
             upgraded = null;
             var go = baseFrame.gameObject;
+            bool isShell = baseFrame.isShell;
             bool usesShell = baseFrame.usesShell;
+            string shellKey = baseFrame.shellKey;
             string genType = baseFrame.generatedType;
             var reg = go.GetComponent<FigForgeScreen>();
             var mgr = baseFrame.GetComponentInParent<FrameManager>();
@@ -95,7 +97,9 @@ namespace FigForge
             UnityEngine.Object.DestroyImmediate(baseFrame);
             if (!(go.AddComponent(t) is FigForgeFrame comp)) return false;
 
+            comp.isShell = isShell;
             comp.usesShell = usesShell;
+            comp.shellKey = shellKey;
             comp.generatedType = genType;
             comp.__WireFrame(reg);
 

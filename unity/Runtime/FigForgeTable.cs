@@ -31,6 +31,9 @@ namespace FigForge
         public FigForgeFill rowPressed = FigForgeFill.Solid(Color.white);
         public FigForgeFill rowSelected = FigForgeFill.Solid(Color.white);
         public bool rowHasRollover, rowHasPressed, rowHasSelected;
+
+        [Tooltip("Fired with the new row index whenever the selected row changes.")]
+        public FigForgeSelectionEvent onSelectionChanged = new FigForgeSelectionEvent();
         int _selected = -1;
 
         readonly List<List<string>> _rows = new List<List<string>>();
@@ -133,16 +136,21 @@ namespace FigForge
             }
         }
 
-        // Single-select: mark `index` selected, clear the rest.
+        // Single-select: mark `index` selected, clear the rest. Fires
+        // onSelectionChanged only when the selection actually moves.
         public void Select(int index)
         {
+            bool changed = _selected != index;
             _selected = index;
-            if (content == null) return;
-            for (int i = 0; i < content.childCount; i++)
+            if (content != null)
             {
-                var r = content.GetChild(i).GetComponent<FigForgeTableRow>();
-                if (r != null) r.SetSelected(r.index == index);
+                for (int i = 0; i < content.childCount; i++)
+                {
+                    var r = content.GetChild(i).GetComponent<FigForgeTableRow>();
+                    if (r != null) r.SetSelected(r.index == index);
+                }
             }
+            if (changed) onSelectionChanged.Invoke(index);
         }
 
         public int SelectedIndex => _selected;

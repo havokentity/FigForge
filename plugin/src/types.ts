@@ -18,7 +18,7 @@ export const MANIFEST_VERSION = '2.0';
 // Canonical-control capture generation this plugin emits — counterpart:
 // unity/Editor/HierarchyBuilder.cs `CanonicalSchema`. Keep the two numbers in
 // lockstep; the importer warns (but continues) when they differ.
-export const CANONICAL_SCHEMA = 58;
+export const CANONICAL_SCHEMA = 60;
 
 // ---------------------------------------------------------------------------
 // Geometry primitives
@@ -156,7 +156,7 @@ export interface TextProps {
 // in Unity as an instance of a named canonical Button definition rather than
 // rebuilt from PNG/text. Scoped to buttons for now; `kind` keeps it extensible.
 // ---------------------------------------------------------------------------
-export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'switch' | 'input' | 'stepper' | 'dropdown' | 'slider' | 'progress' | 'list' | 'table';
+export type CanonicalKind = 'button' | 'toggle' | 'radio' | 'switch' | 'input' | 'stepper' | 'dropdown' | 'slider' | 'progress' | 'list' | 'table' | 'modal' | 'toast';
 
 /** Exported per-state background sprites for an interactive control. */
 export interface CanonicalStates {
@@ -169,7 +169,8 @@ export interface CanonicalStates {
 export interface ButtonShape {
   asset?: string; // PNG fallback for vector/icon shapes whose path geometry is not a rounded rect
   vector?: VectorDrawing; // procedural vector mesh (preferred over `asset` when present)
-  cornerRadius: number;
+  cornerRadius: number; // max corner; per-corner detail in `corners`
+  corners?: [number, number, number, number]; // tl, tr, br, bl
   opacity?: number;
   blendMode?: string;
   fill?: RGBA; // solid colour, or legacy gradient fallback colour
@@ -190,6 +191,33 @@ export interface CanonicalStateShapes {
   normal?: ButtonShape;
   highlighted?: ButtonShape;
   pressed?: ButtonShape;
+  selected?: ButtonShape;
+  disabled?: ButtonShape;
+  focused?: ButtonShape;
+}
+
+export interface CanonicalVariantAxis {
+  axis: string;
+  value: string;
+  originalName: string;
+  originalValue: string;
+  source: 'componentProperties' | 'variantProperties' | 'mainComponent' | 'componentSet';
+  type?: string;
+  options?: string[];
+}
+
+export interface CanonicalVariantProps {
+  axes: Record<string, string>;
+  original?: Record<string, string>;
+  raw: CanonicalVariantAxis[];
+  state?: string;
+  value?: string;
+  size?: string;
+  tone?: string;
+  intent?: string;
+  severity?: string;
+  source?: string;
+  diagnostics?: string[];
 }
 
 /** One row's data in a canonical List — the analogue of a dropdown's option string,
@@ -204,9 +232,17 @@ export interface CanonicalRef {
   ref: string; // canonical definition name to instantiate in Unity
   instanceName: string; // the design-specific name (middle token)
   label?: string; // text to stamp onto the instance, if any
+  iconAsset?: string; // PNG sprite captured from a child named "Icon"
   value?: string; // initial state: toggle on/off, slider value, input text
   placeholder?: string; // input placeholder text
   options?: string[]; // dropdown options
+  body?: string; // modal/toast body text
+  primaryLabel?: string; // modal primary action label
+  secondaryLabel?: string; // modal secondary action label
+  severity?: 'info' | 'success' | 'warning' | 'error'; // toast variant
+  position?: 'topRight' | 'topLeft' | 'bottomRight' | 'bottomLeft' | 'topCenter' | 'bottomCenter'; // toast host position
+  duration?: number; // toast auto-dismiss seconds
+  variantProps?: CanonicalVariantProps; // normalized Figma component variant metadata
   states?: CanonicalStates; // sprite filenames per Button state (from Figma layers)
   labelFont?: { family: string; style: string }; // THIS instance's label font (per-instance override when it differs from the definition)
   defLabelFont?: { family: string; style: string }; // the canonical COMPONENT's label font — the prefab/definition uses this
@@ -215,6 +251,10 @@ export interface CanonicalRef {
   // Procedural background shape (solid buttons): the importer renders this with a
   // crisp SDF shader instead of the exported state PNGs. Absent → PNG fallback.
   shape?: ButtonShape; // the COMPONENT's background (drives the generated prefab)
+  backdropShape?: ButtonShape; // modal backdrop
+  panelShape?: ButtonShape; // modal panel
+  toastShape?: ButtonShape; // toast card
+  accentColor?: RGBA; // toast severity accent fallback
   instanceShape?: ButtonShape; // THIS instance's background, when it differs from the component (per-instance override)
   rootShape?: ButtonShape; // root component visuals/effects shared behind every state
   instanceRootShape?: ButtonShape; // THIS instance's root visuals/effects when they differ
@@ -407,6 +447,29 @@ export interface ManifestFont {
   styles: string[];
 }
 
+export type AssetDiagnosticCategory =
+  | 'missingFonts'
+  | 'unsupportedFills'
+  | 'rasterFallbacks'
+  | 'oversizedPngs'
+  | 'blendModeCaveats'
+  | 'variantExtraction';
+
+export interface AssetDiagnosticIssue {
+  category: AssetDiagnosticCategory;
+  severity: 'info' | 'warning';
+  nodeId?: string;
+  nodeName?: string;
+  asset?: string;
+  message: string;
+  details?: Record<string, string | number | boolean>;
+}
+
+export interface AssetDiagnosticsReport {
+  summary: Record<AssetDiagnosticCategory, number>;
+  issues: AssetDiagnosticIssue[];
+}
+
 export interface ManifestSettings {
   fontFaceDilate: number;
 }
@@ -432,6 +495,7 @@ export interface Manifest {
   elements: ManifestElement[];
   assets: ManifestAsset[];
   fonts: ManifestFont[];
+  diagnostics: AssetDiagnosticsReport;
   settings: ManifestSettings;
   canonicalRefs: string[]; // distinct canonical ref names referenced by elements
 }
@@ -444,6 +508,8 @@ export const PROJECT_SCHEMA = 'figforge/project';
 export interface ProjectScreen {
   name: string;
   manifest: string; // path within the bundle, e.g. "Home/manifest.json"
+  section: string; // enclosing Figma section, or "" for top-level frames
+  role: string; // "screen" | "shell"
 }
 
 export interface Project {

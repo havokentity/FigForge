@@ -308,6 +308,12 @@ namespace FigForge
                 GUI.backgroundColor = new Color(0.49f, 0.36f, 1f);
                 if (GUILayout.Button($"Build Page → {_backend} (all screens)", GUILayout.Height(26)))
                     BuildPageProject(_projectPaths[_selectedProject]);
+                using (new EditorGUI.DisabledScope(_backend != UIBackend.uGUI))
+                {
+                    GUI.backgroundColor = new Color(0.9f, 0.16f, 0.12f);
+                    if (GUILayout.Button("Build Page with Customizations → uGUI", GUILayout.Height(24)))
+                        BuildPageProject(_projectPaths[_selectedProject], includeUnityCustomizations: true);
+                }
                 GUI.backgroundColor = Color.white;
                 Divider();
             }
@@ -727,20 +733,24 @@ namespace FigForge
         // each member by its identifier so the post-compile hook can wire the subclass.
         // Reused unchanged frames still get rewired from their FigForgeScreen registry; this
         // repairs stale/null serialized refs without forcing a rebuild.
-        void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section)
+        void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section, bool includeUnityCustomizations = false)
         {
             if (page == null || m == null) return;
-            var model = FrameCodeGenDriver.Generate(m, section ?? "", _includeGroupsInAccessors);
+            var model = FrameCodeGenDriver.BuildModel(m, section ?? "", _includeGroupsInAccessors);
+            var targets = new Dictionary<string, GameObject>();
+            ResolveFrameMemberTargets(model, ctx, page.GetComponent<FigForgeScreen>(), targets);
+            int customCount = includeUnityCustomizations ? AddUnityCustomizationMembers(page, model, targets) : 0;
+            FrameCodeGenDriver.WriteFiles(model);
             if (frame != null) frame.generatedType = FrameCodeGen.GeneratedNamespace + "." + model.className;
             var reg = page.GetComponent<FigForgeScreen>();
+            if (reg == null && model.members != null && model.members.Count > 0)
+                reg = page.AddComponent<FigForgeScreen>();
             if (reg != null)
             {
                 foreach (var mem in model.members)
                 {
                     GameObject memGo = null;
-                    if (ctx != null)
-                        ctx.byElementId.TryGetValue(mem.sourceName, out memGo);
-                    else
+                    if (!targets.TryGetValue(mem.sourceName, out memGo) || memGo == null)
                         memGo = reg.Get(mem.Key) ?? reg.Get(mem.sourceName);
                     if (memGo != null)
                     {
@@ -761,11 +771,149 @@ namespace FigForge
                 EditorUtility.SetDirty(frame);
             }
             Log($"{(ctx != null ? "generated" : "refreshed")} accessors for frame '{model.className}' ({model.members.Count} member(s))", MessageType.Info);
+            if (customCount > 0)
+                Log($"included {customCount} Unity customization accessor(s) for frame '{model.className}'", MessageType.Info);
             // When the generated code is unchanged, no compile follows this import and the
             // [DidReloadScripts] upgrade never fires — the rebuilt page would stay on the
             // base FigForgeFrame (Frames.X resolves null). Upgrade now; if a compile IS
             // pending, the reload hook covers it instead (idempotent).
             FrameCodeGenWire.RequestUpgrade();
+        }
+
+        static void ResolveFrameMemberTargets(FrameModel model, BuildContext ctx, FigForgeScreen reg, Dictionary<string, GameObject> targets)
+        {
+            if (model.members == null) return;
+            foreach (var mem in model.members)
+            {
+                GameObject go = null;
+                if (ctx != null)
+                    ctx.byElementId.TryGetValue(mem.sourceName, out go);
+                if (go == null && reg != null)
+                    go = reg.Get(mem.Key) ?? reg.Get(mem.sourceName);
+                if (go != null && !string.IsNullOrEmpty(mem.sourceName))
+                    targets[mem.sourceName] = go;
+            }
+        }
+
+        int AddUnityCustomizationMembers(GameObject page, FrameModel model, Dictionary<string, GameObject> targets)
+        {
+            if (page == null || model.members == null) return 0;
+
+            var existingTargets = new HashSet<GameObject>(targets.Values.Where(go => go != null));
+            var existingControlRoots = new List<Transform>();
+            foreach (var go in existingTargets)
+                if (go != null && IsAccessorControlRoot(go))
+                    existingControlRoots.Add(go.transform);
+
+            var taken = new HashSet<string>(model.members.Select(m => m.Key));
+            var customControlRoots = new List<Transform>();
+            int added = 0;
+
+            foreach (var tr in page.GetComponentsInChildren<Transform>(true))
+            {
+                if (tr == null || tr == page.transform) continue;
+                var go = tr.gameObject;
+                if (existingTargets.Contains(go)) continue;
+                if (IsGeneratedInfrastructure(go)) continue;
+                if (IsDescendantOfAny(tr, existingControlRoots)) continue;
+                if (IsDescendantOfAny(tr, customControlRoots)) continue;
+                if (!TryGetUnityCustomizationType(go, out var csharpType, out var isControlRoot)) continue;
+
+                string identifier = UniqueIdentifier(IdentifierUtil.ToIdentifier(go.name), taken);
+                model.members.Add(new FrameMember
+                {
+                    identifier = identifier,
+                    csharpType = csharpType,
+                    sourceName = identifier.TrimStart('@'),
+                    sourceType = "UNITY",
+                    parentId = "",
+                    scopeParentId = null,
+                    exposeOnFrame = true,
+                    isGroup = false,
+                });
+                targets[identifier.TrimStart('@')] = go;
+                if (isControlRoot) customControlRoots.Add(tr);
+                added++;
+            }
+            return added;
+        }
+
+        static bool IsGeneratedInfrastructure(GameObject go)
+        {
+            if (go == null) return true;
+            return go.GetComponent<FigForgeFrame>() != null
+                || go.GetComponent<FigForgeScreen>() != null
+                || go.GetComponent<FigForgeImportStamp>() != null
+                || go.GetComponent<FigForgePageCompositor>() != null;
+        }
+
+        static bool IsAccessorControlRoot(GameObject go)
+        {
+            if (go == null) return false;
+            return go.GetComponent<Selectable>() != null
+                || go.GetComponent<FigForgeProgress>() != null
+                || go.GetComponent<FigForgeStepper>() != null
+                || go.GetComponent<FigForgeList>() != null
+                || go.GetComponent<FigForgeTable>() != null
+                || go.GetComponent<FigForgeModal>() != null
+                || go.GetComponent<FigForgeToastHost>() != null;
+        }
+
+        static bool TryGetUnityCustomizationType(GameObject go, out string csharpType, out bool isControlRoot)
+        {
+            csharpType = null;
+            isControlRoot = false;
+            if (go == null) return false;
+
+            if (go.GetComponent<FigForgeButton>() != null) { csharpType = "FigForge.FigForgeButton"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeSwitch>() != null) { csharpType = "FigForge.FigForgeSwitch"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeToggle>() != null) { csharpType = "FigForge.FigForgeToggle"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeDropdown>() != null) { csharpType = "FigForge.FigForgeDropdown"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeInputField>() != null) { csharpType = "FigForge.FigForgeInputField"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeStepper>() != null) { csharpType = "FigForge.FigForgeStepper"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeSlider>() != null) { csharpType = "FigForge.FigForgeSlider"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeProgress>() != null) { csharpType = "FigForge.FigForgeProgress"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeList>() != null) { csharpType = "FigForge.FigForgeList"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeTable>() != null) { csharpType = "FigForge.FigForgeTable"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeModal>() != null) { csharpType = "FigForge.FigForgeModal"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeToastHost>() != null) { csharpType = "FigForge.FigForgeToastHost"; isControlRoot = true; return true; }
+
+            if (go.GetComponent<Button>() != null) { csharpType = "UnityEngine.UI.Button"; isControlRoot = true; return true; }
+            if (go.GetComponent<Toggle>() != null) { csharpType = "UnityEngine.UI.Toggle"; isControlRoot = true; return true; }
+            if (go.GetComponent<TMP_Dropdown>() != null) { csharpType = "TMPro.TMP_Dropdown"; isControlRoot = true; return true; }
+            if (go.GetComponent<TMP_InputField>() != null) { csharpType = "TMPro.TMP_InputField"; isControlRoot = true; return true; }
+            if (go.GetComponent<Slider>() != null) { csharpType = "UnityEngine.UI.Slider"; isControlRoot = true; return true; }
+            if (go.GetComponent<Scrollbar>() != null) { csharpType = "UnityEngine.UI.Scrollbar"; isControlRoot = true; return true; }
+
+            return false;
+        }
+
+        static bool IsDescendantOfAny(Transform tr, List<Transform> roots)
+        {
+            if (tr == null || roots == null || roots.Count == 0) return false;
+            for (int i = 0; i < roots.Count; i++)
+            {
+                var root = roots[i];
+                if (root != null && tr != root && tr.IsChildOf(root)) return true;
+            }
+            return false;
+        }
+
+        static string UniqueIdentifier(string desired, HashSet<string> taken)
+        {
+            if (string.IsNullOrEmpty(desired)) desired = "_";
+            bool escaped = desired.StartsWith("@");
+            string stem = desired.TrimStart('@');
+            string candidate = desired;
+            string key = stem;
+            int suffix = 2;
+            while (taken.Contains(key))
+            {
+                candidate = (escaped ? "@" : "") + stem + suffix++;
+                key = candidate.TrimStart('@');
+            }
+            taken.Add(key);
+            return candidate;
         }
 
         static void StretchToParent(GameObject go)
@@ -819,7 +967,7 @@ namespace FigForge
             SceneView.RepaintAll();
         }
 
-        void BuildPageProject(string projectPath)
+        void BuildPageProject(string projectPath, bool includeUnityCustomizations = false)
         {
             _log.Clear();
             FontAutoImporter.ClearCache();
@@ -857,23 +1005,39 @@ namespace FigForge
                 mgr.shell = null;
                 RemoveStaleImported(canvas.transform, proj.name, new HashSet<string>(loaded.Select(s => s.importKey)));
 
-                // 1. Persistent Shell (optional) — built once; screens mount into its Content slot.
-                Transform shellContent = null;
-                string shellSection = null;
-                int idx = loaded.FindIndex(ls => FrameRoles.IsShell(ls.ps.role));
-                if (idx >= 0)
+                // 1. Persistent Shells (optional) — one per Section. Screens in the
+                // same Section mount into that shell's Content slot. Shell frames are
+                // registered too, so they can be shown directly like any other frame.
+                var shellContentBySection = new Dictionary<string, Transform>();
+                int shellCount = 0;
+                for (int i = 0; i < loaded.Count; i++)
                 {
-                    var sh = loaded[idx];
-                    EditorUtility.DisplayProgressBar("FigForge", $"Building shell {sh.m.screen.name}…", 0.1f);
+                    if (!FrameRoles.IsShell(loaded[i].ps.role)) continue;
+                    var sh = loaded[i];
+                    string shellKey = sh.ps.section ?? "";
+                    EditorUtility.DisplayProgressBar("FigForge", $"Building shell {sh.m.screen.name}…", (float)i / loaded.Count);
                     var shSprites = TextureImportHelper.Import(sh.m, sh.srcDir, $"{_spriteFolder}/{SafeName(sh.m.screen.name)}", _tex);
-                    var shellGo = ReuseOrBuildScreen(sh, proj.name, canvas.transform, shSprites, false, out _);
-                    if (shellGo != null)
+                    var shellGo = ReuseOrBuildScreen(sh, proj.name, canvas.transform, shSprites, false, out var shellCtx);
+                    if (shellGo == null) continue;
+
+                    var shellFrame = shellGo.GetComponent<FigForgeFrame>() ?? shellGo.AddComponent<FigForgeFrame>();
+                    shellFrame.isShell = true;
+                    shellFrame.usesShell = false;
+                    shellFrame.shellKey = shellKey;
+                    GenerateAndWireFrame(shellGo, sh.m, shellCtx, shellFrame, sh.ps.section, includeUnityCustomizations);
+                    FigForgeFrameSceneTools.RefreshCompositors(shellGo);
+                    mgr.Register(shellFrame);
+                    shellCount++;
+
+                    if (string.IsNullOrEmpty(shellKey)) continue;
+                    if (shellContentBySection.ContainsKey(shellKey))
                     {
-                        mgr.shell = shellGo;
-                        shellSection = sh.ps.section ?? "";
-                        shellContent = FindContentSlot(shellGo);
-                        if (shellContent == null) { Log("Shell has no 'Content' slot — screens mount at shell root.", MessageType.Warning); shellContent = shellGo.transform; }
+                        Log($"multiple Shell frames in Section '{shellKey}' — screens will use the first one.", MessageType.Warning);
+                        continue;
                     }
+                    var shellContent = FindContentSlot(shellGo);
+                    if (shellContent == null) { Log($"Shell '{sh.m.screen.name}' has no 'Content' slot — screens mount at shell root.", MessageType.Warning); shellContent = shellGo.transform; }
+                    shellContentBySection[shellKey] = shellContent;
                 }
 
                 // 2. Screens.
@@ -884,15 +1048,17 @@ namespace FigForge
                     var m = loaded[i].m;
                     EditorUtility.DisplayProgressBar("FigForge", $"Building {m.screen.name}…", (float)i / loaded.Count);
                     var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
-                    bool usesShell = shellContent != null && !string.IsNullOrEmpty(shellSection) && loaded[i].ps.section == shellSection;
-                    var parent = usesShell ? shellContent : canvas.transform;
-                    var page = ReuseOrBuildScreen(loaded[i], proj.name, parent, sprites, usesShell, out var frameCtx);
+                    string shellKey = loaded[i].ps.section ?? "";
+                    bool usesShell = !string.IsNullOrEmpty(shellKey) && shellContentBySection.ContainsKey(shellKey);
+                    var page = ReuseOrBuildScreen(loaded[i], proj.name, canvas.transform, sprites, false, out var frameCtx);
                     if (page == null) continue;
                     var bs = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
+                    bs.isShell = false;
                     bs.usesShell = usesShell;
-                    GenerateAndWireFrame(page, m, frameCtx, bs, loaded[i].ps.section);
+                    bs.shellKey = usesShell ? shellKey : "";
+                    GenerateAndWireFrame(page, m, frameCtx, bs, loaded[i].ps.section, includeUnityCustomizations);
+                    FigForgeFrameSceneTools.RefreshCompositors(page);
                     mgr.Register(bs);
-                    if (!usesShell) SpreadFrame(page, built, m, mgr.editorColumns); // editor design grid (runtime Show fills)
                     built++;
                 }
 
@@ -902,7 +1068,6 @@ namespace FigForge
                 // Editor convenience: keep every imported frame visible/editable.
                 // Runtime Start() still switches to one active frame via Show().
                 foreach (var s in mgr.screens) if (s != null) s.gameObject.SetActive(true);
-                if (mgr.shell != null) mgr.shell.SetActive(true);
                 FigForgeFrameSceneTools.ArrangeRootFrames(canvas.GetComponent<FigForgeCanvasHelper>(), false);
                 WarmUpImportedFrames(mgr);
 
@@ -916,7 +1081,9 @@ namespace FigForge
                 EditorUtility.SetDirty(mgr);
                 UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(
                     UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene());
-                Log($"built page '{proj.name}' — {built} screen(s){(mgr.shell != null ? " + shell" : "")}, initial '{proj.initial}' ✓", MessageType.Info);
+                var shellSummary = shellCount > 0 ? " + " + shellCount + " shell(s)" : "";
+                var customizationSummary = includeUnityCustomizations ? " with Unity customizations" : "";
+                Log($"built page '{proj.name}'{customizationSummary} — {built} screen(s){shellSummary}, initial '{proj.initial}' ✓", MessageType.Info);
             }
             catch (System.Exception e) { Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); }
             finally { EditorUtility.ClearProgressBar(); AssetDatabase.SaveAssets(); }

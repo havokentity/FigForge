@@ -5,8 +5,9 @@
 //
 //   1. Capture: render the page through its own camera (FigForgePageCapture)
 //      with every graphic at-or-above the layer in paint order culled, so the
-//      backdrop contains exactly what Figma blends against — foreign uGUI
-//      (TMP text, plain Images) included, content above the layer excluded.
+//      backdrop contains exactly what Figma blends against inside this page
+//      — foreign uGUI (TMP text, plain Images) included, sibling frames and
+//      content above the layer excluded.
 //   2. Blend:   one blit per layer (FigForge/Composite) sampling the layer's
 //      cached premultiplied surface against the capture at its screen rect,
 //      producing a premultiplied blended texture (coverage in alpha).
@@ -48,6 +49,7 @@ namespace FigForge
         readonly List<IFigForgeCompositorSource> _orphanScratch = new List<IFigForgeCompositorSource>();
         readonly List<IFigForgeCompositorSource> _retargetScratch = new List<IFigForgeCompositorSource>();
         readonly List<Graphic> _canvasGraphics = new List<Graphic>();
+        readonly List<Graphic> _rootCanvasGraphics = new List<Graphic>();
         readonly List<CanvasRenderer> _culled = new List<CanvasRenderer>();
 
         // Auto-detect runtime changes to foreign graphics (plain Images, TMP text)
@@ -296,6 +298,7 @@ namespace FigForge
                 }
 
                 CullAtOrAbove(layer);
+                var restorePose = BeginEditorCapturePose(cam);
 #if UNITY_EDITOR
                 DebugRebuildLog?.Invoke("layer=" + ((Component)layer).name
                     + " dirty=" + _debugDirtySource
@@ -303,8 +306,19 @@ namespace FigForge
                     + " surface=" + surface.width + "x" + surface.height
                     + " target=" + target.GetInstanceID() + ":" + target.width + "x" + target.height);
 #endif
-                var capture = FigForgePageCapture.CaptureTemporary(cam);
-                RestoreCulled();
+                RenderTexture capture = null;
+                Vector4 backdropRect = default;
+                try
+                {
+                    backdropRect = BackdropRect(layer, cam);
+                    capture = FigForgePageCapture.CaptureTemporary(cam);
+                }
+                finally
+                {
+                    EndEditorCapturePose(restorePose);
+                    RestoreCulled();
+                    if (restorePose.moved) Canvas.ForceUpdateCanvases();
+                }
                 if (capture == null)
                 {
                     // Without a capture the layer's blended target is left unwritten —
@@ -320,7 +334,6 @@ namespace FigForge
                 }
                 _warnedCaptureFailed = false;
 
-                var backdropRect = BackdropRect(layer, cam);
                 _compositeMaterial.SetTexture("_Backdrop", capture);
                 _compositeMaterial.SetVector("_BackdropRect", backdropRect);
                 _compositeMaterial.SetVector("_BackdropSize", new Vector4(capture.width, capture.height, 0f, 0f));
@@ -528,30 +541,76 @@ namespace FigForge
             return new Vector4(min.x, min.y, Mathf.Max(1f, max.x - min.x), Mathf.Max(1f, max.y - min.y));
         }
 
+        struct CapturePose
+        {
+            public bool moved;
+            public RectTransform rectTransform;
+            public Vector3 anchoredPosition;
+        }
+
+        CapturePose BeginEditorCapturePose(Camera cam)
+        {
+            var pose = new CapturePose { moved = false, rectTransform = transform as RectTransform };
+            if (Application.isPlaying || cam == null) return pose;
+
+            var rt = pose.rectTransform;
+            if (rt == null) return pose;
+            pose.anchoredPosition = rt.anchoredPosition3D;
+            rt.anchoredPosition3D = new Vector3(0f, 0f, pose.anchoredPosition.z);
+            pose.moved = true;
+            Canvas.ForceUpdateCanvases();
+            return pose;
+        }
+
+        void EndEditorCapturePose(CapturePose pose)
+        {
+            if (!pose.moved || pose.rectTransform == null) return;
+            pose.rectTransform.anchoredPosition3D = pose.anchoredPosition;
+        }
+
         // ---- Capture visibility ------------------------------------------------
 
         void CollectCanvasGraphics()
         {
             _canvasGraphics.Clear();
-            var canvas = ParentCanvas();
-            var root = canvas != null ? (canvas.rootCanvas != null ? canvas.rootCanvas : canvas) : null;
-            if (root == null) return;
-            root.GetComponentsInChildren(false, _canvasGraphics);
+            GetComponentsInChildren(false, _canvasGraphics);
         }
 
-        // Cull every graphic at-or-above the layer in paint order: the backdrop must
-        // contain only what's BELOW it (Figma semantics). Lower Tier-2 layers' quads
-        // stay visible so stacked blends chain. Renderers already culled (RectMask2D
-        // fast-cull) are left alone and excluded from restore.
+        // Cull every graphic outside this page root, then every in-page graphic
+        // at-or-above the layer in paint order: the backdrop must contain only
+        // what's BELOW it inside the exported Figma frame. This matters in edit
+        // mode, where FigForge rolls out many imported frames as visible siblings
+        // on one Unity canvas. Lower Tier-2 layers' quads stay visible so stacked
+        // blends chain. Renderers already culled (RectMask2D fast-cull) are left
+        // alone and excluded from restore.
         void CullAtOrAbove(IFigForgeCompositorSource layer)
         {
             _culled.Clear();
             var pivot = layer.transform;
+            CullExternalCanvasGraphics();
             for (int i = 0; i < _canvasGraphics.Count; i++)
             {
                 var g = _canvasGraphics[i];
                 if (g == null) continue;
                 if (CompareTransforms(g.transform, pivot) < 0) continue;
+                var cr = g.canvasRenderer;
+                if (cr == null || cr.cull) continue;
+                cr.cull = true;
+                _culled.Add(cr);
+            }
+        }
+
+        void CullExternalCanvasGraphics()
+        {
+            _rootCanvasGraphics.Clear();
+            var canvas = ParentCanvas();
+            var root = canvas != null ? (canvas.rootCanvas != null ? canvas.rootCanvas : canvas) : null;
+            if (root == null) return;
+            root.GetComponentsInChildren(false, _rootCanvasGraphics);
+            for (int i = 0; i < _rootCanvasGraphics.Count; i++)
+            {
+                var g = _rootCanvasGraphics[i];
+                if (g == null || g.transform.IsChildOf(transform)) continue;
                 var cr = g.canvasRenderer;
                 if (cr == null || cr.cull) continue;
                 cr.cull = true;

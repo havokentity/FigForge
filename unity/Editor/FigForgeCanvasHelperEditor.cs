@@ -51,7 +51,7 @@ namespace FigForge
             {
                 var frame = frames[i];
                 if (frame == null) continue;
-                if (GUILayout.Button(frame.ScreenKey, GUILayout.Height(28)))
+                if (GUILayout.Button(FigForgeFrameSceneTools.FocusLabel(frame, frames), GUILayout.Height(28)))
                     FigForgeFrameSceneTools.FocusFrame(frame);
             }
             GUI.backgroundColor = oldColor;
@@ -97,10 +97,7 @@ namespace FigForge
             var manager = helper.GetComponent<FrameManager>();
             if (manager != null && manager.screens != null && manager.screens.Count > 0)
             {
-                for (int i = 0; i < manager.screens.Count; i++)
-                    if (manager.screens[i] != null)
-                        result.Add(manager.screens[i]);
-                return result;
+                return OrderedFrames(manager.screens);
             }
 
             var canvas = helper.GetComponent<Canvas>();
@@ -113,6 +110,73 @@ namespace FigForge
                     result.Add(frame);
             }
             return result;
+        }
+
+        internal static string FocusLabel(FigForgeFrame frame, List<FigForgeFrame> frames)
+        {
+            if (frame == null) return "";
+            if (!frame.usesShell) return frame.ScreenKey;
+            var shell = FindShellFor(frame, frames);
+            string shellName = shell != null ? shell.ScreenKey : HumanizeShellKey(frame.shellKey);
+            return string.IsNullOrEmpty(shellName) ? frame.ScreenKey : shellName + " -> " + frame.ScreenKey;
+        }
+
+        static List<FigForgeFrame> OrderedFrames(List<FigForgeFrame> frames)
+        {
+            var ordered = new List<FigForgeFrame>();
+            var added = new HashSet<FigForgeFrame>();
+            for (int i = 0; i < frames.Count; i++)
+            {
+                var frame = frames[i];
+                if (frame == null || added.Contains(frame)) continue;
+                if (frame.isShell)
+                {
+                    AddFrame(ordered, added, frame);
+                    for (int c = 0; c < frames.Count; c++)
+                    {
+                        var child = frames[c];
+                        if (child != null && child.usesShell && child.shellKey == frame.shellKey)
+                            AddFrame(ordered, added, child);
+                    }
+                }
+                else if (!frame.usesShell)
+                {
+                    AddFrame(ordered, added, frame);
+                }
+            }
+            for (int i = 0; i < frames.Count; i++)
+                AddFrame(ordered, added, frames[i]);
+            return ordered;
+        }
+
+        static void AddFrame(List<FigForgeFrame> ordered, HashSet<FigForgeFrame> added, FigForgeFrame frame)
+        {
+            if (frame == null || !added.Add(frame)) return;
+            ordered.Add(frame);
+        }
+
+        static FigForgeFrame FindShellFor(FigForgeFrame frame, List<FigForgeFrame> frames)
+        {
+            if (frame == null || frames == null || string.IsNullOrEmpty(frame.shellKey)) return null;
+            for (int i = 0; i < frames.Count; i++)
+            {
+                var shell = frames[i];
+                if (shell != null && shell.isShell && shell.shellKey == frame.shellKey)
+                    return shell;
+            }
+            return null;
+        }
+
+        static string HumanizeShellKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return "";
+            var parts = key.Split('_');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (string.IsNullOrEmpty(parts[i])) continue;
+                parts[i] = char.ToUpperInvariant(parts[i][0]) + (parts[i].Length > 1 ? parts[i].Substring(1) : "");
+            }
+            return string.Join(" ", parts);
         }
 
         internal static FigForgeCanvasHelper EnsureHelper(FrameManager manager)
@@ -142,7 +206,7 @@ namespace FigForge
             for (int i = 0; i < frames.Count; i++)
             {
                 var frame = frames[i];
-                if (frame == null || frame.usesShell) continue;
+                if (frame == null) continue;
                 var rt = frame.GetComponent<RectTransform>();
                 if (rt != null) arrangeable.Add(rt);
             }
@@ -173,6 +237,7 @@ namespace FigForge
                 rt.anchoredPosition = new Vector2(col * (cellWidth + gap), -row * (cellHeight + gap));
                 EditorUtility.SetDirty(rt);
                 EditorUtility.SetDirty(rt.gameObject);
+                RefreshCompositors(rt.gameObject);
             }
 
             if (manager != null) EditorUtility.SetDirty(manager);
@@ -184,6 +249,7 @@ namespace FigForge
         static void RefreshEditorLayout(FigForgeCanvasHelper helper, List<RectTransform> roots)
         {
             ForceLayoutAndGraphics(helper, roots);
+            RefreshCompositors(roots);
             EditorApplication.QueuePlayerLoopUpdate();
             SceneView.RepaintAll();
             UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
@@ -192,10 +258,45 @@ namespace FigForge
             {
                 if (helper == null) return;
                 ForceLayoutAndGraphics(helper, roots);
+                RefreshCompositors(roots);
                 EditorApplication.QueuePlayerLoopUpdate();
                 SceneView.RepaintAll();
                 UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
             };
+        }
+
+        internal static void RefreshCompositors(List<RectTransform> roots)
+        {
+            if (roots == null) return;
+            for (int i = 0; i < roots.Count; i++)
+                if (roots[i] != null)
+                    RefreshCompositors(roots[i].gameObject);
+        }
+
+        internal static void RefreshCompositors(GameObject root)
+        {
+            if (root == null) return;
+            var sources = root.GetComponentsInChildren<IFigForgeCompositorSource>(true);
+            for (int i = 0; i < sources.Length; i++)
+            {
+                var source = sources[i];
+                if (source == null) continue;
+                source.RebindPageCompositor();
+                var component = source as Component;
+                var graphic = component != null ? component.GetComponent<Graphic>() : null;
+                if (graphic == null) continue;
+                graphic.SetVerticesDirty();
+                graphic.SetMaterialDirty();
+                EditorUtility.SetDirty(graphic);
+            }
+
+            var compositors = root.GetComponentsInChildren<FigForgePageCompositor>(true);
+            for (int i = 0; i < compositors.Length; i++)
+            {
+                if (compositors[i] == null) continue;
+                compositors[i].MarkDirty();
+                EditorUtility.SetDirty(compositors[i]);
+            }
         }
 
         static void ForceLayoutAndGraphics(FigForgeCanvasHelper helper, List<RectTransform> roots)

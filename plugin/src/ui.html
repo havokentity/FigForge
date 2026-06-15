@@ -145,6 +145,20 @@
     justify-content: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding-left: 6px; padding-right: 6px;
   }
+  .create-grid .component-chip {
+    flex-direction: column; gap: 2px; min-height: 42px; line-height: 1;
+    padding-top: 5px; padding-bottom: 5px;
+  }
+  .component-chip .chip-icon {
+    width: 17px; height: 17px; display: inline-grid; place-items: center;
+    border: 1px solid color-mix(in srgb, currentColor 50%, transparent);
+    border-radius: 4px; color: var(--text);
+    font-size: 10px; font-weight: 700; line-height: 1;
+  }
+  .component-chip:hover .chip-icon { color: #fff; border-color: var(--brand); background: color-mix(in srgb, var(--brand) 30%, transparent); }
+  .component-chip .chip-label {
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .create-settings {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-start;
   }
@@ -204,7 +218,17 @@
     width: 64px; background: var(--bg); border: 1px solid var(--border);
     border-radius: 4px; color: var(--text); padding: 1px 4px; min-height: 16px;
   }
+  .list-pop-row input[type="text"] {
+    width: 108px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); padding: 2px 5px; min-height: 20px;
+  }
+  .list-pop-row select {
+    width: 88px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); padding: 2px 5px; min-height: 20px;
+  }
   .list-pop-row input[type="number"]:focus { outline: none; border-color: var(--brand); }
+  .list-pop-row input[type="text"]:focus { outline: none; border-color: var(--brand); }
+  .list-pop-row select:focus { outline: none; border-color: var(--brand); }
   .list-pop-create {
     margin-top: 8px; padding: 6px 10px; cursor: pointer;
     background: var(--brand); color: #fff; font-weight: 600;
@@ -416,17 +440,28 @@
             <span class="toolbar-label">Create canonical</span>
           </div>
           <div class="create-grid">
-            <button class="chip" id="createBtnBtn" title="Create a canonical Button component on the FigForge Components page">＋ Button</button>
-            <button class="chip" id="createToggleBtn" title="Create a canonical Toggle (on/off switch) component">＋ Toggle</button>
-            <button class="chip" id="createSwitchBtn" title="Create a canonical iOS-style Switch component">＋ Switch</button>
-            <button class="chip" id="createRadioBtn" title="Create a canonical Radio button component (group related radios under one frame/group)">＋ Radio</button>
-            <button class="chip" id="createInputBtn" title="Create a canonical InputField component">＋ Input</button>
-            <button class="chip" id="createStepperBtn" title="Create a canonical numeric Stepper component">＋ Stepper</button>
-            <button class="chip" id="createDropdownBtn" title="Create a canonical Dropdown component">＋ Dropdown</button>
-            <button class="chip" id="createSliderBtn" title="Create a canonical Slider component — resize the master's Fill width to set the initial value">＋ Slider</button>
-            <button class="chip" id="createProgressBtn" title="Create a canonical Progress bar component — a Slider with no thumb and no input; resize the master's Fill width to set the initial value">＋ Progress</button>
-            <button class="chip" id="createListBtn" title="Create a canonical scrollable List component — click to pick which parts the list has">＋ List</button>
-            <button class="chip" id="createTableBtn" title="Create a canonical scrollable Table component — click to pick rows × columns">＋ Table</button>
+            <button class="chip component-chip" id="createBtnBtn" title="Create a canonical Button component on the FigForge Components page"><span class="chip-icon" aria-hidden="true">▭</span><span class="chip-label">Button</span></button>
+            <button class="chip component-chip" id="createToggleBtn" title="Create a canonical Toggle (on/off switch) component"><span class="chip-icon" aria-hidden="true">☑</span><span class="chip-label">Toggle</span></button>
+            <button class="chip component-chip" id="createSwitchBtn" title="Create a canonical iOS-style Switch component"><span class="chip-icon" aria-hidden="true">◐</span><span class="chip-label">Switch</span></button>
+            <button class="chip component-chip" id="createRadioBtn" title="Create a canonical Radio button component (group related radios under one frame/group)"><span class="chip-icon" aria-hidden="true">◉</span><span class="chip-label">Radio</span></button>
+            <button class="chip component-chip" id="createInputBtn" title="Create a canonical InputField component"><span class="chip-icon" aria-hidden="true">T</span><span class="chip-label">Input</span></button>
+            <button class="chip component-chip" id="createStepperBtn" title="Create a canonical numeric Stepper component — click to pick horizontal or vertical"><span class="chip-icon" aria-hidden="true">±</span><span class="chip-label">Stepper</span></button>
+            <button class="chip component-chip" id="createDropdownBtn" title="Create a canonical Dropdown component"><span class="chip-icon" aria-hidden="true">▾</span><span class="chip-label">Dropdown</span></button>
+            <button class="chip component-chip" id="createSliderBtn" title="Create a canonical Slider component — resize the master's Fill width to set the initial value"><span class="chip-icon" aria-hidden="true">━</span><span class="chip-label">Slider</span></button>
+            <button class="chip component-chip" id="createProgressBtn" title="Create a canonical Progress bar component — a Slider with no thumb and no input; resize the master's Fill width to set the initial value"><span class="chip-icon" aria-hidden="true">◔</span><span class="chip-label">Progress</span></button>
+            <button class="chip component-chip" id="createListBtn" title="Create a canonical scrollable List component — click to pick which parts the list has"><span class="chip-icon" aria-hidden="true">☰</span><span class="chip-label">List</span></button>
+            <button class="chip component-chip" id="createTableBtn" title="Create a canonical scrollable Table component — click to pick rows × columns"><span class="chip-icon" aria-hidden="true">▦</span><span class="chip-label">Table</span></button>
+            <button class="chip component-chip" id="createModalBtn" title="Create a canonical Dialog/Modal component with backdrop, panel, title, body, actions, and close button"><span class="chip-icon" aria-hidden="true">□</span><span class="chip-label">Dialog</span></button>
+            <button class="chip component-chip" id="createToastBtn" title="Create a canonical Toast host/template component for Toasts.Success(...) and related runtime calls"><span class="chip-icon" aria-hidden="true">!</span><span class="chip-label">Toast</span></button>
+            <button class="chip component-chip" id="createShellBtn" title="Create a Section with Shell, Content slot, four sample screens, and nav buttons"><span class="chip-icon" aria-hidden="true">⌂</span><span class="chip-label">Shell</span></button>
+          </div>
+          <!-- Stepper options popover — floats under the ＋Stepper chip; orientations
+               become separate masters (Stepper, Stepper Vertical). -->
+          <div class="list-pop" id="stepperOpts" hidden>
+            <div class="list-pop-title">Stepper options</div>
+            <label class="list-pop-row" title="Minus, value, and plus arranged left-to-right"><input type="radio" name="stepperOrientation" id="stepperOptHorizontal" value="horizontal" checked /><span>Horizontal</span></label>
+            <label class="list-pop-row" title="Plus, value, and minus arranged top-to-bottom"><input type="radio" name="stepperOrientation" id="stepperOptVertical" value="vertical" /><span>Vertical</span></label>
+            <button class="list-pop-create" id="stepperOptsCreate" title="Create this Stepper variant">＋ Add Stepper</button>
           </div>
           <!-- List variants popover — floats under the ＋List chip; combinations become
                separate masters (List, List NoHeader, List NoIcon NoSubtitle, …). -->
@@ -472,6 +507,17 @@
             <label class="list-pop-row" title="Include the column-title strip pinned above the scrolling rows"><input type="checkbox" id="tableOptHeader" checked /><span>Header row</span></label>
             <label class="list-pop-row" title="Scrollbar thickness in px (non-default widths become their own master, e.g. 'Table SB14')"><span>Scrollbar width</span><input type="number" id="tableOptSbWidth" value="10" min="2" max="40" /></label>
             <button class="list-pop-create" id="tableOptsCreate" title="Create this Table variant">＋ Add Table</button>
+          </div>
+          <!-- Shell scaffold popover — creates a page Section containing a persistent
+               Shell frame, a Content mount slot, four sample screens, and nav buttons. -->
+          <div class="list-pop" id="shellOpts" hidden>
+            <div class="list-pop-title">Shell layout</div>
+            <label class="list-pop-row" title="Section and Shell frame name"><span>Shell name</span><input type="text" id="shellOptName" value="App Shell" /></label>
+            <label class="list-pop-row" title="Generated Shell frame width in Figma pixels"><span>Width</span><input type="number" id="shellOptWidth" value="1920" min="320" max="10000" /></label>
+            <label class="list-pop-row" title="Generated Shell frame height in Figma pixels"><span>Height</span><input type="number" id="shellOptHeight" value="1080" min="240" max="10000" /></label>
+            <label class="list-pop-row" title="Where the four sample nav buttons are placed in the Shell"><span>Menu</span><select id="shellOptNav"><option value="left" selected>Left</option><option value="top">Top</option><option value="right">Right</option><option value="bottom">Bottom</option></select></label>
+            <label class="list-pop-row" title="Where the sample header strip is placed in the Shell"><span>Header</span><select id="shellOptHeader"><option value="top" selected>Top</option><option value="left">Left</option><option value="right">Right</option><option value="bottom">Bottom</option></select></label>
+            <button class="list-pop-create" id="shellOptsCreate" title="Create this Shell scaffold">＋ Add Shell</button>
           </div>
         </div>
         <div class="create-settings">

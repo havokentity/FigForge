@@ -35,10 +35,108 @@ export const saveScreenshotsInput = {
   scale: z.number().min(0.25).max(4).default(2),
 };
 
+export const exportScale = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('scale'), value: z.number().min(0.25).max(4) }),
+  z.object({ type: z.literal('width'), value: z.number().min(1) }),
+  z.object({ type: z.literal('height'), value: z.number().min(1) }),
+]);
+
+export const exportOptions = z
+  .object({
+    autoMerge: z.boolean().optional(),
+    rasterizeStrokes: z.boolean().optional(),
+    emitGradients: z.boolean().optional(),
+    emitImageFills: z.boolean().optional(),
+    fontFaceDilate: z.number().min(0).max(1).optional(),
+  })
+  .describe('Exporter options; omitted fields use the plugin panel defaults/current values.');
+
+export const elementConfig = z.object({
+  id: figmaNodeId,
+  excluded: z.boolean().optional(),
+  merged: z.boolean().optional(),
+  rasterize: z.boolean().optional(),
+});
+
 export const exportUnityInput = {
   nodeId: figmaNodeId.describe('The frame node id to export'),
   outDir: z
     .string()
     .min(1)
     .describe('Output directory (relative to the bridge cwd) for manifest.json + PNGs'),
+  scale: exportScale.optional().describe('Unity export scale. Defaults to the plugin panel scale.'),
+  options: exportOptions.optional(),
+  elementConfigs: z
+    .array(elementConfig)
+    .optional()
+    .describe('Per-node export overrides matching the plugin panel toggles: excluded, merged, and rasterize.'),
+};
+
+export const listFramesInput = {
+  currentPageOnly: z.boolean().default(true).describe('When true, list only the current Figma page.'),
+  includeHidden: z.boolean().default(false).describe('Include hidden frames/screens.'),
+};
+
+export const nodeDetailsInput = {
+  nodeId: figmaNodeId.describe('Node id to inspect'),
+};
+
+export const exportProjectUnityInput = {
+  outDir: z
+    .string()
+    .min(1)
+    .describe('Output directory (relative to the bridge cwd) for project.json, per-screen manifests, and PNGs'),
+  scale: exportScale.optional().describe('Unity export scale. Defaults to the plugin panel scale.'),
+  options: exportOptions.optional(),
+  elementConfigs: z
+    .array(elementConfig)
+    .optional()
+    .describe('Per-node export overrides matching the plugin panel toggles: excluded, merged, and rasterize.'),
+};
+
+export const validateManifestContractInput = {
+  manifest: z.unknown().optional().describe('A FigForge manifest object, if already parsed.'),
+  manifestJson: z.string().optional().describe('A FigForge manifest JSON string.'),
+  project: z.unknown().optional().describe('A FigForge project.json object, if already parsed.'),
+  projectJson: z.string().optional().describe('A FigForge project.json JSON string.'),
+};
+
+export const canonicalKind = z.enum([
+  'button',
+  'toggle',
+  'radio',
+  'switch',
+  'input',
+  'stepper',
+  'dropdown',
+  'slider',
+  'progress',
+  'list',
+  'table',
+  'modal',
+  'toast',
+]);
+
+export const createCanonicalInput = {
+  kind: canonicalKind.describe('Canonical control kind to scaffold.'),
+  componentsPage: z.boolean().default(true).describe('Place/reuse masters on the FigForge Components page.'),
+  listOpts: z.record(z.unknown()).optional().describe('List creator options, matching the plugin UI.'),
+  sliderOpts: z.record(z.unknown()).optional().describe('Slider creator options, matching the plugin UI.'),
+  tableOpts: z.record(z.unknown()).optional().describe('Table creator options, matching the plugin UI.'),
+  progressOpts: z.record(z.unknown()).optional().describe('Progress creator options, matching the plugin UI.'),
+  stepperOpts: z.record(z.unknown()).optional().describe('Stepper creator options, matching the plugin UI. Supports orientation: horizontal | vertical.'),
+};
+
+export const createShellInput = {
+  componentsPage: z.boolean().default(true).describe('Place/reuse canonical masters on the FigForge Components page.'),
+  shellOpts: z
+    .object({
+      name: z.string().optional(),
+      nav: z.enum(['left', 'top', 'right', 'bottom']).optional(),
+      header: z.enum(['left', 'top', 'right', 'bottom']).optional(),
+      width: z.number().min(320).max(10000).optional(),
+      height: z.number().min(240).max(10000).optional(),
+    })
+    .optional()
+    .describe('Shell scaffold options, matching the plugin UI.'),
 };

@@ -206,6 +206,10 @@ namespace FigForge
                         el = $"<ui:ProgressBar name=\"{name}\" title=\"{label}\" low-value=\"{F(lo)}\" high-value=\"{F(hi)}\"{(float.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out var pv) ? $" value=\"{F(Mathf.Clamp(pv, lo, hi))}\"" : "")} class=\"{classes}\" />";
                         break;
                     }
+                    case "modal":
+                    case "toast":
+                        el = $"<ui:VisualElement name=\"{name}\" class=\"{classes}\" />";
+                        break;
                     default:
                         el = $"<ui:Button name=\"{name}\" text=\"{label}\" class=\"{classes}\" />";
                         break;

@@ -15,7 +15,7 @@ import {
   type ExportScale,
 } from './types';
 import { bytesToBase64 } from './base64';
-import { buildTree, detectCanonical } from './traverser';
+import { buildTree, canMerge, detectCanonical, isExportable } from './traverser';
 import { exportDesign } from './exporter';
 import { sanitize } from './naming';
 
@@ -248,11 +248,26 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
           (msg as { listOpts?: Partial<ListOptions> }).listOpts,
           (msg as { sliderOpts?: Partial<SliderOptions> }).sliderOpts,
           (msg as { tableOpts?: Partial<TableOptions> }).tableOpts,
-          (msg as { progressOpts?: Partial<ProgressOptions> }).progressOpts);
+          (msg as { progressOpts?: Partial<ProgressOptions> }).progressOpts,
+          (msg as { stepperOpts?: Partial<StepperOptions> }).stepperOpts);
         const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
         figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group related radios together).` });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create failed: ' + String((e as Error)?.message || e) });
+      }
+      break;
+    }
+
+    case 'create-shell': {
+      try {
+        useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
+        const result = await createShellScaffold((msg as { shellOpts?: Partial<ShellOptions> }).shellOpts);
+        figma.ui.postMessage({
+          type: 'status',
+          message: `Shell scaffold created: ${result.section.name} with ${result.screens.length} sample screens. Export Page or Send Page to Unity to build it as a connected shell.`,
+        });
+      } catch (e) {
+        figma.ui.postMessage({ type: 'export-error', message: 'Create shell failed: ' + String((e as Error)?.message || e) });
       }
       break;
     }
@@ -277,6 +292,23 @@ function applyConfigs(configs: ElementConfig[] | undefined) {
     if (c.rasterize) forcedPng.add(c.id);
     else forcedPng.delete(c.id);
   }
+}
+
+function exportSetsWithConfigs(configs: ElementConfig[] | undefined) {
+  const nextExcluded = new Set(excluded);
+  const nextMerged = new Set(merged);
+  const nextForcedPng = new Set(forcedPng);
+  if (configs) {
+    for (const c of configs) {
+      if (c.excluded) nextExcluded.add(c.id);
+      else nextExcluded.delete(c.id);
+      if (c.merged) nextMerged.add(c.id);
+      else nextMerged.delete(c.id);
+      if (c.rasterize) nextForcedPng.add(c.id);
+      else nextForcedPng.delete(c.id);
+    }
+  }
+  return { excluded: nextExcluded, merged: nextMerged, forcedPng: nextForcedPng };
 }
 
 async function sendPreview(nodeId: string) {
@@ -310,10 +342,379 @@ interface McpRequest {
   params?: Record<string, unknown>;
 }
 
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function rgba(color: RGB | RGBA, opacity?: number): [number, number, number, number] {
+  const alpha = 'a' in color ? color.a : 1;
+  return [color.r, color.g, color.b, opacity === undefined ? alpha : alpha * opacity];
+}
+
+function flattenMatrix(matrix: Transform | undefined): number[] | undefined {
+  return matrix ? ([] as number[]).concat(...matrix) : undefined;
+}
+
+function serializePaint(paint: Paint): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    type: paint.type,
+    visible: paint.visible !== false,
+  };
+  if (typeof paint.opacity === 'number') out.opacity = paint.opacity;
+  if (paint.type === 'SOLID') {
+    out.color = rgba(paint.color, paint.opacity);
+  } else if (paint.type.startsWith('GRADIENT')) {
+    const gradient = paint as GradientPaint;
+    out.gradientStops = gradient.gradientStops.map((stop) => ({
+      position: stop.position,
+      color: rgba(stop.color, paint.opacity),
+    }));
+    out.gradientTransform = flattenMatrix(gradient.gradientTransform);
+  } else if (paint.type === 'IMAGE') {
+    const image = paint as ImagePaint;
+    out.imageHash = image.imageHash || undefined;
+    out.scaleMode = image.scaleMode;
+    out.rotation = finiteNumber(image.rotation);
+    out.imageTransform = flattenMatrix(image.imageTransform);
+    out.scalingFactor = finiteNumber(image.scalingFactor);
+  } else if (paint.type === 'VIDEO') {
+    out.videoHash = (paint as VideoPaint).videoHash || undefined;
+  }
+  return out;
+}
+
+function serializePaints(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) ? value.map((paint) => serializePaint(paint as Paint)) : undefined;
+}
+
+function serializeEffects(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return (value as Effect[]).map((effect) => {
+    const out: Record<string, unknown> = {
+      type: effect.type,
+      visible: effect.visible !== false,
+    };
+    if (effect.type === 'DROP_SHADOW' || effect.type === 'INNER_SHADOW') {
+      const shadow = effect as DropShadowEffect & { spread?: number };
+      out.color = rgba(shadow.color);
+      out.offset = shadow.offset;
+      out.radius = shadow.radius;
+      out.spread = shadow.spread;
+      out.blendMode = shadow.blendMode;
+      if (effect.type === 'DROP_SHADOW') out.showShadowBehindNode = shadow.showShadowBehindNode === true;
+    } else if (effect.type === 'LAYER_BLUR' || effect.type === 'BACKGROUND_BLUR') {
+      out.radius = (effect as BlurEffect).radius;
+    }
+    return out;
+  });
+}
+
+function serializeFontName(fontName: FontName | PluginAPI['mixed']): unknown {
+  return fontName === figma.mixed ? 'mixed' : { family: fontName.family, style: fontName.style };
+}
+
+function serializeText(node: TextNode): Record<string, unknown> {
+  const text: Record<string, unknown> = {
+    characters: node.characters,
+    fontName: serializeFontName(node.fontName),
+    fontSize: node.fontSize === figma.mixed ? 'mixed' : node.fontSize,
+    textAlignHorizontal: node.textAlignHorizontal,
+    textAlignVertical: node.textAlignVertical,
+    textAutoResize: node.textAutoResize,
+  };
+  if (node.lineHeight !== figma.mixed) text.lineHeight = node.lineHeight;
+  if (node.letterSpacing !== figma.mixed) text.letterSpacing = node.letterSpacing;
+  if (node.paragraphSpacing !== figma.mixed) text.paragraphSpacing = node.paragraphSpacing;
+  return text;
+}
+
+function pickLayout(node: BaseNode): Record<string, unknown> | undefined {
+  const n = node as unknown as Record<string, unknown>;
+  const keys = [
+    'layoutMode',
+    'layoutWrap',
+    'primaryAxisSizingMode',
+    'counterAxisSizingMode',
+    'primaryAxisAlignItems',
+    'counterAxisAlignItems',
+    'layoutAlign',
+    'layoutGrow',
+    'layoutPositioning',
+    'itemSpacing',
+    'counterAxisSpacing',
+    'paddingLeft',
+    'paddingRight',
+    'paddingTop',
+    'paddingBottom',
+    'clipsContent',
+  ];
+  const layout: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = n[key];
+    if (value !== undefined && value !== figma.mixed) layout[key] = value;
+  }
+  return Object.keys(layout).length ? layout : undefined;
+}
+
 function summarize(node: BaseNode, depth: number): unknown {
-  const base: Record<string, unknown> = { id: node.id, name: node.name, type: node.type };
+  const base: Record<string, unknown> = {
+    id: node.id,
+    name: node.name,
+    sanitizedName: sanitize(node.name),
+    type: node.type,
+  };
+  const n = node as unknown as Record<string, unknown>;
+  const width = finiteNumber(n.width);
+  const height = finiteNumber(n.height);
+  if (width !== undefined && height !== undefined) {
+    base.bounds = {
+      x: finiteNumber(n.x) ?? 0,
+      y: finiteNumber(n.y) ?? 0,
+      w: width,
+      h: height,
+    };
+  }
+  if (n.absoluteBoundingBox) base.absoluteBoundingBox = n.absoluteBoundingBox;
+  if (n.absoluteRenderBounds) base.absoluteRenderBounds = n.absoluteRenderBounds;
+  if (n.relativeTransform) base.relativeTransform = flattenMatrix(n.relativeTransform as Transform);
+  if (n.absoluteTransform) base.absoluteTransform = flattenMatrix(n.absoluteTransform as Transform);
+  if (n.rotation !== undefined) base.rotation = n.rotation;
+  if (n.constraints) base.constraints = n.constraints;
+  if (n.visible !== undefined) base.visible = n.visible;
+  if (n.locked !== undefined) base.locked = n.locked;
+  if (n.opacity !== undefined) base.opacity = n.opacity;
+  if (n.blendMode !== undefined) base.blendMode = n.blendMode;
+
+  const layout = pickLayout(node);
+  if (layout) base.layout = layout;
+
+  const fills = serializePaints(n.fills);
+  if (fills) base.fills = fills;
+  const strokes = serializePaints(n.strokes);
+  if (strokes) {
+    base.strokes = strokes;
+    base.strokeWeight = n.strokeWeight;
+    base.strokeAlign = n.strokeAlign;
+    if (Array.isArray(n.dashPattern)) base.dashPattern = n.dashPattern;
+  }
+  const effects = serializeEffects(n.effects);
+  if (effects) base.effects = effects;
+  if (n.cornerRadius !== undefined && n.cornerRadius !== figma.mixed) base.cornerRadius = n.cornerRadius;
+  const cornerKeys = ['topLeftRadius', 'topRightRadius', 'bottomRightRadius', 'bottomLeftRadius'];
+  const corners: Record<string, unknown> = {};
+  for (const key of cornerKeys) if (n[key] !== undefined && n[key] !== figma.mixed) corners[key] = n[key];
+  if (Object.keys(corners).length) base.corners = corners;
+
+  if (node.type === 'TEXT') base.text = serializeText(node as TextNode);
+  if ('visible' in node) {
+    const scene = node as SceneNode;
+    const canonical = detectCanonical(scene);
+    if (canonical) base.canonical = canonical;
+    base.export = {
+      canExport: 'exportAsync' in scene,
+      isExportablePng: isExportable(scene),
+      canMerge: canMerge(scene),
+      excluded: excluded.has(scene.id),
+      merged: merged.has(scene.id),
+      rasterize: forcedPng.has(scene.id),
+    };
+  }
+
   if (depth > 0 && 'children' in node) {
     base.children = (node as ChildrenMixin).children.map((c) => summarize(c, depth - 1));
+  }
+  return base;
+}
+
+function isVisibleNode(node: SceneNode): boolean {
+  return (node as unknown as { visible?: boolean }).visible !== false;
+}
+
+function boundsOf(node: SceneNode): { x: number; y: number; w: number; h: number } {
+  const abs = (node as unknown as { absoluteBoundingBox?: { x: number; y: number; width: number; height: number } }).absoluteBoundingBox;
+  if (abs) return { x: abs.x, y: abs.y, w: abs.width, h: abs.height };
+  const geo = node as unknown as { x?: number; y?: number; width?: number; height?: number };
+  return {
+    x: typeof geo.x === 'number' ? geo.x : 0,
+    y: typeof geo.y === 'number' ? geo.y : 0,
+    w: typeof geo.width === 'number' ? geo.width : 0,
+    h: typeof geo.height === 'number' ? geo.height : 0,
+  };
+}
+
+function localBoundsOf(node: SceneNode): { x: number; y: number; w: number; h: number } {
+  const geo = node as unknown as { x?: number; y?: number; width?: number; height?: number };
+  return {
+    x: typeof geo.x === 'number' ? geo.x : 0,
+    y: typeof geo.y === 'number' ? geo.y : 0,
+    w: typeof geo.width === 'number' ? geo.width : 0,
+    h: typeof geo.height === 'number' ? geo.height : 0,
+  };
+}
+
+function frameRecord(page: PageNode, node: FrameNode, sectionNode?: SectionNode): Record<string, unknown> {
+  return {
+    id: node.id,
+    name: sanitize(node.name),
+    displayName: node.name,
+    type: node.type,
+    page: { id: page.id, name: page.name },
+    section: sectionNode ? sanitize(sectionNode.name) : '',
+    sectionName: sectionNode?.name || '',
+    role: frameRole(node),
+    visible: isVisibleNode(node),
+    bounds: boundsOf(node),
+  };
+}
+
+function listFrameRecords(currentPageOnly: boolean, includeHidden: boolean, screensOnly: boolean): Record<string, unknown> {
+  const pages = currentPageOnly ? [figma.currentPage] : figma.root.children;
+  const frames: Record<string, unknown>[] = [];
+  for (const page of pages) {
+    if (screensOnly && page.name === COMPONENTS_PAGE) continue;
+    for (const node of page.children) {
+      const nodeVisible = (node as unknown as { visible?: boolean }).visible !== false;
+      if (!includeHidden && !nodeVisible) continue;
+      if (node.type === 'SECTION') {
+        for (const child of (node as SectionNode).children) {
+          if (child.type !== 'FRAME') continue;
+          if (!includeHidden && !isVisibleNode(child as FrameNode)) continue;
+          frames.push(frameRecord(page, child as FrameNode, node as SectionNode));
+        }
+        continue;
+      }
+      if (node.type === 'FRAME') frames.push(frameRecord(page, node as FrameNode));
+    }
+  }
+  const initial = frames.find((f) => f.role !== 'shell') || frames[0] || null;
+  return { currentPage: { id: figma.currentPage.id, name: figma.currentPage.name }, count: frames.length, initial, frames };
+}
+
+function colorToObject(color: RGB | RGBA_ | undefined): unknown {
+  if (!color) return undefined;
+  return {
+    r: color.r,
+    g: color.g,
+    b: color.b,
+    a: (color as RGBA_).a,
+  };
+}
+
+interface RGB {
+  r: number;
+  g: number;
+  b: number;
+}
+interface RGBA_ extends RGB {
+  a?: number;
+}
+
+function paintSummary(paint: Paint): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    type: paint.type,
+    visible: paint.visible !== false,
+    opacity: paint.opacity,
+    blendMode: paint.blendMode,
+  };
+  if (paint.type === 'SOLID') {
+    base.color = colorToObject((paint as SolidPaint).color);
+  } else if (paint.type === 'IMAGE') {
+    const p = paint as ImagePaint;
+    base.scaleMode = p.scaleMode;
+    base.hasImage = !!p.imageHash;
+  } else if (paint.type.startsWith('GRADIENT')) {
+    const p = paint as GradientPaint;
+    base.gradientStops = p.gradientStops.map((s) => ({ position: s.position, color: colorToObject(s.color) }));
+    base.gradientTransform = p.gradientTransform ? ([] as number[]).concat(...p.gradientTransform) : undefined;
+  }
+  return base;
+}
+
+function paintsOf(node: BaseNode, key: 'fills' | 'strokes'): Record<string, unknown>[] {
+  const value = (node as unknown as Record<string, unknown>)[key];
+  return Array.isArray(value) ? (value as Paint[]).map(paintSummary) : [];
+}
+
+function effectsOf(node: BaseNode): Record<string, unknown>[] {
+  const effects = (node as unknown as { effects?: readonly Effect[] }).effects;
+  if (!Array.isArray(effects)) return [];
+  return effects.map((effect) => {
+    const out: Record<string, unknown> = { type: effect.type, visible: effect.visible !== false, blendMode: effect.blendMode };
+    if (effect.type === 'DROP_SHADOW' || effect.type === 'INNER_SHADOW') {
+      const e = effect as DropShadowEffect & { spread?: number };
+      out.color = colorToObject(e.color);
+      out.offset = e.offset;
+      out.radius = e.radius;
+      out.spread = e.spread;
+      out.showShadowBehindNode = effect.type === 'DROP_SHADOW' ? e.showShadowBehindNode : undefined;
+    } else if (effect.type === 'LAYER_BLUR' || effect.type === 'BACKGROUND_BLUR') {
+      out.radius = (effect as BlurEffect).radius;
+    }
+    return out;
+  });
+}
+
+function textDetails(node: BaseNode): Record<string, unknown> | undefined {
+  if (node.type !== 'TEXT') return undefined;
+  const text = node as TextNode;
+  return {
+    characters: text.characters,
+    fontName: text.fontName === figma.mixed ? 'mixed' : text.fontName,
+    fontSize: text.fontSize === figma.mixed ? 'mixed' : text.fontSize,
+    lineHeight: text.lineHeight === figma.mixed ? 'mixed' : text.lineHeight,
+    letterSpacing: text.letterSpacing === figma.mixed ? 'mixed' : text.letterSpacing,
+    textAlignHorizontal: text.textAlignHorizontal,
+    textAlignVertical: text.textAlignVertical,
+    textAutoResize: text.textAutoResize,
+  };
+}
+
+function isSceneNode(node: BaseNode): node is SceneNode {
+  return node.type !== 'DOCUMENT' && node.type !== 'PAGE';
+}
+
+function nodeDetails(node: BaseNode): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    id: node.id,
+    name: sanitize(node.name),
+    displayName: node.name,
+    type: node.type,
+    parentId: node.parent?.id || null,
+  };
+  if (isSceneNode(node)) {
+    const canonical = detectCanonical(node);
+    base.bounds = { absolute: boundsOf(node), local: localBoundsOf(node) };
+    base.rotation = (node as unknown as { rotation?: number }).rotation || 0;
+    base.visible = isVisibleNode(node);
+    base.locked = (node as unknown as { locked?: boolean }).locked === true;
+    base.constraints = (node as unknown as { constraints?: unknown }).constraints;
+    base.layout = {
+      layoutMode: (node as unknown as { layoutMode?: unknown }).layoutMode,
+      primaryAxisAlignItems: (node as unknown as { primaryAxisAlignItems?: unknown }).primaryAxisAlignItems,
+      counterAxisAlignItems: (node as unknown as { counterAxisAlignItems?: unknown }).counterAxisAlignItems,
+      itemSpacing: (node as unknown as { itemSpacing?: unknown }).itemSpacing,
+      paddingLeft: (node as unknown as { paddingLeft?: unknown }).paddingLeft,
+      paddingRight: (node as unknown as { paddingRight?: unknown }).paddingRight,
+      paddingTop: (node as unknown as { paddingTop?: unknown }).paddingTop,
+      paddingBottom: (node as unknown as { paddingBottom?: unknown }).paddingBottom,
+    };
+    base.fills = paintsOf(node, 'fills');
+    base.strokes = paintsOf(node, 'strokes');
+    base.strokeWeight = (node as unknown as { strokeWeight?: unknown }).strokeWeight;
+    base.effects = effectsOf(node);
+    base.text = textDetails(node);
+    base.canonical = canonical;
+    base.exportability = {
+      canExportPng: node.type === 'TEXT' || isExportable(node),
+      canMerge: canMerge(node),
+      isCanonical: !!canonical,
+      canonicalRef: canonical?.ref,
+    };
+    if ('children' in node) {
+      base.children = (node as ChildrenMixin).children.map((c) => ({ id: c.id, name: c.name, type: c.type }));
+    }
+  } else if ('children' in node) {
+    base.children = (node as ChildrenMixin).children.map((c) => ({ id: c.id, name: c.name, type: c.type }));
   }
   return base;
 }
@@ -342,6 +743,25 @@ async function handleMcp(req: McpRequest) {
         const id = (req.params?.nodeId as string) || req.nodeIds?.[0];
         const node = id ? figma.getNodeById(id) : null;
         response.data = node ? summarize(node, 3) : null;
+        if (!node) response.error = `Node not found: ${id}`;
+        break;
+      }
+      case 'list_frames': {
+        const currentPageOnly = req.params?.currentPageOnly !== false;
+        const includeHidden = req.params?.includeHidden === true;
+        response.data = listFrameRecords(currentPageOnly, includeHidden, false);
+        break;
+      }
+      case 'list_screens': {
+        const currentPageOnly = req.params?.currentPageOnly !== false;
+        const includeHidden = req.params?.includeHidden === true;
+        response.data = listFrameRecords(currentPageOnly, includeHidden, true);
+        break;
+      }
+      case 'get_node_details': {
+        const id = (req.params?.nodeId as string) || req.nodeIds?.[0];
+        const node = id ? figma.getNodeById(id) : null;
+        response.data = node ? nodeDetails(node) : null;
         if (!node) response.error = `Node not found: ${id}`;
         break;
       }
@@ -380,11 +800,24 @@ async function handleMcp(req: McpRequest) {
         exportInFlight = true;
         try {
           const ids = req.nodeIds || figma.currentPage.selection.map((n) => n.id);
+          const scale = (req.params?.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
+          const options = {
+            ...DEFAULT_EXPORT_OPTIONS,
+            ...((req.params?.options as Partial<ExportOptions> | undefined) || {}),
+          };
+          const exportSets = exportSetsWithConfigs(req.params?.elementConfigs as ElementConfig[] | undefined);
           const exports: unknown[] = [];
           for (const id of ids) {
             const node = figma.getNodeById(id) as SceneNode | null;
             if (node && 'exportAsync' in node) {
-              const result = await exportDesign(node, DEFAULT_EXPORT_SCALE, DEFAULT_EXPORT_OPTIONS);
+              const result = await exportDesign(
+                node,
+                scale,
+                options,
+                exportSets.excluded,
+                exportSets.merged,
+                exportSets.forcedPng
+              );
               exports.push({
                 nodeId: id,
                 name: sanitize(node.name),
@@ -400,6 +833,79 @@ async function handleMcp(req: McpRequest) {
         } finally {
           exportInFlight = false;
         }
+        break;
+      }
+      case 'export_project_unity': {
+        if (exportInFlight) throw new Error(EXPORT_BUSY_MESSAGE);
+        const found = collectScreens(figma.currentPage);
+        if (found.length === 0) throw new Error('No top-level frames (or frames in sections) on this page.');
+        exportInFlight = true;
+        try {
+          const scale = (req.params?.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
+          const options = {
+            ...DEFAULT_EXPORT_OPTIONS,
+            ...((req.params?.options as Partial<ExportOptions> | undefined) || {}),
+          };
+          const exportSets = exportSetsWithConfigs(req.params?.elementConfigs as ElementConfig[] | undefined);
+          const screens: unknown[] = [];
+          for (const foundScreen of found) {
+            const result = await exportDesign(
+              foundScreen.node,
+              scale,
+              options,
+              exportSets.excluded,
+              exportSets.merged,
+              exportSets.forcedPng
+            );
+            screens.push({
+              nodeId: foundScreen.node.id,
+              name: sanitize(foundScreen.node.name),
+              manifest: result.manifest,
+              assets: result.assets.map((a) => ({ name: a.name, data: bytesToBase64(a.data) })),
+              section: foundScreen.section,
+              role: frameRole(foundScreen.node),
+            });
+          }
+          const firstScreen = found.find((s) => frameRole(s.node) !== 'shell') || found[0];
+          response.data = {
+            project: {
+              name: figma.currentPage.name,
+              initial: firstScreen ? sanitize(firstScreen.node.name) : '',
+            },
+            screens,
+          };
+        } finally {
+          exportInFlight = false;
+        }
+        break;
+      }
+      case 'create_canonical': {
+        useComponentsPage = (req.params as { componentsPage?: boolean } | undefined)?.componentsPage !== false;
+        const kind = String((req.params as { kind?: string } | undefined)?.kind || '');
+        const comp = kind === 'button'
+          ? await createCanonicalButton()
+          : await createCanonical(kind,
+            (req.params as { listOpts?: Partial<ListOptions> } | undefined)?.listOpts,
+            (req.params as { sliderOpts?: Partial<SliderOptions> } | undefined)?.sliderOpts,
+            (req.params as { tableOpts?: Partial<TableOptions> } | undefined)?.tableOpts,
+            (req.params as { progressOpts?: Partial<ProgressOptions> } | undefined)?.progressOpts,
+            (req.params as { stepperOpts?: Partial<StepperOptions> } | undefined)?.stepperOpts);
+        response.data = {
+          created: true,
+          kind,
+          component: { id: comp.id, name: comp.name, page: comp.parent?.type === 'PAGE' ? comp.parent.name : undefined },
+          selection: figma.currentPage.selection.map((n) => ({ id: n.id, name: n.name, type: n.type })),
+        };
+        break;
+      }
+      case 'create_shell': {
+        useComponentsPage = (req.params as { componentsPage?: boolean } | undefined)?.componentsPage !== false;
+        const result = await createShellScaffold((req.params as { shellOpts?: Partial<ShellOptions> } | undefined)?.shellOpts);
+        response.data = {
+          section: { id: result.section.id, name: result.section.name },
+          shell: { id: result.shell.id, name: result.shell.name, role: frameRole(result.shell), bounds: boundsOf(result.shell) },
+          screens: result.screens.map((s) => ({ id: s.id, name: s.name, role: frameRole(s), bounds: boundsOf(s) })),
+        };
         break;
       }
       default:
@@ -508,22 +1014,29 @@ function detachedCanonicalInstances(page: PageNode, screens: SceneNode[]): { nam
   return out;
 }
 
-// A frame is the app "shell" if named Shell / Shell_* or tagged role=shell.
+// A frame is the app "shell" if named Shell / Shell_* / * Shell, or tagged role=shell.
 function frameRole(node: SceneNode): string {
   const n = node.name.toLowerCase();
-  if (n === 'shell' || n.startsWith('shell_') || n.startsWith('shell ')) return 'shell';
   if (node.getSharedPluginData('figforge', 'role') === 'shell') return 'shell';
+  if (n === 'shell'
+    || n.startsWith('shell_')
+    || n.startsWith('shell ')
+    || n.endsWith('_shell')
+    || n.endsWith(' shell')) return 'shell';
   return 'screen';
 }
 
 async function createCanonicalButton(): Promise<ComponentNode> {
+  const comp = await ensureCanonicalButtonMaster();
+  placeInstance(comp);
+  return comp;
+}
+
+async function ensureCanonicalButtonMaster(): Promise<ComponentNode> {
   // Reuse the "Button" master wherever it lives — don't spam Button2/3; just drop
   // another INSTANCE so you can place many.
   const existing = findMaster('Button');
-  if (existing) {
-    placeInstance(existing);
-    return existing;
-  }
+  if (existing) return existing;
 
   const font = await loadUiFont();
   const W = 160, H = 48, R = 8;
@@ -565,7 +1078,6 @@ async function createCanonicalButton(): Promise<ComponentNode> {
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'button', ref: 'Button' }));
 
   parkMaster(comp);
-  placeInstance(comp);
   return comp;
 }
 
@@ -628,7 +1140,7 @@ function enclosingScreenFrame(nodes: readonly SceneNode[]): FrameNode | undefine
 }
 
 // Canonical master component names FigForge knows how to create.
-const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'Switch', 'InputField', 'Stepper', 'Dropdown', 'Slider', 'Progress', 'List', 'ListItem', 'Table', 'TableRow'];
+const FIGFORGE_MASTERS = ['Button', 'Toggle', 'Radio', 'Switch', 'InputField', 'Stepper', 'Dropdown', 'Slider', 'Progress', 'List', 'ListItem', 'Table', 'TableRow', 'Dialog', 'Toast'];
 
 // Find an existing canonical master by name ANYWHERE in the document (masters no
 // longer need to live on a dedicated page — they can sit loose on any design page,
@@ -675,22 +1187,254 @@ function solidRect(name: string, w: number, h: number, r: number, color: RGB, al
   return rect;
 }
 
+type ShellPlacement = 'left' | 'top' | 'right' | 'bottom';
+type ShellOptions = { name: string; nav: ShellPlacement; header: ShellPlacement; width: number; height: number };
+type RectSpec = { x: number; y: number; w: number; h: number };
+
+const SHELL_DEFAULTS: ShellOptions = { name: 'App Shell', nav: 'left', header: 'top', width: 1920, height: 1080 };
+const SHELL_EDGES = new Set<ShellPlacement>(['left', 'top', 'right', 'bottom']);
+
+function normalizeShellOptions(opts?: Partial<ShellOptions>): ShellOptions {
+  const name = typeof opts?.name === 'string' && opts.name.trim() ? opts.name.trim() : SHELL_DEFAULTS.name;
+  const nav = SHELL_EDGES.has(opts?.nav as ShellPlacement) ? opts!.nav! : SHELL_DEFAULTS.nav;
+  const header = SHELL_EDGES.has(opts?.header as ShellPlacement) ? opts!.header! : SHELL_DEFAULTS.header;
+  const width = typeof opts?.width === 'number' && isFinite(opts.width)
+    ? Math.min(10000, Math.max(320, Math.round(opts.width)))
+    : SHELL_DEFAULTS.width;
+  const height = typeof opts?.height === 'number' && isFinite(opts.height)
+    ? Math.min(10000, Math.max(240, Math.round(opts.height)))
+    : SHELL_DEFAULTS.height;
+  return { name, nav, header, width, height };
+}
+
+function designPageForScaffold(): PageNode {
+  if (figma.currentPage.name !== COMPONENTS_PAGE) return figma.currentPage;
+  const page = figma.root.children.find((p) => p.name !== COMPONENTS_PAGE) as PageNode | undefined;
+  if (page) return page;
+  const created = figma.createPage();
+  created.name = 'FigForge Sandbox';
+  return created;
+}
+
+function uniquePageFrameName(page: PageNode, base: string): string {
+  const used = new Set<string>();
+  const walk = (node: BaseNode) => {
+    if ('name' in node) used.add(node.name);
+    if ('children' in node) (node as ChildrenMixin).children.forEach(walk);
+  };
+  walk(page);
+  if (!used.has(base)) return base;
+  let i = 2;
+  while (used.has(`${base} ${i}`)) i++;
+  return `${base} ${i}`;
+}
+
+function layoutEdge(edge: ShellPlacement, content: RectSpec, thickness: number): RectSpec {
+  switch (edge) {
+    case 'left': {
+      const rect = { x: content.x, y: content.y, w: thickness, h: content.h };
+      content.x += thickness; content.w -= thickness;
+      return rect;
+    }
+    case 'right': {
+      const rect = { x: content.x + content.w - thickness, y: content.y, w: thickness, h: content.h };
+      content.w -= thickness;
+      return rect;
+    }
+    case 'top': {
+      const rect = { x: content.x, y: content.y, w: content.w, h: thickness };
+      content.y += thickness; content.h -= thickness;
+      return rect;
+    }
+    case 'bottom': {
+      const rect = { x: content.x, y: content.y + content.h - thickness, w: content.w, h: thickness };
+      content.h -= thickness;
+      return rect;
+    }
+  }
+}
+
+function createFrameNode(name: string, rect: RectSpec, fill: RGB | null, radius = 0): FrameNode {
+  const frame = figma.createFrame();
+  frame.name = name;
+  frame.resize(rect.w, rect.h);
+  frame.x = rect.x;
+  frame.y = rect.y;
+  frame.cornerRadius = radius;
+  frame.clipsContent = true;
+  frame.fills = fill ? [{ type: 'SOLID', color: fill }] : [];
+  return frame;
+}
+
+function appendText(parent: BaseNode & ChildrenMixin, font: FontName, name: string, text: string,
+                    x: number, y: number, w: number, h: number, size: number,
+                    color: RGB, align: 'LEFT' | 'CENTER' = 'LEFT'): TextNode {
+  const node = figma.createText();
+  node.fontName = font;
+  node.name = name;
+  node.characters = text;
+  node.fontSize = size;
+  node.fills = [{ type: 'SOLID', color }];
+  node.textAlignHorizontal = align;
+  node.textAlignVertical = 'CENTER';
+  node.textAutoResize = 'NONE';
+  node.resize(w, h);
+  node.x = x;
+  node.y = y;
+  parent.appendChild(node);
+  return node;
+}
+
+async function setInstanceLabel(inst: InstanceNode, text: string): Promise<void> {
+  const label = inst.findOne((n) => n.type === 'TEXT' && n.name === 'Label') as TextNode | null;
+  if (!label) return;
+  if (label.fontName !== figma.mixed) await figma.loadFontAsync(label.fontName as FontName);
+  label.characters = text;
+}
+
+async function setNavigateOnClick(node: SceneNode, target: SceneNode): Promise<void> {
+  if (!('setReactionsAsync' in node)) return;
+  await (node as SceneNode & ReactionMixin).setReactionsAsync([{
+    trigger: { type: 'ON_CLICK' },
+    actions: [{
+      type: 'NODE',
+      destinationId: target.id,
+      navigation: 'NAVIGATE',
+      transition: null,
+      resetScrollPosition: true,
+    }],
+  }]);
+}
+
+async function createShellScaffold(optsIn?: Partial<ShellOptions>): Promise<{ section: SectionNode; shell: FrameNode; screens: FrameNode[] }> {
+  const opts = normalizeShellOptions(optsIn);
+  const page = designPageForScaffold();
+  figma.currentPage = page;
+
+  const font = await loadUiFont();
+  const buttonMaster = await ensureCanonicalButtonMaster();
+
+  const APP_W = opts.width, APP_H = opts.height;
+  const NAV_THICK = opts.nav === 'left' || opts.nav === 'right' ? 220 : 84;
+  const HEADER_THICK = opts.header === 'left' || opts.header === 'right' ? 92 : 72;
+  const PAD = 40, GAP = 80;
+
+  const contentRect: RectSpec = { x: 0, y: 0, w: APP_W, h: APP_H };
+  const navRect = layoutEdge(opts.nav, contentRect, NAV_THICK);
+  const headerRect = layoutEdge(opts.header, contentRect, HEADER_THICK);
+
+  const screenW = Math.max(320, contentRect.w);
+  const screenH = Math.max(240, contentRect.h);
+  const gridW = screenW * 2 + GAP;
+  const gridH = screenH * 2 + GAP;
+  const sectionW = PAD + APP_W + GAP + gridW + PAD;
+  const sectionH = PAD + Math.max(APP_H, gridH) + PAD;
+
+  const shellName = uniquePageFrameName(page, opts.name);
+  const section = figma.createSection();
+  section.name = shellName;
+  section.resize(sectionW, sectionH);
+  section.fills = [{ type: 'SOLID', color: { r: 0.08, g: 0.08, b: 0.1 } }];
+  const center = figma.viewport.center;
+  section.x = Math.round(center.x - sectionW / 2);
+  section.y = Math.round(center.y - sectionH / 2);
+  page.appendChild(section);
+
+  const shell = createFrameNode(shellName, { x: PAD, y: PAD, w: APP_W, h: APP_H }, { r: 0.96, g: 0.97, b: 1 }, 0);
+  shell.setSharedPluginData('figforge', 'role', 'shell');
+  section.appendChild(shell);
+
+  const bg = solidRect('Background', APP_W, APP_H, 0, { r: 0.96, g: 0.97, b: 1 });
+  bg.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  shell.appendChild(bg);
+
+  const content = createFrameNode('Content', contentRect, null, 0);
+  content.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  shell.appendChild(content);
+
+  const header = createFrameNode('Header', headerRect, { r: 1, g: 1, b: 1 }, 0);
+  header.strokes = [{ type: 'SOLID', color: { r: 0.84, g: 0.86, b: 0.9 } }];
+  header.strokeWeight = 1;
+  shell.appendChild(header);
+  appendText(header, font, 'Title', shellName, 24, 0, Math.max(120, header.width - 48), header.height, 20, { r: 0.08, g: 0.09, b: 0.12 });
+
+  const nav = createFrameNode('Nav', navRect, { r: 0.1, g: 0.11, b: 0.14 }, 0);
+  shell.appendChild(nav);
+  const verticalNav = opts.nav === 'left' || opts.nav === 'right';
+  appendText(nav, font, 'Label', 'MENU', verticalNav ? 24 : 18, verticalNav ? 22 : 0,
+    verticalNav ? Math.max(80, nav.width - 48) : 92,
+    verticalNav ? 24 : nav.height,
+    11, { r: 0.62, g: 0.66, b: 0.74 });
+
+  const sampleNames = ['Home', 'Inventory', 'Settings', 'Profile'];
+  const screenColors: RGB[] = [
+    { r: 0.93, g: 0.96, b: 1 },
+    { r: 0.95, g: 1, b: 0.94 },
+    { r: 1, g: 0.96, b: 0.92 },
+    { r: 0.98, g: 0.94, b: 1 },
+  ];
+  const screens: FrameNode[] = [];
+  const gridX = PAD + APP_W + GAP;
+  const gridY = PAD;
+  for (let i = 0; i < sampleNames.length; i++) {
+    const name = uniquePageFrameName(page, sampleNames[i]);
+    const x = gridX + (i % 2) * (screenW + GAP);
+    const y = gridY + Math.floor(i / 2) * (screenH + GAP);
+    const screen = createFrameNode(name, { x, y, w: screenW, h: screenH }, screenColors[i], 0);
+    screen.clipsContent = true;
+    section.appendChild(screen);
+    appendText(screen, font, 'Title', name, 36, 28, screenW - 72, 56, 28, { r: 0.08, g: 0.09, b: 0.12 });
+    const card = solidRect('Panel', Math.min(560, screenW - 72), 180, 12, { r: 1, g: 1, b: 1 });
+    card.x = 36; card.y = 112;
+    card.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.12 }, offset: { x: 0, y: 8 }, radius: 24, spread: 0, visible: true, blendMode: 'NORMAL' }];
+    screen.appendChild(card);
+    appendText(screen, font, 'Body', `${name} content mounts into Shell/Content in Unity.`, 60, 136, Math.min(500, screenW - 120), 40, 16, { r: 0.25, g: 0.27, b: 0.33 });
+    screens.push(screen);
+  }
+
+  for (let i = 0; i < screens.length; i++) {
+    const btn = buttonMaster.createInstance();
+    btn.name = `Nav ${screens[i].name}`;
+    nav.appendChild(btn);
+    await setInstanceLabel(btn, screens[i].name);
+    const bw = verticalNav ? Math.max(120, Math.min(172, nav.width - 48)) : 150;
+    const bh = 48;
+    btn.resize(bw, bh);
+    if (verticalNav) {
+      btn.x = Math.round((nav.width - bw) / 2);
+      btn.y = 70 + i * 60;
+    } else {
+      btn.x = 116 + i * (bw + 12);
+      btn.y = Math.round((nav.height - bh) / 2);
+    }
+    await setNavigateOnClick(btn, screens[i]);
+  }
+
+  figma.viewport.scrollAndZoomIntoView([section]);
+  figma.currentPage.selection = [shell];
+  pushSelection();
+  return { section, shell, screens };
+}
+
 // Dispatch a "+Toggle / +Radio / +Dropdown / +Slider / +Progress / +List / +Table" create request to its builder.
 async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
                                sliderOpts?: Partial<SliderOptions>,
                                tableOpts?: Partial<TableOptions>,
-                               progressOpts?: Partial<ProgressOptions>): Promise<ComponentNode> {
+                               progressOpts?: Partial<ProgressOptions>,
+                               stepperOpts?: Partial<StepperOptions>): Promise<ComponentNode> {
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
     case 'switch': return createSwitch();
     case 'input': return createInputField();
-    case 'stepper': return createStepper();
+    case 'stepper': return createStepper(stepperOpts);
     case 'dropdown': return createDropdown();
     case 'slider': return createSlider(sliderOpts);
     case 'progress': return createProgress(progressOpts);
     case 'list': return createList({ ...LIST_DEFAULTS, ...(listOpts ?? {}) });
     case 'table': return createTable({ ...TABLE_DEFAULTS, ...(tableOpts ?? {}) });
+    case 'modal': return createModal();
+    case 'toast': return createToast();
     default: throw new Error(`unknown canonical kind '${kind}'`);
   }
 }
@@ -850,57 +1594,204 @@ async function normalizeInputFieldMaster(comp: ComponentNode): Promise<void> {
   }
 }
 
-// Stepper: numeric input with canonical - / + buttons. The InputField child reuses
-// the input value binding; min/max/step are stored in the tag as slider-style
-// numeric fields (slots = step).
-async function createStepper(): Promise<ComponentNode> {
-  const reuse = findMaster('Stepper');
+async function createModal(): Promise<ComponentNode> {
+  const reuse = findMaster('Dialog');
   if (reuse) { placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
-  const BTN = 40, FIELD = 72, H = 40, W = BTN * 2 + FIELD, R = 8;
+  const W = 640, H = 420;
   const comp = figma.createComponent();
-  comp.name = 'Stepper'; comp.resize(W, H); comp.fills = []; comp.clipsContent = true;
+  comp.name = 'Dialog'; comp.resize(W, H); comp.fills = [];
 
-  const makeButton = (name: string, x: number, label: string): void => {
-    const bg = solidRect(name, BTN, H, R, { r: 0.96, g: 0.97, b: 1 });
+  const backdrop = solidRect('Backdrop', W, H, 0, { r: 0, g: 0, b: 0 }, 0.45);
+  backdrop.x = 0; backdrop.y = 0; backdrop.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(backdrop);
+
+  const panel = solidRect('Panel', 420, 260, 14, { r: 1, g: 1, b: 1 });
+  panel.x = 110; panel.y = 80; panel.constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+  panel.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.22 }, offset: { x: 0, y: 16 }, radius: 32, spread: -8, visible: true, blendMode: 'NORMAL' }];
+  comp.appendChild(panel);
+
+  const title = figma.createText();
+  title.fontName = font; title.name = 'Title'; title.characters = 'Delete project?';
+  title.fontSize = 22; title.fills = [{ type: 'SOLID', color: { r: 0.08, g: 0.08, b: 0.1 } }];
+  title.textAutoResize = 'NONE'; title.resize(340, 32);
+  title.x = 134; title.y = 104; title.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+  comp.appendChild(title);
+
+  const body = figma.createText();
+  body.fontName = font; body.name = 'Body'; body.characters = 'This action cannot be undone.';
+  body.fontSize = 15; body.fills = [{ type: 'SOLID', color: { r: 0.28, g: 0.28, b: 0.34 } }];
+  body.textAutoResize = 'NONE'; body.resize(372, 86);
+  body.x = 134; body.y = 150; body.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(body);
+
+  const actions = figma.createFrame();
+  actions.name = 'Actions'; actions.resize(250, 40); actions.x = 256; actions.y = 276;
+  actions.fills = []; actions.layoutMode = 'HORIZONTAL'; actions.itemSpacing = 10;
+  actions.primaryAxisAlignItems = 'MAX'; actions.counterAxisAlignItems = 'CENTER';
+  actions.constraints = { horizontal: 'MAX', vertical: 'MAX' };
+  comp.appendChild(actions);
+
+  const secondary = await modalActionFrame('Secondary', 'Cancel', font, false);
+  actions.appendChild(secondary);
+  const primary = await modalActionFrame('Primary', 'Delete', font, true);
+  actions.appendChild(primary);
+
+  const close = figma.createFrame();
+  close.name = 'Close'; close.resize(32, 32); close.x = 474; close.y = 96;
+  close.fills = [{ type: 'SOLID', color: { r: 0.93, g: 0.94, b: 0.97 }, opacity: 1 }];
+  close.cornerRadius = 16; close.constraints = { horizontal: 'MAX', vertical: 'MIN' };
+  comp.appendChild(close);
+  const closeText = figma.createText();
+  closeText.fontName = font; closeText.name = 'Label'; closeText.characters = 'x';
+  closeText.fontSize = 16; closeText.fills = [{ type: 'SOLID', color: { r: 0.22, g: 0.22, b: 0.28 } }];
+  close.appendChild(closeText);
+  closeText.x = (32 - closeText.width) / 2; closeText.y = (32 - closeText.height) / 2;
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'modal', ref: 'Dialog' }));
+  parkMaster(comp);
+  placeInstance(comp);
+  return comp;
+}
+
+async function modalActionFrame(name: string, label: string, font: FontName, primary: boolean): Promise<FrameNode> {
+  const btn = figma.createFrame();
+  btn.name = name; btn.resize(104, 40); btn.cornerRadius = 8;
+  btn.fills = [{ type: 'SOLID', color: primary ? { r: 0.28, g: 0.22, b: 0.9 } : { r: 0.92, g: 0.93, b: 0.96 } }];
+  const t = figma.createText();
+  t.fontName = font; t.name = 'Label'; t.characters = label; t.fontSize = 14;
+  t.fills = [{ type: 'SOLID', color: primary ? { r: 1, g: 1, b: 1 } : { r: 0.12, g: 0.12, b: 0.16 } }];
+  btn.appendChild(t);
+  t.x = (104 - t.width) / 2; t.y = (40 - t.height) / 2;
+  return btn;
+}
+
+async function createToast(): Promise<ComponentNode> {
+  const reuse = findMaster('Toast');
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const W = 340, H = 92;
+  const comp = figma.createComponent();
+  comp.name = 'Toast'; comp.resize(W, H); comp.fills = [];
+
+  const toast = solidRect('Toast', W, H, 10, { r: 0.07, g: 0.075, b: 0.09 }, 0.96);
+  toast.x = 0; toast.y = 0; toast.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(toast);
+
+  const accent = solidRect('Accent', 4, H, 0, { r: 0.32, g: 0.62, b: 1 }, 1);
+  accent.x = 0; accent.y = 0; accent.constraints = { horizontal: 'MIN', vertical: 'STRETCH' };
+  comp.appendChild(accent);
+
+  const title = figma.createText();
+  title.fontName = font; title.name = 'Title'; title.characters = 'Saved changes';
+  title.fontSize = 15; title.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  title.textAutoResize = 'NONE'; title.resize(268, 22);
+  title.x = 18; title.y = 14; title.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+  comp.appendChild(title);
+
+  const body = figma.createText();
+  body.fontName = font; body.name = 'Body'; body.characters = 'Your design was imported.';
+  body.fontSize = 13; body.fills = [{ type: 'SOLID', color: { r: 0.82, g: 0.84, b: 0.88 } }];
+  body.textAutoResize = 'NONE'; body.resize(286, 38);
+  body.x = 18; body.y = 38; body.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  comp.appendChild(body);
+
+  const close = figma.createFrame();
+  close.name = 'Close'; close.resize(24, 24); close.x = 304; close.y = 12;
+  close.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 }, opacity: 0 }];
+  close.constraints = { horizontal: 'MAX', vertical: 'MIN' };
+  comp.appendChild(close);
+  const closeText = figma.createText();
+  closeText.fontName = font; closeText.name = 'Label'; closeText.characters = 'x';
+  closeText.fontSize = 16; closeText.fills = [{ type: 'SOLID', color: { r: 0.82, g: 0.84, b: 0.88 } }];
+  close.appendChild(closeText);
+  closeText.x = (24 - closeText.width) / 2; closeText.y = (24 - closeText.height) / 2;
+
+  comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'toast', ref: 'Toast' }));
+  parkMaster(comp);
+  placeInstance(comp);
+  return comp;
+}
+
+// Stepper: numeric input with canonical - / + buttons. The InputField child reuses
+// the input value binding; min/max/step are stored in the tag as slider-style
+// numeric fields (slots = step).
+export type StepperOptions = { orientation: 'horizontal' | 'vertical' };
+const STEPPER_DEFAULTS: StepperOptions = { orientation: 'horizontal' };
+
+async function createStepper(opts?: Partial<StepperOptions>): Promise<ComponentNode> {
+  const orientation = opts?.orientation === 'vertical' ? 'vertical' : STEPPER_DEFAULTS.orientation;
+  const vertical = orientation === 'vertical';
+  const ref = vertical ? 'Stepper Vertical' : 'Stepper';
+  const reuse = findMaster(ref);
+  if (reuse) { placeInstance(reuse); return reuse; }
+
+  const font = await loadUiFont();
+  const R = 8;
+  const layout = vertical
+    ? {
+        W: 72, H: 116,
+        button: { w: 72, h: 36 },
+        field: { x: 0, y: 36, w: 72, h: 44 },
+        minus: { x: 0, y: 80 },
+        plus: { x: 0, y: 0 },
+      }
+    : {
+        W: 152, H: 40,
+        button: { w: 40, h: 40 },
+        field: { x: 40, y: 0, w: 72, h: 40 },
+        minus: { x: 0, y: 0 },
+        plus: { x: 112, y: 0 },
+      };
+  const comp = figma.createComponent();
+  comp.name = ref; comp.resize(layout.W, layout.H); comp.fills = []; comp.clipsContent = true;
+
+  const constraintsFor = (name: string): Constraints => vertical
+    ? { horizontal: 'STRETCH', vertical: name === 'Plus' ? 'MIN' : 'MAX' }
+    : { horizontal: name === 'Minus' ? 'MIN' : 'MAX', vertical: 'STRETCH' };
+
+  const makeButton = (name: string, pos: { x: number; y: number }, label: string): void => {
+    const constraints = constraintsFor(name);
+    const bg = solidRect(name, layout.button.w, layout.button.h, R, { r: 0.96, g: 0.97, b: 1 });
     bg.strokes = [{ type: 'SOLID', color: { r: 0.72, g: 0.74, b: 0.82 } }];
-    bg.strokeWeight = 1; bg.x = x; bg.y = 0; bg.constraints = { horizontal: name === 'Minus' ? 'MIN' : 'MAX', vertical: 'STRETCH' };
+    bg.strokeWeight = 1; bg.x = pos.x; bg.y = pos.y; bg.constraints = constraints;
     comp.appendChild(bg);
-    const roll = solidRect(name + 'Rollover', BTN, H, R, { r: 0.93, g: 0.95, b: 1 });
-    roll.visible = false; roll.x = x; roll.y = 0; roll.constraints = bg.constraints;
+    const roll = solidRect(name + 'Rollover', layout.button.w, layout.button.h, R, { r: 0.93, g: 0.95, b: 1 });
+    roll.visible = false; roll.x = pos.x; roll.y = pos.y; roll.constraints = bg.constraints;
     comp.appendChild(roll);
-    const press = solidRect(name + 'Pressed', BTN, H, R, { r: 0.85, g: 0.89, b: 1 });
-    press.visible = false; press.x = x; press.y = 0; press.constraints = bg.constraints;
+    const press = solidRect(name + 'Pressed', layout.button.w, layout.button.h, R, { r: 0.85, g: 0.89, b: 1 });
+    press.visible = false; press.x = pos.x; press.y = pos.y; press.constraints = bg.constraints;
     comp.appendChild(press);
     const t = figma.createText();
     t.fontName = font; t.name = name + 'Label'; t.characters = label;
     t.fontSize = 18; t.textAlignHorizontal = 'CENTER'; t.textAlignVertical = 'CENTER';
     t.fills = [{ type: 'SOLID', color: { r: 0.2, g: 0.22, b: 0.28 } }];
-    t.textAutoResize = 'NONE'; t.resize(BTN, H);
-    t.x = x; t.y = 0; t.constraints = { horizontal: name === 'Minus' ? 'MIN' : 'MAX', vertical: 'STRETCH' };
+    t.textAutoResize = 'NONE'; t.resize(layout.button.w, layout.button.h);
+    t.x = pos.x; t.y = pos.y; t.constraints = constraints;
     comp.appendChild(t);
   };
 
-  makeButton('Minus', 0, '-');
+  makeButton('Minus', layout.minus, '-');
 
-  const input = solidRect('InputField', FIELD, H, 0, { r: 1, g: 1, b: 1 });
+  const input = solidRect('InputField', layout.field.w, layout.field.h, 0, { r: 1, g: 1, b: 1 });
   input.strokes = [{ type: 'SOLID', color: { r: 0.72, g: 0.74, b: 0.82 } }];
-  input.strokeWeight = 1; input.x = BTN; input.y = 0; input.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  input.strokeWeight = 1; input.x = layout.field.x; input.y = layout.field.y; input.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   comp.appendChild(input);
 
   const text = figma.createText();
   text.fontName = font; text.name = 'Text'; text.characters = '0';
   text.fontSize = 14; text.textAlignHorizontal = 'CENTER'; text.textAlignVertical = 'CENTER';
   text.fills = [{ type: 'SOLID', color: { r: 0.1, g: 0.1, b: 0.12 } }];
-  text.textAutoResize = 'NONE'; text.resize(FIELD, H);
-  text.x = BTN; text.y = 0; text.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  text.textAutoResize = 'NONE'; text.resize(layout.field.w, layout.field.h);
+  text.x = layout.field.x; text.y = layout.field.y; text.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   comp.appendChild(text);
 
-  makeButton('Plus', BTN + FIELD, '+');
+  makeButton('Plus', layout.plus, '+');
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({
-    kind: 'stepper', ref: 'Stepper',
+    kind: 'stepper', ref,
     value: '0',
     minValue: 0, maxValue: 100, slots: 1,
   }));

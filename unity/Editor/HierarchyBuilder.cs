@@ -287,6 +287,14 @@ namespace FigForge
                 {
                     inst = BuildTable(e, parent, ctx);
                 }
+                else if (canonicalKind == "modal")
+                {
+                    inst = BuildModal(e, parent, ctx);
+                }
+                else if (canonicalKind == "toast")
+                {
+                    inst = BuildToastHost(e, parent, ctx);
+                }
                 else
                 {
                     ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' → placeholder");
@@ -304,8 +312,14 @@ namespace FigForge
 
                 // Fill the prefab's binding slots (label/value/options); else stamp label.
                 var bindings = inst.GetComponentInChildren<FigForgeBindings>(true);
-                if (bindings != null) bindings.Apply(e.canonical.label, e.canonical.value, e.canonical.options);
-                else StampLabel(inst, e.canonical.label);
+                var iconSprite = SpriteByFile(e.canonical.iconAsset, ctx);
+                if (bindings != null) bindings.Apply(e.canonical.label, e.canonical.value, e.canonical.options, iconSprite);
+                else
+                {
+                    StampLabel(inst, e.canonical.label);
+                    StampIcon(inst, iconSprite);
+                }
+                ApplyOverlayCanonicalData(inst, e.canonical, canonicalKind);
 
                 // Per-instance label font override — only when we know the component
                 // font (defLabelFont) AND this instance genuinely differs from it.
@@ -946,6 +960,9 @@ namespace FigForge
             ApplyFont(tmp, e.canonical != null ? e.canonical.defLabelFont : null, ctx);
             MatchTextWeight(tmp);
             btn.tmpTxt_label = tmp;
+            var icon = AddControlIcon(go, e.canonical, ctx);
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.control = btn; bind.label = tmp; bind.icon = icon;
             return go;
         }
 
@@ -996,6 +1013,9 @@ namespace FigForge
             ApplyFont(tmp, e.canonical.defLabelFont, ctx);
             MatchTextWeight(tmp);
             btn.tmpTxt_label = tmp;
+            var icon = AddControlIcon(go, e.canonical, ctx);
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.control = btn; bind.label = tmp; bind.icon = icon;
             return go;
         }
 
@@ -1368,11 +1388,12 @@ namespace FigForge
             if (root == null || regular == null) return root;
             var rootShadows = ShapeShadows(root);
             if (rootShadows.Count == 0) return root;
-            if (HasVisualPaint(root) || root.cornerRadius > 0.001f) return root;
+            if (HasVisualPaint(root) || root.cornerRadius > 0.001f || AnyCorner(root.corners)) return root;
 
             return new CanonicalShape
             {
                 cornerRadius = regular.cornerRadius,
+                corners = regular.corners,
                 shadow = rootShadows[0],
                 shadows = rootShadows,
             };
@@ -1424,6 +1445,7 @@ namespace FigForge
                 asset = sh.asset,
                 vector = sh.vector,
                 cornerRadius = sh.cornerRadius,
+                corners = sh.corners,
                 opacity = sh.opacity,
                 blendMode = sh.blendMode,
                 fill = sh.fill,
@@ -1945,9 +1967,10 @@ namespace FigForge
 
             toggle.tmpTxt_label = label;
             toggle.checkmark = toggle.graphic; // null for a composite checkmark (driven by FigForgeToggleGraphicObject)
+            var icon = AddControlIcon(go, c, ctx);
 
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.control = toggle; bind.label = label; bind.background = bg;
+            bind.control = toggle; bind.label = label; bind.icon = icon; bind.background = bg;
             return go;
         }
 
@@ -2021,9 +2044,10 @@ namespace FigForge
             sw.checkmark = fill;
             sw.isOn = false;
             if (fill != null) fill.gameObject.SetActive(false);
+            var icon = AddControlIcon(go, c, ctx);
 
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.control = sw; bind.label = label; bind.background = track;
+            bind.control = sw; bind.label = label; bind.icon = icon; bind.background = track;
             return go;
         }
 
@@ -2091,9 +2115,10 @@ namespace FigForge
             input.placeholder = placeholder;
             input.textComponent = text;
             input.SetTextWithoutNotify(c.value ?? "");
+            var icon = AddControlIcon(go, c, ctx);
 
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.control = input; bind.label = placeholder; bind.valueText = text; bind.background = bg;
+            bind.control = input; bind.label = placeholder; bind.icon = icon; bind.valueText = text; bind.background = bg;
             return go;
         }
 
@@ -2162,9 +2187,10 @@ namespace FigForge
 
             stepper.input = input;
             stepper.SetValueFromString(c.value ?? "0");
+            var icon = AddControlIcon(go, c, ctx);
 
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.stepper = stepper; bind.control = input; bind.valueText = text; bind.background = inputBg;
+            bind.stepper = stepper; bind.control = input; bind.icon = icon; bind.valueText = text; bind.background = inputBg;
             return go;
         }
 
@@ -2243,9 +2269,10 @@ namespace FigForge
                 var edgeStyler = go.AddComponent<FigForgeDropdownOptionEdges>();
                 edgeStyler.dropdown = dd;
             }
+            var icon = AddControlIcon(go, c, ctx);
 
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.control = dd; bind.optionsTarget = dd; bind.valueText = caption; bind.background = bg;
+            bind.control = dd; bind.optionsTarget = dd; bind.icon = icon; bind.valueText = caption; bind.background = bg;
             return go;
         }
 
@@ -2273,6 +2300,13 @@ namespace FigForge
             img.color = Color.white;
             img.raycastTarget = false;
             return img;
+        }
+
+        static Image AddControlIcon(GameObject parent, CanonicalRef c, BuildContext ctx)
+        {
+            if (parent == null || c == null || string.IsNullOrEmpty(c.iconAsset)) return null;
+            if (c.parts == null || !c.parts.ContainsKey("Icon")) return null;
+            return AddControlImage(parent, "Icon", c.parts, "Icon", c.iconAsset, ctx);
         }
 
         static void ApplyDropdownArrowSpriteStates(GameObject control, Image arrow, CanonicalRef c, BuildContext ctx)
@@ -2689,7 +2723,8 @@ namespace FigForge
             int builtRows = c.listItems != null && c.listItems.Count > 0 ? c.listItems.Count : count;
             shell.scrollbarGo.SetActive(builtRows * rowH > shell.ViewportHeight(e, sf) + shell.scroll.scrollbarHideTolerance);
 
-            var bind = go.AddComponent<FigForgeBindings>(); bind.background = shell.bg;
+            var icon = AddControlIcon(go, c, ctx);
+            var bind = go.AddComponent<FigForgeBindings>(); bind.icon = icon; bind.background = shell.bg;
             return go;
         }
 
@@ -2741,8 +2776,335 @@ namespace FigForge
             int builtRows = c.tableRows != null && c.tableRows.Count > 0 ? c.tableRows.Count : count;
             shell.scrollbarGo.SetActive(builtRows * rowH > shell.ViewportHeight(e, sf) + shell.scroll.scrollbarHideTolerance);
 
-            var bind = go.AddComponent<FigForgeBindings>(); bind.background = shell.bg;
+            var icon = AddControlIcon(go, c, ctx);
+            var bind = go.AddComponent<FigForgeBindings>(); bind.icon = icon; bind.background = shell.bg;
             return go;
+        }
+
+        // Modal/Dialog: backdrop + panel + title/body/actions/close wiring. The
+        // component starts closed in play mode, but remains visible in edit/imported
+        // scenes so designers can inspect the generated hierarchy.
+        static GameObject BuildModal(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var go = NewRect(ObjectName(e, "Modal"), parent);
+            var modal = go.AddComponent<FigForgeModal>();
+            modal.startOpen = false;
+            modal.closeOnBackdrop = true;
+
+            var backdropGo = NewRect("Backdrop", go.transform);
+            Stretch(backdropGo.GetComponent<RectTransform>());
+            Graphic backdropGraphic;
+            if (HasPartTree(c, "Backdrop"))
+            {
+                BuildPartSubtree(backdropGo, c.partTrees["Backdrop"], ctx);
+                var img = backdropGo.AddComponent<Image>();
+                img.color = new Color(0, 0, 0, 0);
+                backdropGraphic = img;
+            }
+            else
+            {
+                backdropGraphic = AddShapeGraphic(backdropGo, c.backdropShape ?? new CanonicalShape
+                {
+                    cornerRadius = 0f,
+                    fill = new float[] { 0f, 0f, 0f, 0.45f },
+                    fills = new List<Fill> { new Fill { kind = "solid", color = new float[] { 0f, 0f, 0f, 0.45f } } }
+                }, ctx);
+            }
+            backdropGraphic.raycastTarget = true;
+            var backdropButton = backdropGo.AddComponent<Button>();
+            backdropButton.transition = Selectable.Transition.None;
+            backdropButton.targetGraphic = backdropGraphic;
+
+            var panelGo = NewRect("Panel", go.transform);
+            var prt = panelGo.GetComponent<RectTransform>();
+            if (c.parts != null && c.parts.ContainsKey("Panel")) AnchorPart(prt, c.parts, "Panel");
+            else
+            {
+                prt.anchorMin = new Vector2(0.5f, 0.5f);
+                prt.anchorMax = new Vector2(0.5f, 0.5f);
+                prt.pivot = new Vector2(0.5f, 0.5f);
+                prt.sizeDelta = new Vector2(420f * sf, 260f * sf);
+                prt.anchoredPosition = Vector2.zero;
+            }
+            Graphic panelGraphic = null;
+            if (HasPartTree(c, "Panel")) panelGraphic = BuildPartSubtree(panelGo, c.partTrees["Panel"], ctx);
+            else panelGraphic = AddShapeGraphic(panelGo, c.panelShape ?? new CanonicalShape
+            {
+                cornerRadius = 14f,
+                fill = new float[] { 1f, 1f, 1f, 1f },
+                fills = new List<Fill> { new Fill { kind = "solid", color = new float[] { 1f, 1f, 1f, 1f } } }
+            }, ctx);
+            if (panelGraphic != null) panelGraphic.raycastTarget = true;
+
+            var title = AddControlLabel(panelGo, "Title", c.label ?? "Dialog", c.parts, "Title", ctx, TextAlignmentOptions.Left);
+            if (!(c.parts != null && c.parts.ContainsKey("Title")))
+            {
+                var trt = title.GetComponent<RectTransform>();
+                trt.anchorMin = new Vector2(0f, 1f); trt.anchorMax = new Vector2(1f, 1f);
+                trt.offsetMin = new Vector2(24f * sf, -64f * sf);
+                trt.offsetMax = new Vector2(-56f * sf, -24f * sf);
+            }
+            title.fontSize = 20f * sf;
+            title.fontStyle = FontStyles.Bold;
+
+            var body = AddControlLabel(panelGo, "Body", c.body ?? "Dialog body", c.parts, "Body", ctx, TextAlignmentOptions.TopLeft);
+            body.textWrappingMode = TextWrappingModes.Normal;
+            body.overflowMode = TextOverflowModes.Ellipsis;
+            body.color = new Color(0.25f, 0.25f, 0.3f, 1f);
+            if (!(c.parts != null && c.parts.ContainsKey("Body")))
+            {
+                var brt = body.GetComponent<RectTransform>();
+                brt.anchorMin = new Vector2(0f, 0f); brt.anchorMax = new Vector2(1f, 1f);
+                brt.offsetMin = new Vector2(24f * sf, 78f * sf);
+                brt.offsetMax = new Vector2(-24f * sf, -76f * sf);
+            }
+
+            var actionsGo = NewRect("Actions", panelGo.transform);
+            var art = actionsGo.GetComponent<RectTransform>();
+            if (c.parts != null && c.parts.ContainsKey("Actions")) AnchorPart(art, c.parts, "Actions");
+            else
+            {
+                art.anchorMin = new Vector2(0f, 0f); art.anchorMax = new Vector2(1f, 0f);
+                art.offsetMin = new Vector2(24f * sf, 20f * sf);
+                art.offsetMax = new Vector2(-24f * sf, 64f * sf);
+            }
+            var hlg = actionsGo.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 10f * sf;
+            hlg.childAlignment = TextAnchor.MiddleRight;
+            hlg.childControlWidth = false;
+            hlg.childControlHeight = true;
+            hlg.childForceExpandWidth = false;
+            hlg.childForceExpandHeight = false;
+
+            var secondary = AddModalButton(actionsGo.transform, "Secondary", c.secondaryLabel ?? "Cancel", false, ctx);
+            var primary = AddModalButton(actionsGo.transform, "Primary", c.primaryLabel ?? "OK", true, ctx);
+
+            var close = AddModalButton(panelGo.transform, "Close", "x", false, ctx);
+            var crt = close.GetComponent<RectTransform>();
+            if (c.parts != null && c.parts.ContainsKey("Close")) AnchorPart(crt, c.parts, "Close");
+            else
+            {
+                crt.anchorMin = new Vector2(1f, 1f); crt.anchorMax = new Vector2(1f, 1f);
+                crt.pivot = new Vector2(0.5f, 0.5f);
+                crt.sizeDelta = new Vector2(32f * sf, 32f * sf);
+                crt.anchoredPosition = new Vector2(-24f * sf, -24f * sf);
+            }
+
+            modal.backdrop = backdropGo.GetComponent<RectTransform>();
+            modal.panel = panelGo.GetComponent<RectTransform>();
+            modal.actions = actionsGo.GetComponent<RectTransform>();
+            modal.tmpTxt_title = title;
+            modal.tmpTxt_body = body;
+            modal.primaryButton = primary;
+            modal.secondaryButton = secondary;
+            modal.closeButton = close;
+            modal.backdropButton = backdropButton;
+
+            var icon = AddControlIcon(go, c, ctx);
+            var bind = go.AddComponent<FigForgeBindings>();
+            bind.label = title;
+            bind.icon = icon;
+            bind.background = panelGraphic;
+            return go;
+        }
+
+        static FigForgeButton AddModalButton(Transform parent, string name, string label, bool primary, BuildContext ctx)
+        {
+            float sf = ctx.scaleFactor;
+            var go = NewRect(name, parent);
+            var rt = go.GetComponent<RectTransform>();
+            rt.sizeDelta = name == "Close" ? new Vector2(32f * sf, 32f * sf) : new Vector2(104f * sf, 40f * sf);
+            var le = go.AddComponent<LayoutElement>();
+            le.preferredWidth = rt.sizeDelta.x;
+            le.preferredHeight = rt.sizeDelta.y;
+
+            var img = go.AddComponent<Image>();
+            img.color = primary ? new Color(0.28f, 0.22f, 0.9f, 1f) : new Color(0.92f, 0.93f, 0.96f, 1f);
+            img.raycastTarget = true;
+
+            var btn = go.AddComponent<FigForgeButton>();
+            btn.transition = Selectable.Transition.ColorTint;
+            btn.targetGraphic = img;
+
+            var textGo = NewRect("Label", go.transform);
+            Stretch(textGo.GetComponent<RectTransform>());
+            var tmp = textGo.AddComponent<TextMeshProUGUI>();
+            tmp.text = label ?? "";
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.fontSize = (name == "Close" ? 18f : 14f) * sf;
+            tmp.color = primary ? Color.white : new Color(0.12f, 0.12f, 0.16f, 1f);
+            tmp.raycastTarget = false;
+            ApplyFont(tmp, null, ctx);
+            btn.tmpTxt_label = tmp;
+            return btn;
+        }
+
+        // Toast host: a positioned stack plus an optional generated toast item template.
+        // Runtime usage goes through Toasts.Success(...), Toasts.Show(...), etc.
+        static GameObject BuildToastHost(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var go = NewRect(ObjectName(e, "ToastHost"), parent);
+            var host = go.AddComponent<FigForgeToastHost>();
+            host.defaultDuration = c.duration.HasValue ? Mathf.Max(0f, c.duration.Value) : 4f;
+            host.position = ParseToastPosition(c.position);
+            host.spacing = 8f * sf;
+
+            var containerGo = NewRect("Toast Container", go.transform);
+            host.container = containerGo.GetComponent<RectTransform>();
+            host.ApplyPosition(host.position);
+
+            var tpl = BuildToastItemTemplate(e, go.transform, ctx);
+            tpl.SetActive(false);
+            host.toastPrefab = tpl.GetComponent<FigForgeToastItem>();
+            return go;
+        }
+
+        static GameObject BuildToastItemTemplate(ElementData e, Transform parent, BuildContext ctx)
+        {
+            var c = e.canonical;
+            float sf = ctx.scaleFactor;
+            var go = NewRect("Toast Item", parent);
+            var rt = go.GetComponent<RectTransform>();
+            rt.sizeDelta = new Vector2((e.rect != null ? e.rect.w : 320f) * sf, (e.rect != null ? e.rect.h : 88f) * sf);
+            var le = go.AddComponent<LayoutElement>();
+            le.preferredWidth = rt.sizeDelta.x;
+            le.preferredHeight = rt.sizeDelta.y;
+
+            Graphic bg = null;
+            if (HasPartTree(c, "Toast")) bg = BuildPartSubtree(go, c.partTrees["Toast"], ctx);
+            else bg = AddShapeGraphic(go, c.toastShape ?? c.shape ?? new CanonicalShape
+            {
+                cornerRadius = 10f,
+                fill = new float[] { 0.07f, 0.075f, 0.09f, 0.96f },
+                fills = new List<Fill> { new Fill { kind = "solid", color = new float[] { 0.07f, 0.075f, 0.09f, 0.96f } } }
+            }, ctx);
+
+            var accentGo = NewRect("Accent", go.transform);
+            var art = accentGo.GetComponent<RectTransform>();
+            if (c.parts != null && c.parts.ContainsKey("Accent")) AnchorPart(art, c.parts, "Accent");
+            else
+            {
+                art.anchorMin = new Vector2(0f, 0f); art.anchorMax = new Vector2(0f, 1f);
+                art.sizeDelta = new Vector2(4f * sf, 0f); art.anchoredPosition = Vector2.zero;
+            }
+            var accent = accentGo.AddComponent<Image>();
+            accent.color = c.accentColor != null ? ToColor(c.accentColor) : ToastSeverityColor(c.severity);
+            accent.raycastTarget = false;
+
+            var title = AddControlLabel(go, "Title", c.label ?? "Notification", c.parts, "Title", ctx, TextAlignmentOptions.Left);
+            title.color = Color.white;
+            title.fontStyle = FontStyles.Bold;
+            if (!(c.parts != null && c.parts.ContainsKey("Title")))
+            {
+                var trt = title.GetComponent<RectTransform>();
+                trt.anchorMin = new Vector2(0f, 1f); trt.anchorMax = new Vector2(1f, 1f);
+                trt.offsetMin = new Vector2(18f * sf, -38f * sf);
+                trt.offsetMax = new Vector2(-44f * sf, -12f * sf);
+            }
+
+            var body = AddControlLabel(go, "Body", c.body ?? "", c.parts, "Body", ctx, TextAlignmentOptions.TopLeft);
+            body.color = new Color(0.82f, 0.84f, 0.88f, 1f);
+            body.textWrappingMode = TextWrappingModes.Normal;
+            if (!(c.parts != null && c.parts.ContainsKey("Body")))
+            {
+                var brt = body.GetComponent<RectTransform>();
+                brt.anchorMin = new Vector2(0f, 0f); brt.anchorMax = new Vector2(1f, 1f);
+                brt.offsetMin = new Vector2(18f * sf, 12f * sf);
+                brt.offsetMax = new Vector2(-44f * sf, -40f * sf);
+            }
+
+            var close = AddModalButton(go.transform, "Close", "x", false, ctx);
+            var crt = close.GetComponent<RectTransform>();
+            if (c.parts != null && c.parts.ContainsKey("Close")) AnchorPart(crt, c.parts, "Close");
+            else
+            {
+                crt.anchorMin = new Vector2(1f, 1f); crt.anchorMax = new Vector2(1f, 1f);
+                crt.pivot = new Vector2(0.5f, 0.5f);
+                crt.sizeDelta = new Vector2(26f * sf, 26f * sf);
+                crt.anchoredPosition = new Vector2(-18f * sf, -18f * sf);
+            }
+
+            AddControlIcon(go, c, ctx);
+
+            var item = go.AddComponent<FigForgeToastItem>();
+            item.tmpTxt_title = title;
+            item.tmpTxt_body = body;
+            item.background = bg;
+            item.accent = accent;
+            item.closeButton = close;
+            item.canvasGroup = go.AddComponent<CanvasGroup>();
+            return go;
+        }
+
+        static void ApplyOverlayCanonicalData(GameObject inst, CanonicalRef c, string kind)
+        {
+            if (inst == null || c == null) return;
+            if (kind == "modal")
+            {
+                var modal = inst.GetComponentInChildren<FigForgeModal>(true);
+                if (modal != null)
+                    modal.Apply(new ModalData
+                    {
+                        title = c.label,
+                        body = c.body,
+                        primaryText = c.primaryLabel,
+                        secondaryText = c.secondaryLabel,
+                    });
+            }
+            else if (kind == "toast")
+            {
+                var host = inst.GetComponentInChildren<FigForgeToastHost>(true);
+                if (host != null)
+                {
+                    if (c.duration.HasValue) host.defaultDuration = Mathf.Max(0f, c.duration.Value);
+                    host.position = ParseToastPosition(c.position);
+                    if (host.container != null) host.ApplyPosition(host.position);
+                }
+            }
+        }
+
+        static ToastSeverity ParseToastSeverity(string s)
+        {
+            switch ((s ?? "").ToLowerInvariant())
+            {
+                case "success": return ToastSeverity.Success;
+                case "warning": return ToastSeverity.Warning;
+                case "error": return ToastSeverity.Error;
+                default: return ToastSeverity.Info;
+            }
+        }
+
+        static ToastPosition ParseToastPosition(string s)
+        {
+            switch ((s ?? "").ToLowerInvariant())
+            {
+                case "topleft":
+                case "top-left": return ToastPosition.TopLeft;
+                case "bottomright":
+                case "bottom-right": return ToastPosition.BottomRight;
+                case "bottomleft":
+                case "bottom-left": return ToastPosition.BottomLeft;
+                case "topcenter":
+                case "top-center": return ToastPosition.TopCenter;
+                case "bottomcenter":
+                case "bottom-center": return ToastPosition.BottomCenter;
+                default: return ToastPosition.TopRight;
+            }
+        }
+
+        static Color ToastSeverityColor(string severity)
+        {
+            switch (ParseToastSeverity(severity))
+            {
+                case ToastSeverity.Success: return new Color(0.18f, 0.78f, 0.42f, 1f);
+                case ToastSeverity.Warning: return new Color(1f, 0.68f, 0.22f, 1f);
+                case ToastSeverity.Error: return new Color(0.95f, 0.22f, 0.22f, 1f);
+                default: return new Color(0.32f, 0.62f, 1f, 1f);
+            }
         }
 
         // Slider: Track (SDF rail) + Fill Area/Fill + Handle Slide Area/Handle wired per
@@ -2897,8 +3259,9 @@ namespace FigForge
             // per-instance initial value, so the shared prefab doesn't bake one
             // instance's position (the toggle isOn lesson).
 
+            var icon = AddControlIcon(go, c, ctx);
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.control = slider; bind.label = label; bind.valueText = valueText; bind.background = track;
+            bind.control = slider; bind.label = label; bind.icon = icon; bind.valueText = valueText; bind.background = track;
             return go;
         }
 
@@ -3065,8 +3428,9 @@ namespace FigForge
             // per-instance initial value, so the shared prefab doesn't bake one
             // instance's fill (the toggle isOn lesson).
 
+            var icon = AddControlIcon(go, c, ctx);
             var bind = go.AddComponent<FigForgeBindings>();
-            bind.progress = bar; bind.label = label; bind.valueText = valueText; bind.background = track;
+            bind.progress = bar; bind.label = label; bind.icon = icon; bind.valueText = valueText; bind.background = track;
             return go;
         }
 
@@ -3117,6 +3481,22 @@ namespace FigForge
             if (tmp != null) { tmp.text = label; ConfigureButtonLabelText(tmp); return; }
             var ui = inst.GetComponentInChildren<Text>(true);
             if (ui != null) ui.text = label;
+        }
+
+        static void StampIcon(GameObject inst, Sprite sprite)
+        {
+            if (inst == null || sprite == null) return;
+            var images = inst.GetComponentsInChildren<Image>(true);
+            for (int i = 0; i < images.Length; i++)
+            {
+                var img = images[i];
+                if (img != null && string.Equals(img.name, "Icon", StringComparison.OrdinalIgnoreCase))
+                {
+                    img.sprite = sprite;
+                    img.enabled = true;
+                    return;
+                }
+            }
         }
 
         static void ConfigureButtonLabelText(TMP_Text tmp)
@@ -3238,13 +3618,15 @@ namespace FigForge
                 : (kind == "progress") ? BuildProgress(e, null, ctx)
                 : (kind == "list") ? BuildList(e, null, ctx)
                 : (kind == "table") ? BuildTable(e, null, ctx)
+                : (kind == "modal") ? BuildModal(e, null, ctx)
+                : (kind == "toast") ? BuildToastHost(e, null, ctx)
                 : BuildPlaceholderButton(e, null, ctx);
             if (temp == null) return candidate; // generation failed — keep whatever we had
             temp.name = SafeAsset(refName);
 
             // Wire binding slots so per-instance label/value apply onto the prefab.
             var bind = temp.GetComponent<FigForgeBindings>() ?? temp.AddComponent<FigForgeBindings>();
-            if (kind != "list" && kind != "table" && kind != "stepper") // data-driven controls without one label/Selectable manage their own slots
+            if (kind != "list" && kind != "table" && kind != "stepper" && kind != "modal" && kind != "toast") // data-driven controls without one label/Selectable manage their own slots
             {
                 bind.label = temp.GetComponentInChildren<TMP_Text>(true);
                 bind.control = temp.GetComponent<Selectable>();
@@ -3386,11 +3768,14 @@ namespace FigForge
         // v56: remove the old Visible aliases from generated groups/controls.
         // v57: generated Frames core exposes After(seconds, action) delay helper.
         // v58: Frames.After returns a chainable delay sequence with Cancel().
+        // v59: canonical Modal/Dialog and Toast/Notification controls.
+        // v60: canonical controls capture a child named Icon as a reusable sprite
+        //      and wire it through FigForgeBindings.icon / generated Icon slots.
         //
         // Counterpart constant: plugin/src/types.ts CANONICAL_SCHEMA — the plugin
         // stamps its number into the manifest (canonicalSchema) and ManifestParser
         // warns when the two differ. Bump BOTH together.
-        internal const int CanonicalSchema = 58;
+        internal const int CanonicalSchema = 60;
 
         // Invariant culture for every signature number: signatures persist in the
         // committed library asset, so a comma-decimal locale (de-DE, fr-FR, …) must
@@ -3416,12 +3801,20 @@ namespace FigForge
             var sh = c.shape;
             if (sh != null)
                 sb.Append(";cr=").Append(sh.cornerRadius.ToString("0.###", Inv))
+                  .Append(";cn=").Append(SigF(sh.corners))
                   .Append(";f=").Append(SigF(sh.fill)).Append(";f2=").Append(SigF(sh.fill2))
                   .Append(";fg=").Append(SigGradient(sh.gradient))
                   .Append(";gt=").Append(SigF(sh.gradientTransform))
                   .Append(";st=").Append(SigStroke(sh.stroke, sh.borderColor, sh.borderWidth, sh.borderAlign));
             AppendShapeSig(sb, "btn", sh);
             AppendShapeSig(sb, "root", c.rootShape);
+            AppendShapeSig(sb, "mdb", c.backdropShape);
+            AppendShapeSig(sb, "mdp", c.panelShape);
+            AppendShapeSig(sb, "tst", c.toastShape);
+            sb.Append(";tac=").Append(SigF(c.accentColor))
+              .Append(";sev=").Append(c.severity ?? "")
+              .Append(";pos=").Append(c.position ?? "")
+              .Append(";dur=").Append(c.duration.HasValue ? c.duration.Value.ToString("0.###", Inv) : "");
             if (sh != null && sh.shadow != null)
             {
                 var sd = sh.shadow;
@@ -3446,6 +3839,7 @@ namespace FigForge
             {
                 var cs = c.checkShape;
                 sb.Append(";ckcr=").Append(cs.cornerRadius.ToString("0.###", Inv))
+                  .Append(";ckcn=").Append(SigF(cs.corners))
                   .Append(";ckf=").Append(SigF(cs.fill)).Append(";ckf2=").Append(SigF(cs.fill2))
                   .Append(";ckfg=").Append(SigGradient(cs.gradient))
                   .Append(";ckgt=").Append(SigF(cs.gradientTransform))
@@ -3456,6 +3850,7 @@ namespace FigForge
                 var os = c.optionShape;
                 sb.Append(";oh=").Append(c.optionHeight.ToString("0.###", Inv))
                   .Append(";ocr=").Append(os.cornerRadius.ToString("0.###", Inv))
+                  .Append(";ocn=").Append(SigF(os.corners))
                   .Append(";of=").Append(SigF(os.fill)).Append(";of2=").Append(SigF(os.fill2))
                   .Append(";ofg=").Append(SigGradient(os.gradient))
                   .Append(";ogt=").Append(SigF(os.gradientTransform))
@@ -3480,6 +3875,7 @@ namespace FigForge
                 var ish = c.itemShape;
                 sb.Append(";ih=").Append(c.itemHeight.ToString("0.###", Inv))
                   .Append(";icr=").Append(ish.cornerRadius.ToString("0.###", Inv))
+                  .Append(";icn=").Append(SigF(ish.corners))
                   .Append(";if=").Append(SigF(ish.fill)).Append(";if2=").Append(SigF(ish.fill2))
                   .Append(";ifg=").Append(SigGradient(ish.gradient))
                   .Append(";igt=").Append(SigF(ish.gradientTransform))
@@ -3569,6 +3965,7 @@ namespace FigForge
               .Append(';').Append(prefix).Append("op=").Append(sh.opacity.ToString("0.###", Inv))
               .Append(';').Append(prefix).Append("bm=").Append(sh.blendMode ?? "")
               .Append(';').Append(prefix).Append("cr=").Append(sh.cornerRadius.ToString("0.###", Inv))
+              .Append(';').Append(prefix).Append("cn=").Append(SigF(sh.corners))
               .Append(';').Append(prefix).Append("f=").Append(SigF(sh.fill))
               .Append(';').Append(prefix).Append("f2=").Append(SigF(sh.fill2))
               .Append(';').Append(prefix).Append("fg=").Append(SigGradient(sh.gradient))

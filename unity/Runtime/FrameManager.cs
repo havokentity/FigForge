@@ -1,7 +1,6 @@
 // =============================================================================
-// FigForge — FrameManager. Sits on the shared Canvas and shows exactly one
-// FigForgeFrame page at a time, giving a "connected" multi-page app from several
-// imported Figma frames.
+// FigForge — FrameManager. Sits on the shared Canvas and shows one route frame at
+// a time, plus the matching shell frame when that route mounts inside shell chrome.
 // =============================================================================
 
 using System.Collections.Generic;
@@ -15,8 +14,8 @@ using UnityEngine;
 
 namespace FigForge
 {
-    // Internal engine: shows exactly one FigForgeFrame at a time. NOT the public API —
-    // the generated `Frames` class is the entry point and proxies into this.
+    // Internal engine: shows one route frame at a time, optionally with its shell.
+    // NOT the public API — the generated `Frames` class is the entry point and proxies into this.
     [DisallowMultipleComponent]
     internal class FrameManager : MonoBehaviour
     {
@@ -26,7 +25,7 @@ namespace FigForge
         [Tooltip("Frame shown on Start. None = first registered screen.")]
         public FigForgeFrame initialScreen;
 
-        [Tooltip("Persistent chrome (top/nav menus). Shown only while a screen with usesShell=true is active.")]
+        [Tooltip("Legacy single-shell slot. New imports register shell frames in Screens with Is Shell + Shell Key.")]
         public GameObject shell;
 
         [Tooltip("Editor-only import layout: number of root screens per row when pages are spread out for authoring.")]
@@ -127,19 +126,72 @@ namespace FigForge
         bool Show(FigForgeFrame target, string label)
         {
             BindAll();
-            foreach (var s in screens)
-                if (s != null) s.SetVisible(s == target);
             if (target != null)
             {
-                // The shown root frame snaps to fill the canvas. The design-time side-by-side
-                // spread (set up at import) is just for authoring; at runtime the active frame
-                // takes the viewport and the rest are hidden.
-                if (!target.usesShell) FillParent(target.GetComponent<RectTransform>());
+                var activeShell = target.usesShell ? FindShell(target.shellKey) : null;
+                if (target.usesShell && activeShell == null)
+                {
+                    Debug.LogWarning($"[FigForge] FrameManager: screen '{target.ScreenKey}' requires shell '{target.shellKey}', but no matching shell is registered.");
+                    return false;
+                }
+                foreach (var s in screens)
+                    if (s != null && s != target && s != activeShell)
+                        s.SetVisible(false);
+
+                // The shown route snaps to fill its parent viewport. The design-time
+                // spread/thumbnail layout is just for authoring; at runtime the active
+                // frame takes the available space and the rest are hidden.
+                if (activeShell != null)
+                {
+                    FillParent(activeShell.GetComponent<RectTransform>());
+                    activeShell.SetVisible(true);
+                    var content = FindContentSlot(activeShell.gameObject);
+                    target.transform.SetParent(content != null ? content : activeShell.transform, false);
+                    RefreshCompositors(target.gameObject);
+                }
+                FillParent(target.GetComponent<RectTransform>());
+                target.SetVisible(true);
                 Current = target;
-                if (shell != null) shell.SetActive(target.usesShell);
+                if (shell != null) shell.SetActive(target.usesShell && activeShell == null);
             }
             else Debug.LogWarning($"[FigForge] FrameManager: no screen named '{label}'.");
             return target != null;
+        }
+
+        FigForgeFrame FindShell(string key)
+        {
+            for (int i = 0; i < screens.Count; i++)
+            {
+                var screen = screens[i];
+                if (screen == null || !screen.isShell) continue;
+                if (Matches(screen.shellKey, key)) return screen;
+            }
+            return null;
+        }
+
+        static Transform FindContentSlot(GameObject root)
+        {
+            if (root == null) return null;
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < transforms.Length; i++)
+            {
+                var n = transforms[i].name.ToLowerInvariant();
+                if (n == "content" || n == "content_slot") return transforms[i];
+            }
+            return null;
+        }
+
+        static void RefreshCompositors(GameObject root)
+        {
+            if (root == null) return;
+            var sources = root.GetComponentsInChildren<IFigForgeCompositorSource>(true);
+            for (int i = 0; i < sources.Length; i++)
+                if (sources[i] != null)
+                    sources[i].RebindPageCompositor();
+            var compositors = root.GetComponentsInChildren<FigForgePageCompositor>(true);
+            for (int i = 0; i < compositors.Length; i++)
+                if (compositors[i] != null)
+                    compositors[i].MarkDirty();
         }
 
         static void FillParent(RectTransform rt)
@@ -147,6 +199,7 @@ namespace FigForge
             if (rt == null) return;
             rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
             rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+            rt.localScale = Vector3.one;
         }
     }
 }

@@ -339,6 +339,8 @@ namespace FigForge
                     case "progress": return "FigForge.FigForgeProgress";
                     case "list": return "FigForge.FigForgeList";
                     case "table": return "FigForge.FigForgeTable";
+                    case "modal": return "FigForge.FigForgeModal";
+                    case "toast": return "FigForge.FigForgeToastHost";
                 }
             }
             if (e != null && (e.type == "TEXT" || (e.components != null && e.components.Contains("TextMeshProUGUI"))))

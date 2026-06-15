@@ -64,6 +64,12 @@ const KIND_TAGS: Record<string, CanonicalKind> = {
   prg: 'progress',
   progress: 'progress',
   progressbar: 'progress',
+  modal: 'modal',
+  dialog: 'modal',
+  dlg: 'modal',
+  toast: 'toast',
+  notification: 'toast',
+  notify: 'toast',
 };
 
 export function parseCanonical(name: string): CanonicalRef | null {

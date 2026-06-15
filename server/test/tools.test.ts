@@ -11,7 +11,7 @@ import os from 'node:os';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 
-import { resolveAndValidateOutputPath, executeExportUnity } from '../dist/tools.js';
+import { resolveAndValidateOutputPath, executeExportUnity, validateManifest } from '../dist/tools.js';
 // Imported from src (not dist) deliberately: the regex is the thing under
 // test, and node's native type stripping runs the erasable-only schema.ts
 // as-is — so the test can't silently pass against a stale compiled copy.
@@ -116,5 +116,107 @@ describe('executeExportUnity asset-name sandboxing', () => {
     const res = await executeExportUnity(sender, 'node-1', 'out', root);
     assert.equal(res.assetCount, 1);
     assert.ok(existsSync(path.join(root, 'out', 'icon.png')));
+  });
+
+  it('forwards export scale, options, and element configs to the plugin', async () => {
+    const sent: { tool?: string; nodeIds?: string[]; params?: Record<string, unknown> } = {};
+    const sender: PluginSender = {
+      async send(tool, nodeIds, params): Promise<RpcResponse> {
+        sent.tool = tool;
+        sent.nodeIds = nodeIds;
+        sent.params = params;
+        return {
+          data: { exports: [{ manifest: { screen: { name: 's' }, elements: [] }, assets: [] }] },
+        };
+      },
+    };
+    const params = {
+      scale: { type: 'width', value: 1024 },
+      options: { autoMerge: false, rasterizeStrokes: true, fontFaceDilate: 0.25 },
+      elementConfigs: [
+        { id: '123:456', excluded: true },
+        { id: '123:789', merged: true, rasterize: true },
+      ],
+    };
+
+    await executeExportUnity(sender, '123:111', 'out', root, params);
+
+    assert.equal(sent.tool, 'export_unity');
+    assert.deepEqual(sent.nodeIds, ['123:111']);
+    assert.deepEqual(sent.params, params);
+  });
+});
+
+describe('validateManifest canonical variant contract', () => {
+  it('accepts canonical.variantProps and variantExtraction diagnostics', () => {
+    const manifest = {
+      schema: 'figforge/manifest',
+      version: '2.0',
+      generator: 'FigForge',
+      exportedAt: '2026-06-15T00:00:00.000Z',
+      screen: {
+        id: '1:1',
+        name: 'screen',
+        displayName: 'Screen',
+        figmaSize: { w: 100, h: 100 },
+        referenceResolution: { w: 200, h: 200 },
+        exportScale: 2,
+      },
+      assets: [],
+      elements: [{
+        id: '1:2',
+        name: 'toggle',
+        displayName: 'Tgl_Alerts_Toggle',
+        type: 'INSTANCE',
+        parentId: null,
+        rect: { x: 0, y: 0, w: 100, h: 40 },
+        transform: {
+          anchorMin: [0, 0],
+          anchorMax: [0, 0],
+          pivot: [0.5, 0.5],
+          offsetMin: [0, 0],
+          offsetMax: [100, 40],
+          rotationZ: 0,
+        },
+        components: [],
+        children: [],
+        canonical: {
+          kind: 'toggle',
+          ref: 'Toggle',
+          instanceName: 'Alerts',
+          variantProps: {
+            axes: { value: 'on', state: 'selected' },
+            original: { value: 'Checked', state: 'Selected' },
+            raw: [
+              {
+                axis: 'value',
+                value: 'on',
+                originalName: 'Checked',
+                originalValue: 'true',
+                source: 'componentProperties',
+                type: 'BOOLEAN',
+              },
+            ],
+          },
+        },
+        interactive: true,
+        clipsContent: false,
+        merged: false,
+      }],
+      fonts: [],
+      diagnostics: {
+        summary: { variantExtraction: 1 },
+        issues: [{
+          category: 'variantExtraction',
+          severity: 'info',
+          message: 'Variant axes found: value=on.',
+        }],
+      },
+      settings: { fontFaceDilate: 0.15 },
+      canonicalRefs: ['Toggle'],
+    };
+
+    const result = validateManifest(manifest);
+    assert.deepEqual(result.errors, []);
   });
 });

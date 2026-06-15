@@ -8,10 +8,16 @@ using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 namespace FigForge
 {
+    /// <summary>Fired with the newly-selected row index when a List/Table selection
+    /// changes (single-select). Serializable so it shows in the Inspector.</summary>
+    [System.Serializable]
+    public class FigForgeSelectionEvent : UnityEvent<int> { }
+
     /// <summary>One row's data in a FigForgeList — a two-line row (Title + optional
     /// Subtitle). The list's analogue of a dropdown option string.</summary>
     [System.Serializable]
@@ -60,6 +66,9 @@ namespace FigForge
         public FigForgeFill rowPressed = FigForgeFill.Solid(Color.white);
         public FigForgeFill rowSelected = FigForgeFill.Solid(Color.white);
         public bool rowHasRollover, rowHasPressed, rowHasSelected;
+
+        [Tooltip("Fired with the new row index whenever the selected row changes.")]
+        public FigForgeSelectionEvent onSelectionChanged = new FigForgeSelectionEvent();
         int _selected = -1;
 
         readonly List<FigForgeListItem> _items = new List<FigForgeListItem>();
@@ -176,16 +185,21 @@ namespace FigForge
                 CreateRow(i, new FigForgeListItem(labelPrefix + " " + (i + 1)), count);
         }
 
-        // Single-select: mark `index` selected, clear the rest.
+        // Single-select: mark `index` selected, clear the rest. Fires
+        // onSelectionChanged only when the selection actually moves.
         public void Select(int index)
         {
+            bool changed = _selected != index;
             _selected = index;
-            if (content == null) return;
-            for (int i = 0; i < content.childCount; i++)
+            if (content != null)
             {
-                var r = content.GetChild(i).GetComponent<FigForgeListRow>();
-                if (r != null) r.SetSelected(r.index == index);
+                for (int i = 0; i < content.childCount; i++)
+                {
+                    var r = content.GetChild(i).GetComponent<FigForgeListRow>();
+                    if (r != null) r.SetSelected(r.index == index);
+                }
             }
+            if (changed) onSelectionChanged.Invoke(index);
         }
 
         public int SelectedIndex => _selected;

@@ -49,7 +49,7 @@ deduplicated by content hash.
 ## Manifest field reference
 
 Root: `schema`, `version`, `generator`, `exportedAt`, `screen`, `elements[]`,
-`assets[]`, `fonts[]`, `canonicalRefs[]`.
+`assets[]`, `fonts[]`, `diagnostics`, `canonicalRefs[]`.
 
 `screen`: `{ id, name, figmaSize{w,h}, referenceResolution{w,h}, exportScale }`.
 
@@ -71,5 +71,9 @@ Each `elements[]` entry:
 | `interactive`, `clipsContent`, `merged` | flags |
 | `autoLayout` | mode/padding/spacing (applied as layout group) |
 | `children[]` | child element ids |
+
+`diagnostics` is an asset/font report with a `summary` and `issues[]`. It flags
+missing or mixed fonts, unsupported fill paints, PNG raster fallbacks, oversized
+PNG assets, and non-normal blend-mode caveats.
 
 The Unity `ManifestData` C# model mirrors this 1:1.

@@ -20,10 +20,14 @@ import {
   type CanonicalRef,
   type CanonicalStateShapes,
   type CanonicalStates,
+  type CanonicalVariantProps,
   type ExportOptions,
   type ExportScale,
   type Fill,
   type GradientKind,
+  type AssetDiagnosticCategory,
+  type AssetDiagnosticIssue,
+  type AssetDiagnosticsReport,
   type ElementSubtree,
   type Manifest,
   type Shadow,
@@ -50,6 +54,7 @@ import {
 } from './traverser';
 import { mapTransform, rootTransform } from './mapper';
 import { buildVectorDrawing } from './vector';
+import { extractVariantProps, variantValueOriginal } from './variants';
 
 export interface ExportResult {
   manifest: Manifest;
@@ -62,6 +67,9 @@ export type ProgressFn = (current: number, total: number, label: string) => void
 
 const INTERACTIVE_HINTS = ['button', 'btn', 'input', 'field', 'toggle', 'checkbox', 'switch', 'stepper'];
 const DEFAULT_FONT_FACE_DILATE = 0.15;
+const OVERSIZED_PNG_MAX_DIMENSION = 2048;
+const OVERSIZED_PNG_MAX_PIXELS = 4096 * 4096;
+const OVERSIZED_PNG_MAX_BYTES = 2 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Paint → manifest helpers
@@ -170,6 +178,10 @@ function extractStroke(node: SceneNode, options: ExportOptions): Stroke | undefi
 function nodeBlendMode(node: SceneNode): string {
   const raw = (node as unknown as { blendMode?: string }).blendMode || 'NORMAL';
   return raw.toLowerCase().replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+function isNormalBlend(mode: string | undefined): boolean {
+  return !mode || mode === 'normal' || mode === 'passThrough';
 }
 
 function cornerData(node: SceneNode): { radius: number; corners?: [number, number, number, number] } {
@@ -518,9 +530,28 @@ function childByExactName(node: SceneNode, name: string): SceneNode | undefined 
     : undefined;
 }
 
+function descendantByExactName(node: SceneNode, name: string): SceneNode | undefined {
+  if (!('children' in node)) return undefined;
+  for (const c of (node as ChildrenMixin).children as SceneNode[]) {
+    if (c.name.toLowerCase() === name.toLowerCase()) return c;
+    const nested = descendantByExactName(c, name);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
 function firstTextUnderNamedChild(node: SceneNode, names: string[]): string | undefined {
   for (const name of names) {
     const child = childByExactName(node, name);
+    const text = child ? firstTextLabel(child) : undefined;
+    if (text !== undefined) return text;
+  }
+  return undefined;
+}
+
+function firstTextUnderNamedDescendant(node: SceneNode, names: string[]): string | undefined {
+  for (const name of names) {
+    const child = descendantByExactName(node, name);
     const text = child ? firstTextLabel(child) : undefined;
     if (text !== undefined) return text;
   }
@@ -559,9 +590,43 @@ function gatherTexts(node: SceneNode): string[] {
   return out;
 }
 
-/** Initial control state from instance variant properties, where detectable. */
-function canonicalValue(node: SceneNode, kind: CanonicalKind): string | undefined {
+function variantOnOff(variants: CanonicalVariantProps | undefined): string | undefined {
+  const v = variants?.value;
+  if (v === 'on') return 'on';
+  if (v === 'off') return 'off';
+  if (variants?.state === 'selected') return 'on';
+  return undefined;
+}
+
+function variantState(variants: CanonicalVariantProps | undefined): string | undefined {
+  return variants?.state;
+}
+
+function toastSeverityFromVariant(variants: CanonicalVariantProps | undefined): CanonicalRef['severity'] | undefined {
+  const raw = variants?.severity ?? variants?.intent ?? variants?.tone;
+  if (raw === 'success' || raw === 'warning' || raw === 'error' || raw === 'info') return raw;
+  if (raw === 'danger') return 'error';
+  return undefined;
+}
+
+function appendVariantDiagnostic(variants: CanonicalVariantProps | undefined, text: string): void {
+  if (!variants) return;
+  variants.diagnostics = [...(variants.diagnostics ?? []), text];
+}
+
+/** Initial control state from structured variant metadata, then legacy instance props. */
+function canonicalValue(node: SceneNode, kind: CanonicalKind, variants?: CanonicalVariantProps): string | undefined {
   if (kind === 'input' || kind === 'stepper') return inputValueText(node);
+  if (kind === 'toggle' || kind === 'switch' || kind === 'radio') {
+    const onOff = variantOnOff(variants);
+    if (onOff) return onOff;
+  }
+  if (kind === 'dropdown' || kind === 'list' || kind === 'table') {
+    const original = variantValueOriginal(variants, 'value');
+    const normalized = variants?.value;
+    if (original && normalized !== 'on' && normalized !== 'off') return original;
+    if (variants?.state === 'selected') return 'selected';
+  }
   if (kind === 'toggle' || kind === 'switch') {
     const props = (node as unknown as {
       componentProperties?: Record<string, { value: unknown }>;
@@ -582,6 +647,7 @@ function canonicalValue(node: SceneNode, kind: CanonicalKind): string | undefine
 
 function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef | undefined {
   if (!ref) return undefined;
+  const variantProps = extractVariantProps(node);
   const textLabel = firstTextLabel(node);
   const c: CanonicalRef = {
     kind: ref.kind,
@@ -591,6 +657,7 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
       : ref.kind === 'switch' ? textLabel
         : (textLabel || ref.instanceName),
   };
+  if (variantProps) c.variantProps = variantProps;
   if (ref.kind === 'input') {
     const placeholder = firstTextUnderNamedChild(node, ['Placeholder', 'Label']) || textLabel;
     if (placeholder !== undefined) {
@@ -598,12 +665,24 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
       c.label = placeholder;
     }
   }
-  const value = canonicalValue(node, ref.kind);
+  const value = canonicalValue(node, ref.kind, variantProps);
   if (value !== undefined) c.value = value;
   if (ref.kind === 'dropdown') {
     if (c.value === undefined && textLabel) c.value = textLabel;
     const opts = gatherTexts(node);
     if (opts.length) c.options = opts;
+  }
+  if (ref.kind === 'modal') {
+    c.label = firstTextUnderNamedDescendant(node, ['Title', 'Header']) || textLabel || ref.instanceName;
+    c.body = firstTextUnderNamedDescendant(node, ['Body', 'Message', 'Description']);
+    c.primaryLabel = firstTextUnderNamedDescendant(node, ['Primary', 'PrimaryButton', 'Confirm']);
+    c.secondaryLabel = firstTextUnderNamedDescendant(node, ['Secondary', 'SecondaryButton', 'Cancel']);
+  }
+  if (ref.kind === 'toast') {
+    c.label = firstTextUnderNamedDescendant(node, ['Title']) || textLabel || 'Notification';
+    c.body = firstTextUnderNamedDescendant(node, ['Body', 'Message', 'Description']);
+    const severity = toastSeverityFromVariant(variantProps);
+    if (severity) c.severity = severity;
   }
   // This instance's label font (used as a per-instance override when it differs).
   const labelNode = firstTextNode(node);
@@ -663,6 +742,145 @@ export async function exportDesign(
   const frameH = (root as unknown as { height: number }).height;
   const scaleNum = scaleNumber(scale, frameW, frameH);
   const fontFaceDilate = clampNumber(options.fontFaceDilate, 0, 1, DEFAULT_FONT_FACE_DILATE);
+  const diagnosticIssues: AssetDiagnosticIssue[] = [];
+  const diagnosticKeys = new Set<string>();
+
+  function addDiagnostic(
+    category: AssetDiagnosticCategory,
+    severity: AssetDiagnosticIssue['severity'],
+    node: SceneNode | undefined,
+    message: string,
+    details?: AssetDiagnosticIssue['details'],
+    asset?: string
+  ): void {
+    const key = `${category}|${node?.id ?? ''}|${asset ?? ''}|${message}`;
+    if (diagnosticKeys.has(key)) return;
+    diagnosticKeys.add(key);
+    diagnosticIssues.push({
+      category,
+      severity,
+      nodeId: node?.id,
+      nodeName: node?.name,
+      asset,
+      message,
+      details,
+    });
+  }
+
+  function paintLabel(paint: Paint): string {
+    if (paint.type.startsWith('GRADIENT')) {
+      const stops = ((paint as GradientPaint).gradientStops || []).length;
+      return `${paint.type} (${stops} stop${stops === 1 ? '' : 's'})`;
+    }
+    return paint.type;
+  }
+
+  function visiblePaints(node: SceneNode, key: 'fills' | 'strokes'): Paint[] {
+    const value = (node as unknown as Record<string, unknown>)[key];
+    if (!Array.isArray(value)) return [];
+    return (value as Paint[]).filter((p) => !isEmptyPaint(p));
+  }
+
+  function unsupportedPaintMessage(paint: Paint): string | undefined {
+    if (paint.type === 'SOLID') return undefined;
+    if (paint.type.startsWith('GRADIENT')) {
+      return options.emitGradients ? undefined : `${paintLabel(paint)} ignored because gradient emission is disabled.`;
+    }
+    if (paint.type === 'IMAGE') return 'IMAGE paint requires a raster bake; it cannot be emitted as a procedural Unity fill.';
+    if (paint.type === 'VIDEO') return 'VIDEO paint cannot be exported as a live video fill; use a poster image or raster fallback.';
+    return `${paintLabel(paint)} paint is not supported by the FigForge manifest fill model.`;
+  }
+
+  function diagnoseUnsupportedPaints(node: SceneNode): void {
+    for (const key of ['fills', 'strokes'] as const) {
+      for (const paint of visiblePaints(node, key)) {
+        const message = unsupportedPaintMessage(paint);
+        if (!message) continue;
+        addDiagnostic('unsupportedFills', 'warning', node, message, {
+          paintSlot: key,
+          paintType: paint.type,
+        });
+      }
+    }
+  }
+
+  function diagnoseTextFont(node: TextNode): void {
+    if ((node as unknown as { hasMissingFont?: boolean }).hasMissingFont === true) {
+      addDiagnostic(
+        'missingFonts',
+        'warning',
+        node,
+        'Figma reports a missing font on this text layer; FigForge will fall back to Inter/Regular metadata when it cannot read the exact face.'
+      );
+    }
+    if (node.fontName === figma.mixed) {
+      addDiagnostic(
+        'missingFonts',
+        'info',
+        node,
+        'Text layer uses mixed font faces; manifest font metadata records a single fallback family/style for the layer.'
+      );
+    }
+  }
+
+  function diagnoseBlendMode(node: SceneNode, hasAsset: boolean): void {
+    const mode = nodeBlendMode(node);
+    if (isNormalBlend(mode)) return;
+    const tier = mode === 'multiply' || mode === 'screen' || mode === 'plusLighter' ? 1 : 2;
+    addDiagnostic(
+      'blendModeCaveats',
+      tier === 2 ? 'warning' : 'info',
+      node,
+      hasAsset
+        ? `Blend mode '${mode}' is applied to a PNG-backed element; verify the result against Figma when it overlaps dynamic content.`
+        : `Blend mode '${mode}' needs FigForge's Unity blend path${tier === 2 ? ' and page compositor' : ''} for accurate output.`,
+      { blendMode: mode, compositorTier: tier, pngBacked: hasAsset }
+    );
+  }
+
+  function diagnoseOversizedPng(node: SceneNode, file: string, dims: { w: number; h: number }, byteLength: number): void {
+    const pixels = dims.w * dims.h;
+    const oversized =
+      dims.w > OVERSIZED_PNG_MAX_DIMENSION ||
+      dims.h > OVERSIZED_PNG_MAX_DIMENSION ||
+      pixels > OVERSIZED_PNG_MAX_PIXELS ||
+      byteLength > OVERSIZED_PNG_MAX_BYTES;
+    if (!oversized) return;
+    addDiagnostic(
+      'oversizedPngs',
+      'warning',
+      node,
+      `PNG '${file}' is large (${dims.w}x${dims.h}, ${Math.round(byteLength / 1024)} KiB); consider lowering export scale or splitting the layer.`,
+      { width: dims.w, height: dims.h, pixels, bytes: byteLength },
+      file
+    );
+  }
+
+  function rasterFallbackMessage(p: Plan, file: string): string | undefined {
+    if (p.bakeSelf) return `Image-fill container baked its own background to '${file}' while children remain editable.`;
+    if (p.merged) return `Merged layer exported as '${file}', flattening its subtree into one PNG.`;
+    if (forcedPngIds.has(p.node.id)) return `Layer was explicitly rasterized as '${file}'.`;
+    if (p.node.type === 'TEXT') return `Text layer rasterized as '${file}' instead of TextMeshProUGUI.`;
+    if (VECTOR_SHAPE_TYPES.has(p.node.type) && !buildVectorDrawing(p.node)) {
+      return `Vector geometry could not be emitted procedurally; '${file}' is the PNG fallback.`;
+    }
+    if (hasImageFill(p.node)) return `Image paint exported through PNG fallback '${file}'.`;
+    if (p.exportable) return `Layer exported as PNG asset '${file}'.`;
+    return undefined;
+  }
+
+  function buildDiagnosticsReport(): AssetDiagnosticsReport {
+    const summary: Record<AssetDiagnosticCategory, number> = {
+      missingFonts: 0,
+      unsupportedFills: 0,
+      rasterFallbacks: 0,
+      oversizedPngs: 0,
+      blendModeCaveats: 0,
+      variantExtraction: 0,
+    };
+    for (const issue of diagnosticIssues) summary[issue.category] += 1;
+    return { summary, issues: diagnosticIssues };
+  }
 
   // ---- 1. Plan the tree (which nodes become elements, which merge/rasterize) -
   const plans: Plan[] = [];
@@ -715,6 +933,11 @@ export async function exportDesign(
     for (const c of children) plan(c, node.id, isMergeRoot);
   }
   plan(root, null, false);
+
+  for (const p of plans) {
+    diagnoseUnsupportedPaints(p.node);
+    if (p.node.type === 'TEXT') diagnoseTextFont(p.node as TextNode);
+  }
 
   // ---- 2. Rasterize exportable nodes (hide siblings/descendants to isolate) --
   const assets: BinaryAsset[] = [];
@@ -805,6 +1028,9 @@ export async function exportDesign(
         assetEntries.push({ file, nodeId: p.node.id, scale: scaleNum });
       }
       assetByNode.set(p.node.id, { file, w: dims.w, h: dims.h });
+      diagnoseOversizedPng(p.node, file, dims, bytes.length);
+      const rasterMessage = rasterFallbackMessage(p, file);
+      if (rasterMessage) addDiagnostic('rasterFallbacks', 'info', p.node, rasterMessage, undefined, file);
     } catch {
       // Container whose children were all hidden → empty render → exportAsync
       // throws. Drop the dangling asset so Unity uses style.fill instead of a
@@ -828,7 +1054,12 @@ export async function exportDesign(
     const kids = (master as ChildrenMixin).children as SceneNode[];
     const out: CanonicalStates = {};
     for (const [key, layerName] of STATE_LAYERS) {
-      const layer = kids.find((c) => c.name.toLowerCase() === layerName);
+      const variantLayer =
+        key === 'normal' ? componentSetStateSource(master, 'normal')
+          : key === 'highlighted' ? componentSetStateSource(master, 'hover')
+            : key === 'pressed' ? componentSetStateSource(master, 'pressed')
+              : undefined;
+      const layer = kids.find((c) => c.name.toLowerCase() === layerName) ?? variantLayer;
       if (!layer || !('exportAsync' in layer)) continue;
       const prev = (layer as unknown as { visible: boolean }).visible;
       (layer as unknown as { visible: boolean }).visible = true;
@@ -837,6 +1068,7 @@ export async function exportDesign(
           exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
         }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
         const hash = dedupKey(bytes);
+        const dims = pngSize(bytes);
         let file = hashToFile.get(hash);
         if (!file) {
           file = generateFileName(root.name, `${master.name}_${layerName}`, scaleNum);
@@ -846,6 +1078,8 @@ export async function exportDesign(
           assets.push({ name: file, data: bytes });
           assetEntries.push({ file, nodeId: layer.id, scale: scaleNum });
         }
+        diagnoseOversizedPng(layer, file, dims, bytes.length);
+        addDiagnostic('rasterFallbacks', 'info', layer, `Canonical '${layerName}' state exported as PNG '${file}'.`, undefined, file);
         out[key] = file;
       } catch {
         /* skip unrenderable state */
@@ -869,6 +1103,7 @@ export async function exportDesign(
         exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
       }).exportAsync({ format: 'PNG', constraint: exportConstraint(scale) });
       const hash = dedupKey(bytes);
+      const dims = pngSize(bytes);
       let file = hashToFile.get(hash);
       if (!file) {
         file = generateFileName(root.name, nameHint, scaleNum);
@@ -878,6 +1113,8 @@ export async function exportDesign(
         assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
       }
+      diagnoseOversizedPng(node, file, dims, bytes.length);
+      addDiagnostic('rasterFallbacks', 'info', node, `Canonical/control asset exported as PNG '${file}'.`, undefined, file);
       return file;
     } catch {
       return undefined;
@@ -992,12 +1229,12 @@ export async function exportDesign(
     const sf = shapeFill(node);
     const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
     const blendMode = nodeBlendMode(node);
-    const radius = typeof (node as unknown as { cornerRadius?: number }).cornerRadius === 'number'
-      ? (node as unknown as { cornerRadius: number }).cornerRadius : 0;
+    const { radius, corners } = cornerData(node);
     const ownEffects = extractShadows(node);
     const strokesAll = options.rasterizeStrokes ? [] : extractStrokes(node, options);
     if (!sf && fills.length === 0 && strokesAll.length === 0 && ownEffects.length === 0 && radius <= 0) return null;
     const shape: ButtonShape = { cornerRadius: radius, opacity, blendMode, fill: sf?.fill ?? [0, 0, 0, 0] };
+    if (corners) shape.corners = corners;
     if (sf?.gradient) shape.gradient = sf.gradient;
     if (fills.length) shape.fills = fills;
     if (strokesAll.length) {
@@ -1039,10 +1276,11 @@ export async function exportDesign(
   function mergeShapeFallbacks(shape: ButtonShape | null, fallbacks: SceneNode[]): ButtonShape | null {
     if (!shape) return null;
     for (const src of fallbacks) {
-      const radius = typeof (src as unknown as { cornerRadius?: number }).cornerRadius === 'number'
-        ? (src as unknown as { cornerRadius: number }).cornerRadius
-        : 0;
-      if (shape.cornerRadius === 0 && radius > 0) shape.cornerRadius = radius;
+      const { radius, corners } = cornerData(src);
+      if (shape.cornerRadius === 0 && radius > 0) {
+        shape.cornerRadius = radius;
+        if (corners) shape.corners = corners;
+      }
 
       if (!shape.stroke) {
         const strokes = extractStrokes(src, options);
@@ -1126,6 +1364,7 @@ export async function exportDesign(
     if (hasVisualPaint(root) || root.cornerRadius > 0.001) return root;
     return {
       cornerRadius: regular.cornerRadius,
+      corners: regular.corners,
       opacity: root.opacity,
       blendMode: root.blendMode,
       effects: rootEffects,
@@ -1136,6 +1375,38 @@ export async function exportDesign(
     'children' in master
       ? ((master as ChildrenMixin).children as SceneNode[]).find((c) => c.name.toLowerCase() === name.toLowerCase())
       : undefined;
+
+  function compatibleVariant(base: CanonicalVariantProps | undefined, candidate: CanonicalVariantProps | undefined): boolean {
+    if (!base || !candidate) return true;
+    for (const axis of ['size', 'tone', 'intent', 'severity', 'value']) {
+      if (base.axes[axis] !== undefined && candidate.axes[axis] !== undefined && base.axes[axis] !== candidate.axes[axis]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function componentSetStateSource(master: SceneNode, state: string): SceneNode | undefined {
+    const comp = master.type === 'COMPONENT' ? master as ComponentNode : undefined;
+    const set = comp?.parent?.type === 'COMPONENT_SET' ? comp.parent as ComponentSetNode : undefined;
+    if (!set) return undefined;
+    const base = extractVariantProps(master);
+    for (const child of set.children as SceneNode[]) {
+      if (child.type !== 'COMPONENT') continue;
+      const variants = extractVariantProps(child);
+      if (variants?.state === state && compatibleVariant(base, variants)) return child;
+    }
+    return undefined;
+  }
+
+  function stateSource(master: SceneNode, layerName: string, state: string): SceneNode | undefined {
+    return childByName(master, layerName) ?? componentSetStateSource(master, state);
+  }
+
+  async function iconAssetOf(master: SceneNode): Promise<string | undefined> {
+    const icon = childByName(master, 'Icon');
+    return icon ? exportNodeAsset(icon, `${master.name}_icon`) : undefined;
+  }
 
   // Normalized Unity anchors [minX,minY,maxX,maxY] of named children within `master`
   // (Figma top-down → Unity bottom-up), so composite controls position precisely.
@@ -1158,25 +1429,41 @@ export async function exportDesign(
   async function captureButtonShape(master: SceneNode, silent = false) {
     if (!('children' in master)) return null;
     const kids = (master as ChildrenMixin).children as SceneNode[];
-    const reg = kids.find((c) => c.name.toLowerCase() === 'regular');
-    if (!reg) { if (!silent) shapeDiag.push(`'${master.name}': no layer named 'regular'`); return null; }
+    const reg = stateSource(master, 'Regular', 'normal') ?? master;
+    if (!reg) { if (!silent) shapeDiag.push(`'${master.name}': no layer named 'regular' or State=Default variant`); return null; }
     const rawRootShape = shapeOf(master);
     const shape = stripRootShadowFromState(await stateShape(reg), rawRootShape);
     if (!shape) { if (!silent) shapeDiag.push(`'${master.name}': regular fill = ${fillDiag(reg)}`); return null; } // unsupported fill → PNG path
     const rootShape = rootShadowShape(rawRootShape, shape);
     const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: shape.fill };
     const stateShapes: CanonicalStateShapes = { normal: shape };
-    const ro = kids.find((c) => c.name.toLowerCase() === 'rollover');
+    const ro = stateSource(master, 'Rollover', 'hover');
     const roShape = stripRootShadowFromState(ro ? await stateShape(ro) : null, rootShape);
     const rc = roShape?.fill ?? (ro ? stateSolid(ro) : null);
     if (roShape) stateShapes.highlighted = roShape;
     if (rc) stateColors.highlighted = rc;
-    const pr = kids.find((c) => c.name.toLowerCase() === 'pressed');
+    const pr = stateSource(master, 'Pressed', 'pressed');
     const prShape = stripRootShadowFromState(pr ? await stateShape(pr) : null, rootShape);
     const pc = prShape?.fill ?? (pr ? stateSolid(pr) : null);
     if (prShape) stateShapes.pressed = prShape;
     if (pc) stateColors.pressed = pc;
-    return { shape, rootShape, stateColors, stateShapes, parts: partsOf(master, ['Regular', 'RollOver', 'Pressed', 'HitArea', 'Label']) };
+    const selected = componentSetStateSource(master, 'selected');
+    const disabled = componentSetStateSource(master, 'disabled');
+    const focused = componentSetStateSource(master, 'focused');
+    const selectedShape = stripRootShadowFromState(selected ? await stateShape(selected) : null, rootShape);
+    const disabledShape = stripRootShadowFromState(disabled ? await stateShape(disabled) : null, rootShape);
+    const focusedShape = stripRootShadowFromState(focused ? await stateShape(focused) : null, rootShape);
+    if (selectedShape) stateShapes.selected = selectedShape;
+    if (disabledShape) stateShapes.disabled = disabledShape;
+    if (focusedShape) stateShapes.focused = focusedShape;
+    return {
+      shape,
+      rootShape,
+      stateColors,
+      stateShapes,
+      iconAsset: await iconAssetOf(master),
+      parts: partsOf(master, ['Regular', 'RollOver', 'Pressed', 'HitArea', 'Label', 'Icon']),
+    };
   }
 
   // Text content of a node (its own characters, or the first descendant text).
@@ -1222,6 +1509,8 @@ export async function exportDesign(
         assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
       }
+      diagnoseOversizedPng(node, file, dims, bytes.length);
+      addDiagnostic('rasterFallbacks', 'info', node, `Render-only subtree node exported as PNG '${file}'.`, undefined, file);
       return { file, w: dims.w, h: dims.h };
     } catch {
       return undefined; // empty render → fall back to style fill in Unity
@@ -1358,10 +1647,11 @@ export async function exportDesign(
     const ckTree = await captureSubtree(ckNode);
     if (ckTree) partTrees.Checkmark = ckTree;
     return { shape, checkShape: checkShape ?? undefined, value, label: textOf(childByName(master, 'Label')),
+      iconAsset: await iconAssetOf(master),
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       // 'HitArea' (optional): if the component defines a HitArea layer, Unity uses it
       // as the clickable region; otherwise the whole component frame is clickable.
-      parts: partsOf(master, ['Background', 'Checkmark', 'Label', 'HitArea']) };
+      parts: partsOf(master, ['Background', 'Checkmark', 'Label', 'Icon', 'HitArea']) };
   }
 
   // THIS node's own checked state, read the way captureToggle reads the master's:
@@ -1393,7 +1683,8 @@ export async function exportDesign(
       thumbPressed: thumbPress ? (stateSolid(thumbPress) ?? undefined) : undefined,
       value,
       label: textOf(childByName(master, 'Label')),
-      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'HitArea', 'Label']),
+      iconAsset: await iconAssetOf(master),
+      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'HitArea', 'Label', 'Icon']),
     };
   }
 
@@ -1423,8 +1714,69 @@ export async function exportDesign(
       placeholder,
       value,
       partTrees: bgTree ? { Background: bgTree } : undefined,
-      parts: partsOf(master, ['Background', 'Placeholder', 'Text', 'Value']),
+      iconAsset: await iconAssetOf(master),
+      parts: partsOf(master, ['Background', 'Placeholder', 'Text', 'Value', 'Icon']),
     };
+  }
+
+  async function captureModal(master: SceneNode) {
+    const backdrop = descendantByExactName(master, 'Backdrop');
+    const panel = descendantByExactName(master, 'Panel') ?? descendantByExactName(master, 'Dialog');
+    return {
+      backdropShape: backdrop ? (await shapeOfWithAsset(backdrop) ?? undefined) : undefined,
+      panelShape: panel ? (await shapeOfWithAsset(panel) ?? undefined) : undefined,
+      label: firstTextUnderNamedDescendant(master, ['Title', 'Header']) ?? textOf(master) ?? 'Dialog',
+      body: firstTextUnderNamedDescendant(master, ['Body', 'Message', 'Description']),
+      primaryLabel: firstTextUnderNamedDescendant(master, ['Primary', 'PrimaryButton', 'Confirm']),
+      secondaryLabel: firstTextUnderNamedDescendant(master, ['Secondary', 'SecondaryButton', 'Cancel']),
+      iconAsset: await iconAssetOf(master),
+      parts: partsOf(master, ['Backdrop', 'Panel', 'Icon']),
+    };
+  }
+
+  async function captureToast(master: SceneNode) {
+    const toast = descendantByExactName(master, 'Toast') ?? descendantByExactName(master, 'Panel') ?? master;
+    const accent = descendantByExactName(master, 'Accent');
+    const accentColor = accent ? (stateSolid(accent) ?? undefined) : undefined;
+    const toastShape = await shapeOfWithAsset(toast) ?? undefined;
+    return {
+      shape: toastShape,
+      toastShape,
+      accentColor,
+      label: firstTextUnderNamedDescendant(master, ['Title']) ?? textOf(master) ?? 'Notification',
+      body: firstTextUnderNamedDescendant(master, ['Body', 'Message', 'Description']),
+      severity: toastSeverityFromName(master.name),
+      position: toastPositionFromName(master.name),
+      duration: toastDurationFromName(master.name),
+      iconAsset: await iconAssetOf(master),
+      parts: partsOf(master, ['Toast', 'Accent', 'Icon']),
+    };
+  }
+
+  function toastSeverityFromName(name: string): CanonicalRef['severity'] {
+    const n = name.toLowerCase();
+    if (n.includes('success')) return 'success';
+    if (n.includes('warning') || n.includes('warn')) return 'warning';
+    if (n.includes('error') || n.includes('danger')) return 'error';
+    return 'info';
+  }
+
+  function toastPositionFromName(name: string): CanonicalRef['position'] | undefined {
+    const n = name.toLowerCase().replace(/[\s_-]+/g, '');
+    if (n.includes('topleft')) return 'topLeft';
+    if (n.includes('bottomright')) return 'bottomRight';
+    if (n.includes('bottomleft')) return 'bottomLeft';
+    if (n.includes('topcenter')) return 'topCenter';
+    if (n.includes('bottomcenter')) return 'bottomCenter';
+    if (n.includes('topright')) return 'topRight';
+    return undefined;
+  }
+
+  function toastDurationFromName(name: string): number | undefined {
+    const m = name.toLowerCase().match(/(?:duration|dur|auto)(\d+(?:\.\d+)?)s?/);
+    if (!m) return undefined;
+    const v = Number(m[1]);
+    return Number.isFinite(v) ? v : undefined;
   }
 
   // Capture a numeric Stepper: Minus button, InputField, Plus button, and Text
@@ -1456,7 +1808,8 @@ export async function exportDesign(
       minValue, maxValue, slots: step,
       value: rawValue.trim().length === 0 ? '0' : rawValue,
       minusLabel, plusLabel,
-      parts: partsOf(master, ['Minus', 'MinusLabel', 'InputField', 'Text', 'Value', 'Plus', 'PlusLabel']),
+      iconAsset: await iconAssetOf(master),
+      parts: partsOf(master, ['Minus', 'MinusLabel', 'InputField', 'Text', 'Value', 'Plus', 'PlusLabel', 'Icon']),
     };
   }
 
@@ -1536,7 +1889,8 @@ export async function exportDesign(
       arrowColor, arrowRollover, arrowPressed,
       bgRollover, bgPressed,
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
-      parts: partsOf(master, ['Background', 'Label', 'Arrow']) };
+      iconAsset: await iconAssetOf(master),
+      parts: partsOf(master, ['Background', 'Label', 'Arrow', 'Icon']) };
   }
 
   // Capture a list: rounded Background + ONE 'Item' template row (Regular fill,
@@ -1632,11 +1986,12 @@ export async function exportDesign(
       listItems: listItems.length ? listItems : undefined,
       scrollbarWidth, scrollTrackShape, scrollThumbShape, scrollThumbRollover, scrollThumbPressed,
       maskShape,
+      iconAsset: await iconAssetOf(master),
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
       // 'Mask' (optional, usually hidden): a designer-drawn rect that defines the exact
       // scroll/clip region — Unity anchors the list viewport to it instead of deriving
       // the box from the Background interior minus the Header.
-      parts: partsOf(master, ['Background', 'Mask']) };
+      parts: partsOf(master, ['Background', 'Mask', 'Icon']) };
   }
 
   // First descendant TEXT named `name` (case-insensitive). Table cells live inside
@@ -1730,8 +2085,9 @@ export async function exportDesign(
       tableRows: tableRows.length ? tableRows : undefined,
       scrollbarWidth, scrollTrackShape, scrollThumbShape, scrollThumbRollover, scrollThumbPressed,
       maskShape,
+      iconAsset: await iconAssetOf(master),
       partTrees: Object.keys(partTrees).length ? partTrees : undefined,
-      parts: partsOf(master, ['Background', 'Mask']) };
+      parts: partsOf(master, ['Background', 'Mask', 'Icon']) };
   }
 
   // Width ratio of a slider's Fill over its Track (0..1) — the "how full" a
@@ -1799,10 +2155,11 @@ export async function exportDesign(
       value: fmtSliderValue(raw),
       label: textOf(childByName(master, 'Label')),
       partTrees: ticksTree ? { Ticks: ticksTree } : undefined,
+      iconAsset: await iconAssetOf(master),
       // 'HitArea' (optional): the captured layer bounds the click/drag surface;
       // absent → the whole component frame is the surface. 'Value' (optional): a
       // live read-out text — Unity rewrites it on every value change.
-      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'Ticks', 'HitArea', 'Label', 'Value']) };
+      parts: partsOf(master, ['Track', 'Fill', 'Thumb', 'Ticks', 'HitArea', 'Label', 'Value', 'Icon']) };
   }
 
   // A progress master's style, read from its Track layer (layer-driven, like the
@@ -1898,9 +2255,10 @@ export async function exportDesign(
       value: fmtSliderValue(ratio),
       indeterminate: childByName(master, 'Indeterminate') ? true : undefined,
       label: textOf(childByName(master, 'Label')),
+      iconAsset: await iconAssetOf(master),
       // 'Value' (optional): a live percentage read-out — Unity rewrites it on
       // every value change (centered in the dial for rings).
-      parts: partsOf(master, ['Track', 'Fill', 'Label', 'Value']) };
+      parts: partsOf(master, ['Track', 'Fill', 'Label', 'Value', 'Icon']) };
   }
 
   const stateByNode = new Map<string, CanonicalStates>();
@@ -2047,6 +2405,16 @@ export async function exportDesign(
           : Math.max(1, Math.round((instH - (t.headerHeight || 0)) / ih));
         controlByNode.set(p.node.id, { ...t, itemHeight: ih, count });
       }
+    } else if (ref.kind === 'modal') {
+      const m = await memoMasterCapture(`modal|${master.id}`, () => captureModal(master));
+      if (m) {
+        controlByNode.set(p.node.id, m);
+      }
+    } else if (ref.kind === 'toast') {
+      const t = await memoMasterCapture(`toast|${master.id}`, () => captureToast(master));
+      if (t) {
+        controlByNode.set(p.node.id, t);
+      }
     } else if (ref.kind === 'slider') {
       const s = await memoMasterCapture(`slider|${master.id}`, () => captureSlider(master, canonicalTagData(master)));
       if (s) {
@@ -2102,6 +2470,7 @@ export async function exportDesign(
 
     const asset = !failedExportIds.has(node.id) ? assetByNode.get(node.id) : undefined;
     const hasAsset = !!asset;
+    diagnoseBlendMode(node, hasAsset);
 
     const transform = isRoot
       ? rootTransform(frameW, frameH)
@@ -2161,6 +2530,7 @@ export async function exportDesign(
         if (sh.rootShape) canonical.rootShape = sh.rootShape;
         canonical.stateColors = sh.stateColors;
         canonical.stateShapes = sh.stateShapes;
+        if (sh.iconAsset) canonical.iconAsset = sh.iconAsset;
         canonical.parts = sh.parts;
       }
     }
@@ -2176,6 +2546,13 @@ export async function exportDesign(
       const instanceInputValue = canonical.kind === 'input' ? canonical.value : undefined;
       const instanceStepperValue = canonical.kind === 'stepper' ? canonical.value : undefined;
       const instanceSliderLabel = canonical.kind === 'slider' || canonical.kind === 'progress' ? canonical.label : undefined;
+      const instanceModalLabel = canonical.kind === 'modal' ? canonical.label : undefined;
+      const instanceModalBody = canonical.kind === 'modal' ? canonical.body : undefined;
+      const instanceModalPrimary = canonical.kind === 'modal' ? canonical.primaryLabel : undefined;
+      const instanceModalSecondary = canonical.kind === 'modal' ? canonical.secondaryLabel : undefined;
+      const instanceToastLabel = canonical.kind === 'toast' ? canonical.label : undefined;
+      const instanceToastBody = canonical.kind === 'toast' ? canonical.body : undefined;
+      const instanceToastSeverity = canonical.kind === 'toast' ? canonical.severity : undefined;
       const toggleLike = canonical.kind === 'toggle' || canonical.kind === 'radio';
       const instanceToggleLabel = toggleLike ? canonical.label : undefined;
       const switchLike = canonical.kind === 'switch';
@@ -2209,6 +2586,46 @@ export async function exportDesign(
         // The instance's own Label text (possibly overridden in Figma) wins over the
         // master's; the captured per-instance value is already correct from dispatch.
         if (instanceSliderLabel !== undefined) canonical.label = instanceSliderLabel;
+      } else if (canonical.kind === 'modal') {
+        if (instanceModalLabel !== undefined) canonical.label = instanceModalLabel;
+        if (instanceModalBody !== undefined) canonical.body = instanceModalBody;
+        if (instanceModalPrimary !== undefined) canonical.primaryLabel = instanceModalPrimary;
+        if (instanceModalSecondary !== undefined) canonical.secondaryLabel = instanceModalSecondary;
+      } else if (canonical.kind === 'toast') {
+        if (instanceToastLabel !== undefined) canonical.label = instanceToastLabel;
+        if (instanceToastBody !== undefined) canonical.body = instanceToastBody;
+        if (instanceToastSeverity !== undefined) canonical.severity = instanceToastSeverity;
+      }
+    }
+    if (canonical) {
+      const variants = canonical.variantProps;
+      const axes = variants ? Object.entries(variants.axes).map(([a, v]) => `${a}=${v}`).join(', ') : '';
+      if (axes) {
+        addDiagnostic('variantExtraction', 'info', node, `Variant axes found: ${axes}.`, {
+          axes,
+          source: variants?.source ?? '',
+        });
+      }
+      if ((canonical.kind === 'toggle' || canonical.kind === 'radio' || canonical.kind === 'switch')) {
+        const onOff = variantOnOff(variants);
+        if (onOff) {
+          appendVariantDiagnostic(variants, `initial value from variant ${onOff}`);
+          addDiagnostic('variantExtraction', 'info', node, `Initial ${canonical.kind} value came from variant metadata (${onOff}).`, {
+            decision: 'initialValue',
+            axis: variants?.value !== undefined ? 'value' : 'state',
+            value: onOff,
+          });
+        } else {
+          addDiagnostic('variantExtraction', 'info', node, `No structured on/off variant found; ${canonical.kind} used existing fallback heuristics.`, {
+            decision: 'fallbackInitialValue',
+          });
+        }
+      } else if (canonical.kind === 'button' && variantState(variants)) {
+        appendVariantDiagnostic(variants, `button state from variant ${variantState(variants)}`);
+      } else if (canonical.kind === 'dropdown' && variantValueOriginal(variants, 'value')) {
+        appendVariantDiagnostic(variants, `selected value from variant ${variantValueOriginal(variants, 'value')}`);
+      } else if (canonical.kind === 'toast' && toastSeverityFromVariant(variants)) {
+        appendVariantDiagnostic(variants, `severity from variant ${toastSeverityFromVariant(variants)}`);
       }
     }
     const nav = navFor(node);
@@ -2295,6 +2712,7 @@ export async function exportDesign(
     elements,
     assets: assetEntries,
     fonts,
+    diagnostics: buildDiagnosticsReport(),
     settings: {
       fontFaceDilate,
     },
