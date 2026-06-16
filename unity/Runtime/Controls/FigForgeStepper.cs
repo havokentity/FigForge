@@ -63,7 +63,7 @@ namespace FigForge
 
         public void SetValueFromString(string value, bool sendCallback = false)
         {
-            if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+            if (FigForgeInputField.TryGetNumericValue(value, out var parsed))
                 SetValue(parsed, sendCallback);
             else
                 RefreshText();
