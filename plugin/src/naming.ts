@@ -91,3 +91,24 @@ export function parseCanonical(name: string): CanonicalRef | null {
 export function isCanonicalName(name: string): boolean {
   return parseCanonical(name) !== null;
 }
+
+// ---------------------------------------------------------------------------
+// Pass-through (unwrap) naming convention.
+//
+// A container marked pass-through is SKIPPED by the generator: it never becomes
+// a GameObject, and its children are promoted to the nearest surviving ancestor.
+// Detected on the RAW (un-sanitized) layer name so it works headlessly and in
+// page/MCP exports without any UI state:
+//   • a leading '~' marker   →  "~Wrapper", "~ spacer"
+//   • a leading word         →  "unwrap row", "passthrough / group", "pass-through"
+// The leading-token rule mirrors the canonical KIND-tag convention above; the
+// '~' prefix is the ergonomic quick-mark. Matching is anchored to the start so a
+// node merely *containing* the word (e.g. "Password") never trips it.
+// ---------------------------------------------------------------------------
+export function isPassthroughName(name: string): boolean {
+  const raw = (name || '').trim();
+  if (!raw) return false;
+  if (raw.startsWith('~')) return true;
+  const compact = raw.toLowerCase().replace(/[^a-z]/g, '');
+  return compact.startsWith('passthrough') || compact.startsWith('unwrap');
+}

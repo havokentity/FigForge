@@ -3,7 +3,7 @@
 // =============================================================================
 
 import type { CanonicalKind, CanonicalRef, TreeNode } from './types';
-import { sanitize, parseCanonical } from './naming';
+import { sanitize, parseCanonical, isPassthroughName } from './naming';
 
 // Shared plugin data (namespace + key) works without a manifest "id";
 // private get/setPluginData would require one.
@@ -212,6 +212,23 @@ export function canMerge(node: SceneNode): boolean {
   return (CONTAINER_TYPES.has(node.type) || node.type === 'RECTANGLE') && hasChildren(node);
 }
 
+const PASSTHROUGH_TYPES = new Set([...CONTAINER_TYPES, 'SECTION']);
+
+/**
+ * Eligible to be marked pass-through (skip the node, promote its children to the
+ * nearest surviving ancestor). A container with at least one visible child that
+ * isn't a canonical control and isn't an icon-only container (those bake to a
+ * single sprite — dissolving them would scatter the glyph). The export root is
+ * filtered separately by the exporter (no parent to promote into).
+ */
+export function canPassthrough(node: SceneNode): boolean {
+  if (!PASSTHROUGH_TYPES.has(node.type) || !hasChildren(node)) return false;
+  if (!node.children.some(isVisible)) return false;
+  if (detectCanonical(node)) return false;
+  if (isIconContainer(node)) return false;
+  return true;
+}
+
 /** Build the UI layer tree for a selected root node. */
 export function buildTree(root: SceneNode, excluded: Set<string>): TreeNode {
   function walk(node: SceneNode, depth: number): TreeNode {
@@ -229,6 +246,8 @@ export function buildTree(root: SceneNode, excluded: Set<string>): TreeNode {
       visible: isVisible(node) && !excluded.has(node.id),
       canExportPng: node.type === 'TEXT' || isExportable(node),
       canMerge: canMerge(node),
+      canPassthrough: canPassthrough(node),
+      passthroughByName: isPassthroughName(node.name),
       canonicalRef: canonical ? canonical.ref : undefined,
       children: childNodes,
     };

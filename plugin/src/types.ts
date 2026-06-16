@@ -132,6 +132,12 @@ export interface UnityTransform {
   offsetMin: Vec2;
   offsetMax: Vec2;
   rotationZ: number; // degrees, CCW positive (Unity convention)
+  // Mirror flags. A Figma flip is a REFLECTION (negative-determinant transform),
+  // not a rotation — node.rotation misreports it as a spurious ±180°. The exporter
+  // detects the flip from relativeTransform and emits it here; Unity applies it as
+  // a negative localScale on that axis (rotationZ then carries the TRUE rotation).
+  flipX?: boolean;
+  flipY?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +558,7 @@ export interface ElementConfig {
   excluded?: boolean;
   merged?: boolean;
   rasterize?: boolean; // force a TEXT/container to export as a PNG
+  passthrough?: boolean; // skip this container; promote its children to the parent
 }
 
 // ---------------------------------------------------------------------------
@@ -566,6 +573,8 @@ export interface TreeNode {
   visible: boolean;
   canExportPng: boolean;
   canMerge: boolean;
+  canPassthrough: boolean;
+  passthroughByName?: boolean; // name already marks it pass-through (no toggle needed)
   canonicalRef?: string;
   children: TreeNode[];
 }

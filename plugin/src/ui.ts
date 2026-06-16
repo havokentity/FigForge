@@ -29,6 +29,7 @@ $('#version').textContent = 'v' + __FIGFORGE_VERSION__;
 const excluded = new Set<string>();
 const merged = new Set<string>();
 const forcedPng = new Set<string>();
+const passthrough = new Set<string>();
 let currentTree: TreeNode | null = null;
 let selectedId: string | null = null;
 let expandedNodes = new Set<string>();
@@ -460,6 +461,17 @@ function renderTree() {
         toggle(forcedPng, node.id); post({ type: 'toggle-png', nodeId: node.id }); renderTree();
       }));
     }
+    if (node.canPassthrough) {
+      const byName = node.passthroughByName === true;
+      const on = byName || passthrough.has(node.id);
+      const title = byName
+        ? 'Pass-through (marked by layer name) — children promoted to the parent'
+        : 'Pass-through: skip this container, promote its children to its parent';
+      row.appendChild(miniBtn('↑', on ? 'on pass' : 'pass', title, () => {
+        if (byName) return; // name-driven — toggle via the layer name, not here
+        toggle(passthrough, node.id); post({ type: 'toggle-passthrough', nodeId: node.id }); renderTree();
+      }));
+    }
 
     row.addEventListener('click', () => {
       selectedId = node.id;
@@ -511,17 +523,19 @@ function updateTreeStats() {
     el.textContent = '';
     return;
   }
-  const stats = { total: 0, exported: 0, excluded: 0, merged: 0, raster: 0 };
+  const stats = { total: 0, exported: 0, excluded: 0, merged: 0, raster: 0, pass: 0 };
   const walk = (node: TreeNode) => {
     stats.total += 1;
     if (!excluded.has(node.id) && node.visible) stats.exported += 1;
     if (excluded.has(node.id) || !node.visible) stats.excluded += 1;
     if (merged.has(node.id)) stats.merged += 1;
     if (forcedPng.has(node.id)) stats.raster += 1;
+    if (passthrough.has(node.id) || node.passthroughByName) stats.pass += 1;
     (node.children || []).forEach(walk);
   };
   walk(currentTree);
-  el.textContent = `total ${stats.total} · exported ${stats.exported} · excluded ${stats.excluded} · merged ${stats.merged} · raster ${stats.raster}`;
+  const passPart = stats.pass ? ` · pass-through ${stats.pass}` : '';
+  el.textContent = `total ${stats.total} · exported ${stats.exported} · excluded ${stats.excluded} · merged ${stats.merged} · raster ${stats.raster}${passPart}`;
 }
 
 function updateTreeFilterUi() {
@@ -602,12 +616,13 @@ function parseScale(): ExportScale {
 }
 
 function collectConfigs(): ElementConfig[] {
-  const ids = new Set<string>([...excluded, ...merged, ...forcedPng]);
+  const ids = new Set<string>([...excluded, ...merged, ...forcedPng, ...passthrough]);
   return [...ids].map((id) => ({
     id,
     excluded: excluded.has(id),
     merged: merged.has(id),
     rasterize: forcedPng.has(id),
+    passthrough: passthrough.has(id),
   }));
 }
 

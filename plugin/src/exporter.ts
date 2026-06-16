@@ -41,7 +41,7 @@ import {
   type Style,
   type TextProps,
 } from './types';
-import { generateFileName, sanitize } from './naming';
+import { generateFileName, isPassthroughName, sanitize } from './naming';
 import {
   canonicalTagData,
   detectCanonical,
@@ -434,6 +434,11 @@ interface Plan {
   // built on top. See plan() for the full rationale.
   bakeSelf: boolean;
   children: SceneNode[];
+  // Effective layout parent: normally node.parent, but for a child promoted out
+  // of one or more pass-through containers it's the nearest SURVIVING ancestor.
+  // When it differs from node.parent the transform is recomputed against it so the
+  // promoted child lands correctly under the grandparent (null only for the root).
+  layoutParent: SceneNode | null;
 }
 
 const VECTOR_SHAPE_TYPES = new Set<string>([
@@ -514,11 +519,12 @@ function interactive(name: string): boolean {
 }
 
 function firstTextLabel(node: SceneNode): string | undefined {
+  if ((node as unknown as { visible?: boolean }).visible === false) return undefined;
   if (node.type === 'TEXT') return (node as TextNode).characters;
   if ('children' in node) {
     for (const c of (node as ChildrenMixin).children) {
       const l = firstTextLabel(c);
-      if (l) return l;
+      if (l !== undefined) return l;
     }
   }
   return undefined;
@@ -566,6 +572,7 @@ function inputValueText(node: SceneNode): string | undefined {
 
 /** First TEXT node under a node — used to read a canonical instance's label font. */
 function firstTextNode(node: SceneNode): TextNode | undefined {
+  if ((node as unknown as { visible?: boolean }).visible === false) return undefined;
   if (node.type === 'TEXT') return node as TextNode;
   if ('children' in node) {
     for (const c of (node as ChildrenMixin).children) {
@@ -588,6 +595,28 @@ function gatherTexts(node: SceneNode): string[] {
   };
   if ('children' in node) for (const c of (node as ChildrenMixin).children) walk(c);
   return out;
+}
+
+// Direct children of a canonical master that the control CONSUMES — its state
+// layers (regular/rollover/pressed + variant aliases) and the standard content
+// parts (label/icon/background/hit-area). Everything ELSE a designer dropped in
+// is a "common visual" (a shared graphic meant to show across all states); those
+// must survive export as real child elements instead of being silently dropped.
+const RESERVED_CANONICAL_CHILD_NAMES = new Set([
+  'regular', 'rollover', 'roll over', 'pressed', 'normal', 'hover', 'default',
+  'disabled', 'focused', 'selected', 'highlighted', 'active', 'on', 'off',
+  'label', 'text', 'icon', 'background', 'bg',
+  'hitarea', 'hit area', 'hit_area', 'hit-area',
+]);
+
+/** A canonical master's designer-added child layers (NOT state/part layers) —
+ *  preserved in Figma paint order so the Unity builder can layer them faithfully. */
+function canonicalExtraChildren(node: SceneNode): SceneNode[] {
+  if (!('children' in node)) return [];
+  return ((node as ChildrenMixin).children as SceneNode[]).filter((c) => {
+    if ((c as unknown as { visible?: boolean }).visible === false) return false;
+    return !RESERVED_CANONICAL_CHILD_NAMES.has(c.name.trim().toLowerCase());
+  });
 }
 
 function variantOnOff(variants: CanonicalVariantProps | undefined): string | undefined {
@@ -655,7 +684,8 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
     instanceName: ref.instanceName,
     label: ref.kind === 'stepper' ? ref.instanceName
       : ref.kind === 'switch' ? textLabel
-        : (textLabel || ref.instanceName),
+        : ref.kind === 'button' ? (textLabel !== undefined ? textLabel : '')
+          : (textLabel || ref.instanceName),
   };
   if (variantProps) c.variantProps = variantProps;
   if (ref.kind === 'input') {
@@ -736,6 +766,7 @@ export async function exportDesign(
   excludedIds: Set<string> = new Set(),
   mergedIds: Set<string> = new Set(),
   forcedPngIds: Set<string> = new Set(),
+  unwrapIds: Set<string> = new Set(),
   onProgress?: ProgressFn
 ): Promise<ExportResult> {
   const frameW = (root as unknown as { width: number }).width;
@@ -886,7 +917,40 @@ export async function exportDesign(
   const plans: Plan[] = [];
   const planById = new Map<string, Plan>();
 
-  function plan(node: SceneNode, parentId: string | null, insideMerge: boolean) {
+  // A container the designer marked pass-through: it is SKIPPED entirely and its
+  // children are promoted to the nearest surviving ancestor. Mutually exclusive
+  // with merge/rasterize (those bake the whole subtree, so "promote children" is
+  // moot) and never applied to the export root, canonical controls, or icon-only
+  // containers (which flatten to a single sprite). Marked via the per-element
+  // toggle (unwrapIds) or the '~' / 'unwrap' / 'passthrough' name convention.
+  const PASSTHROUGH_TYPES = new Set<string>(['FRAME', 'GROUP', 'COMPONENT', 'INSTANCE', 'COMPONENT_SET', 'SECTION']);
+  function isUnwrap(node: SceneNode): boolean {
+    if (node.id === root.id) return false;
+    if (!PASSTHROUGH_TYPES.has(node.type) || !('children' in node)) return false;
+    const kids = (node as ChildrenMixin).children as SceneNode[];
+    if (!kids.some((c) => (c as unknown as { visible?: boolean }).visible !== false)) return false;
+    if (detectCanonical(node)) return false;        // canonical controls own their build path
+    if (isExportable(node)) return false;           // icon container / bakeable leaf — keep its bake
+    if (mergedIds.has(node.id) || forcedPngIds.has(node.id)) return false; // merge/raster win
+    if (options.autoMerge && (node as unknown as { locked?: boolean }).locked === true) return false;
+    return unwrapIds.has(node.id) || isPassthroughName(node.name);
+  }
+
+  // Direct children of `container` with every pass-through child replaced by ITS
+  // (recursively resolved) children, so chains of nested unwrap frames dissolve in
+  // one pass. Hidden/excluded nodes drop out here (plan would skip them anyway).
+  function effectiveChildren(container: SceneNode): SceneNode[] {
+    if (!('children' in container)) return [];
+    const out: SceneNode[] = [];
+    for (const c of (container as ChildrenMixin).children as SceneNode[]) {
+      if ((c as unknown as { visible?: boolean }).visible === false || excludedIds.has(c.id)) continue;
+      if (isUnwrap(c)) out.push(...effectiveChildren(c));
+      else out.push(c);
+    }
+    return out;
+  }
+
+  function plan(node: SceneNode, parentId: string | null, insideMerge: boolean, layoutParent: SceneNode | null) {
     if ((node as unknown as { visible?: boolean }).visible === false) return;
     if (excludedIds.has(node.id)) return;
 
@@ -922,17 +986,28 @@ export async function exportDesign(
       !exportable && !canonicalRef && 'children' in node && hasImageFill(node);
 
     const children: SceneNode[] =
-      !canonicalRef && !isMergeRoot && !rasterLeaf && 'children' in node
-        ? (node as ChildrenMixin).children.slice() as SceneNode[]
-        : [];
+      canonicalRef
+        // A canonical control consumes its state/part layers itself, but a designer
+        // may add extra "common visual" layers — keep those as real children
+        // (Figma paint order) so they render across every state in Unity.
+        ? canonicalExtraChildren(node)
+        : !isMergeRoot && !rasterLeaf && 'children' in node
+          // Pass-through children dissolve here: each marked descendant is replaced
+          // by its own children, so this node parents the promoted grandchildren
+          // directly (and their transforms recompute against it — see below).
+          ? effectiveChildren(node)
+          : [];
 
-    const p: Plan = { node, parentId, merged: isMergeRoot, canonicalRef, exportable, bakeSelf, children };
+    const p: Plan = { node, parentId, merged: isMergeRoot, canonicalRef, exportable, bakeSelf, children, layoutParent };
     plans.push(p);
     planById.set(node.id, p);
 
-    for (const c of children) plan(c, node.id, isMergeRoot);
+    // Every child plans against THIS node as its effective layout parent — for a
+    // promoted grandchild that's the nearest surviving ancestor, not its (skipped)
+    // Figma parent.
+    for (const c of children) plan(c, node.id, isMergeRoot, node);
   }
-  plan(root, null, false);
+  plan(root, null, false, null);
 
   for (const p of plans) {
     diagnoseUnsupportedPaints(p.node);
@@ -1576,9 +1651,11 @@ export async function exportDesign(
         : mapTransform({
             rect: { x: nx, y: ny, w: nw, h: nh },
             parent: parentDims(node, planById),
+            abs: absXY(node),
+            parentAbs: parentAbsXY(node),
             horizontal: (node as unknown as { constraints?: Constraints }).constraints?.horizontal,
             vertical: (node as unknown as { constraints?: Constraints }).constraints?.vertical,
-            rotation: (node as unknown as { rotation?: number }).rotation ?? 0,
+            ...decomposeFlip(node),
           });
 
       const components: string[] = [];
@@ -2465,8 +2542,37 @@ export async function exportDesign(
   for (const p of plans) {
     const node = p.node;
     const isRoot = p.parentId === null;
-    const parentSize = parentDims(node, planById);
-    const { x: nodeX, y: nodeY } = localXY(node);
+
+    // A child promoted out of a pass-through container lays out against its
+    // effective parent (the nearest surviving ancestor), not its skipped Figma
+    // parent. Because the mapper works in ABSOLUTE canvas coords, the promoted
+    // child hasn't moved — only its layout reference changes: feed the effective
+    // parent's dims + absolute origin, and the same grid-snap math resolves it
+    // correctly under the grandparent (constraint anchors preserved).
+    const realParent = (node as unknown as { parent?: BaseNode | null }).parent ?? null;
+    const promoted = !isRoot && p.layoutParent != null && p.layoutParent.id !== realParent?.id;
+
+    let parentSize: { w: number; h: number };
+    let nodeX: number;
+    let nodeY: number;
+    let nodeAbs: [number, number];
+    let parentAbs: [number, number] | undefined;
+    if (promoted) {
+      const lp = p.layoutParent as SceneNode;
+      nodeAbs = absXY(node);
+      const [gx, gy] = absXY(lp);
+      parentSize = { w: (lp as unknown as { width: number }).width, h: (lp as unknown as { height: number }).height };
+      nodeX = nodeAbs[0] - gx;
+      nodeY = nodeAbs[1] - gy;
+      parentAbs = layoutParentAbs(lp);
+    } else {
+      parentSize = parentDims(node, planById);
+      const xy = localXY(node);
+      nodeX = xy.x;
+      nodeY = xy.y;
+      nodeAbs = absXY(node);
+      parentAbs = parentAbsXY(node);
+    }
 
     const asset = !failedExportIds.has(node.id) ? assetByNode.get(node.id) : undefined;
     const hasAsset = !!asset;
@@ -2482,9 +2588,11 @@ export async function exportDesign(
             h: (node as unknown as { height: number }).height,
           },
           parent: parentSize,
+          abs: nodeAbs,
+          parentAbs,
           horizontal: (node as unknown as { constraints?: Constraints }).constraints?.horizontal,
           vertical: (node as unknown as { constraints?: Constraints }).constraints?.vertical,
-          rotation: (node as unknown as { rotation?: number }).rotation ?? 0,
+          ...decomposeFlip(node),
         });
 
     const components: string[] = [];
@@ -2739,6 +2847,35 @@ function isDescendant(node: SceneNode, ancestor: SceneNode): boolean {
 }
 
 /**
+ * Rotation + mirror flags for a node. A Figma flip is a REFLECTION (the
+ * relativeTransform's 2×2 linear part has a negative determinant), which
+ * node.rotation can't express — it decomposes a horizontal flip into a spurious
+ * ±180°, so the importer wrongly applies a real 180° rotation (mirror + upside
+ * down, about the corner) instead of a pure mirror. Read the matrix instead: when
+ * det < 0, factor out a horizontal flip and recover the TRUE rotation
+ *   M = R(θ)·diag(-1,1) ⇒ a = -cosθ, b = sinθ ⇒ θ = atan2(b, -a)
+ * (a pure horizontal flip → rotation 0 + flipX). Without a flip, keep
+ * node.rotation exactly as before.
+ */
+function decomposeFlip(node: SceneNode): { rotation: number; flipX: boolean; flipY: boolean } {
+  const fallbackRot = (node as unknown as { rotation?: number }).rotation ?? 0;
+  const rt = (node as unknown as { relativeTransform?: number[][] }).relativeTransform;
+  if (!rt || !rt[0] || !rt[1]) return { rotation: fallbackRot, flipX: false, flipY: false };
+  const a = rt[0][0], b = rt[0][1], c = rt[1][0], d = rt[1][1];
+  if (a * d - b * c >= 0) return { rotation: fallbackRot, flipX: false, flipY: false };
+  // Reflection. Two single-axis factorings exist; pick the one with the SMALLER
+  // residual rotation, so a pure horizontal flip → flipX/0° and a pure vertical
+  // flip → flipY/0° (instead of the other axis + 180°):
+  //   M = R(θ)·diag(-1,1) ⇒ θ = atan2(b, -a)   [flip X — origin is the RIGHT edge]
+  //   M = R(θ)·diag(1,-1) ⇒ θ = atan2(b,  a)   [flip Y — origin is the BOTTOM edge]
+  const thetaX = (Math.atan2(b, -a) * 180) / Math.PI;
+  const thetaY = (Math.atan2(b, a) * 180) / Math.PI;
+  return Math.abs(thetaX) <= Math.abs(thetaY)
+    ? { rotation: thetaX, flipX: true, flipY: false }
+    : { rotation: thetaY, flipX: false, flipY: true };
+}
+
+/**
  * Node position in IMMEDIATE-parent-local coords. Figma's x/y (relativeTransform)
  * for a child of a GROUP / BOOLEAN_OPERATION is relative to the group's container
  * parent (the nearest non-group ancestor), not the group itself — Unity nests the
@@ -2757,6 +2894,61 @@ function localXY(node: SceneNode): { x: number; y: number } {
     y -= (parent as unknown as { y?: number }).y ?? 0;
   }
   return { x, y };
+}
+
+/**
+ * Node absolute top-left in Figma canvas space — the translation column of
+ * `absoluteTransform`. mapTransform snaps each node's edges to the absolute pixel
+ * grid (node.abs vs parent.abs), so two panels that abut in Figma resolve to the
+ * exact same Unity edge even across different parent subtrees. Note `node.abs −
+ * parent.abs` equals localXY at every level (including GROUP children, whose raw
+ * x/y is grandparent-relative) — absolute differencing handles the group offset
+ * inherently, so the snapped local rect stays consistent with `rect`.
+ */
+function absXY(node: BaseNode): [number, number] {
+  const t = (node as unknown as { absoluteTransform?: number[][] }).absoluteTransform;
+  if (t && t[0] && t[1]) return [t[0][2], t[1][2]];
+  return [0, 0];
+}
+
+/**
+ * Absolute top-left of a node's immediate parent (origin for grid-snapping), or
+ * undefined when grid-snapping must NOT apply.
+ *
+ * Grid-snap differences child.abs − parent.abs in CANVAS space; that only equals
+ * the child's parent-LOCAL rect when the parent's frame is axis-aligned with the
+ * canvas. A ROTATED ANCESTOR rotates the child's absolute position but leaves the
+ * parent's stored origin at its unrotated corner, so the difference is garbage and
+ * the child lands off-position (e.g. the glyph inside a 180°-rotated icon button
+ * shoved into a corner). Returning undefined drops mapTransform onto its
+ * relativeTransform/local path (rect.x/y), which is exact for nested content. The
+ * node's OWN rotation is already handled by mapTransform; here we guard ancestors.
+ */
+function parentAbsXY(node: SceneNode): [number, number] | undefined {
+  const parent = (node as unknown as { parent?: BaseNode | null }).parent;
+  if (!parent || !(parent as unknown as { absoluteTransform?: unknown }).absoluteTransform) {
+    return undefined;
+  }
+  for (let p: BaseNode | null = parent; p; p = (p as unknown as { parent?: BaseNode | null }).parent ?? null) {
+    const r = (p as unknown as { rotation?: number }).rotation;
+    if (r != null && Math.abs(r) > 0.001) return undefined;
+  }
+  return absXY(parent);
+}
+
+/**
+ * Absolute top-left of a promoted child's EFFECTIVE layout parent (the surviving
+ * grandparent), or undefined when grid-snapping must not apply — same rotated-
+ * ancestor guard as parentAbsXY, but anchored at the effective parent (the skipped
+ * pass-through container is no longer in the Unity ancestor chain).
+ */
+function layoutParentAbs(lp: SceneNode): [number, number] | undefined {
+  if (!(lp as unknown as { absoluteTransform?: unknown }).absoluteTransform) return undefined;
+  for (let p: BaseNode | null = lp; p; p = (p as unknown as { parent?: BaseNode | null }).parent ?? null) {
+    const r = (p as unknown as { rotation?: number }).rotation;
+    if (r != null && Math.abs(r) > 0.001) return undefined;
+  }
+  return absXY(lp);
 }
 
 function parentDims(

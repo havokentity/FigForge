@@ -74,25 +74,87 @@ function normalizeConstraint(value: string | undefined): Axis {
   }
 }
 
+// A 1px background seam appears when two independently rendered UI quads meet on
+// fractional coordinates. We close it by snapping every layout edge to the SAME
+// absolute integer pixel grid (see mapTransform): two nodes that abut in Figma —
+// even across different parent subtrees — then resolve to the exact same Unity
+// edge, and equal edges scale identically under any CanvasScaler factor, so the
+// seam can never open between them.
+function snapPixel(value: number): number {
+  return Math.round(value);
+}
+
+function snapSize(value: number): number {
+  const snapped = snapPixel(value);
+  return value > 0 && snapped <= 0 ? value : snapped;
+}
+
 export interface MapInput {
   rect: Rect; // child rect in parent-local Figma coords (top-left origin)
   parent: { w: number; h: number };
+  abs?: Vec2; // node absolute top-left in Figma canvas space — enables grid snap
+  parentAbs?: Vec2; // immediate parent absolute top-left, same space as `abs`
   horizontal: string | undefined; // Figma constraints.horizontal
   vertical: string | undefined; // Figma constraints.vertical
-  rotation: number; // degrees
+  rotation: number; // degrees (already flip-corrected by the caller)
+  flipX?: boolean; // mirror on X (negative-determinant transform)
+  flipY?: boolean; // mirror on Y
 }
 
 export function mapTransform(input: MapInput): UnityTransform {
   const { rect, parent, rotation } = input;
-  const pw = parent.w;
-  const ph = parent.h;
   const rotated = Math.abs(rotation || 0) > 0.001;
+  // Snap on the ABSOLUTE pixel grid (not per-node-local): edges that coincide in
+  // Figma round to the same integer regardless of which subtree they live in, so
+  // abutting panels share an exact Unity edge and no background seam can open.
+  // Rotated nodes stay exact — snapping their axis-aligned span would distort them.
+  const snapLayout = !rotated && input.abs != null && input.parentAbs != null;
 
-  // Child rect edges in Unity parent-space (bottom-left origin, +Y up).
-  const left = rect.x;
-  const right = rect.x + rect.w;
-  const top = ph - rect.y; // figma top edge
-  const bottom = ph - (rect.y + rect.h); // figma bottom edge
+  let pw: number;
+  let ph: number;
+  let left: number;
+  let right: number;
+  let top: number;
+  let bottom: number;
+
+  if (snapLayout) {
+    const [ax, ay] = input.abs as Vec2;
+    const [px, py] = input.parentAbs as Vec2;
+    // A flipped node's origin (its abs translation) is the MIRRORED edge — for flipX
+    // the RIGHT edge (local 0,0 maps to max-X), for flipY the BOTTOM. Anchor the rect
+    // from the opposite edge; localScale then mirrors the content back in place.
+    // Without this the node lands a full width/height too far right/down.
+    const fax = input.flipX ? ax - rect.w : ax;
+    const fay = input.flipY ? ay - rect.h : ay;
+    const aLeft = snapPixel(fax);
+    const aRight = snapPixel(fax + rect.w);
+    const aTop = snapPixel(fay);
+    const aBottom = snapPixel(fay + rect.h);
+    const pLeft = snapPixel(px);
+    const pRight = snapPixel(px + parent.w);
+    const pTop = snapPixel(py);
+    const pBottom = snapPixel(py + parent.h);
+
+    pw = pRight > pLeft ? pRight - pLeft : parent.w;
+    ph = pBottom > pTop ? pBottom - pTop : parent.h;
+
+    // Child rect edges relative to the SNAPPED parent origin (Unity parent-space).
+    left = aLeft - pLeft;
+    right = aRight - pLeft;
+    top = ph - (aTop - pTop); // figma top edge, Y-flipped
+    bottom = ph - (aBottom - pTop); // figma bottom edge, Y-flipped
+  } else {
+    pw = parent.w;
+    ph = parent.h;
+    // Flipped origin sits on the mirrored edge (see snap path) — anchor from the
+    // opposite edge so the rect spans the node's real bounds before localScale mirrors.
+    const fx = input.flipX ? rect.x - rect.w : rect.x;
+    const fy = input.flipY ? rect.y - rect.h : rect.y;
+    left = fx;
+    right = fx + rect.w;
+    top = ph - fy; // figma top edge
+    bottom = ph - (fy + rect.h); // figma bottom edge
+  }
 
   const h = horizontalAnchor(normalizeConstraint(input.horizontal), left, right, pw);
   const v = verticalAnchor(normalizeConstraint(input.vertical), bottom, top, ph);
@@ -119,17 +181,27 @@ export function mapTransform(input: MapInput): UnityTransform {
     offsetMin,
     offsetMax,
     rotationZ: rotation || 0, // Figma degrees, +CCW on screen (see HierarchyBuilder/UxmlBuilder)
+    flipX: input.flipX || undefined,
+    flipY: input.flipY || undefined,
   };
 }
 
 /** Root frame: centred on the Canvas at its own size. */
 export function rootTransform(w: number, h: number): UnityTransform {
+  const sw = snapSize(w);
+  const sh = snapSize(h);
+  // Split each half-extent with floor/ceil so an ODD size still lands BOTH edges
+  // on whole pixels. A plain −sw/2 is ±X.5 for odd sizes, which shifts the entire
+  // tree half a pixel off the grid; floor/ceil keeps the exact size (span == sw)
+  // with integer edges, so descendants stay pixel-aligned.
+  const halfW = Math.floor(sw / 2);
+  const halfH = Math.floor(sh / 2);
   return {
     anchorMin: [0.5, 0.5],
     anchorMax: [0.5, 0.5],
     pivot: [0.5, 0.5],
-    offsetMin: [-w / 2, -h / 2],
-    offsetMax: [w / 2, h / 2],
+    offsetMin: [-halfW, -halfH],
+    offsetMax: [sw - halfW, sh - halfH],
     rotationZ: 0,
   };
 }

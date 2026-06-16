@@ -32,6 +32,7 @@ figma.showUI(__html__, { width: WINDOW_PRESETS.M.w, height: WINDOW_PRESETS.M.h, 
 const excluded = new Set<string>();
 const merged = new Set<string>();
 const forcedPng = new Set<string>();
+const passthrough = new Set<string>();
 
 function selectedRoot(): SceneNode | null {
   const sel = figma.currentPage.selection;
@@ -109,6 +110,14 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       break;
     }
 
+    case 'toggle-passthrough': {
+      const id = msg.nodeId as string;
+      if (passthrough.has(id)) passthrough.delete(id);
+      else passthrough.add(id);
+      pushSelection();
+      break;
+    }
+
     case 'highlight-element': {
       const node = figma.getNodeById(msg.nodeId as string) as SceneNode | null;
       if (node) {
@@ -147,6 +156,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
           excluded,
           merged,
           forcedPng,
+          passthrough,
           (current, total, label) =>
             figma.ui.postMessage({ type: 'progress', current, total, label })
         );
@@ -200,7 +210,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         }[] = [];
         for (let i = 0; i < found.length; i++) {
           figma.ui.postMessage({ type: 'progress', current: i, total: found.length, label: found[i].node.name });
-          const result = await exportDesign(found[i].node, scale, options, excluded, merged, forcedPng);
+          const result = await exportDesign(found[i].node, scale, options, excluded, merged, forcedPng, passthrough);
           screens.push({
             name: sanitize(found[i].node.name),
             manifest: JSON.stringify(result.manifest, null, 2),
@@ -291,6 +301,8 @@ function applyConfigs(configs: ElementConfig[] | undefined) {
     else merged.delete(c.id);
     if (c.rasterize) forcedPng.add(c.id);
     else forcedPng.delete(c.id);
+    if (c.passthrough) passthrough.add(c.id);
+    else passthrough.delete(c.id);
   }
 }
 
@@ -298,6 +310,7 @@ function exportSetsWithConfigs(configs: ElementConfig[] | undefined) {
   const nextExcluded = new Set(excluded);
   const nextMerged = new Set(merged);
   const nextForcedPng = new Set(forcedPng);
+  const nextPassthrough = new Set(passthrough);
   if (configs) {
     for (const c of configs) {
       if (c.excluded) nextExcluded.add(c.id);
@@ -306,9 +319,11 @@ function exportSetsWithConfigs(configs: ElementConfig[] | undefined) {
       else nextMerged.delete(c.id);
       if (c.rasterize) nextForcedPng.add(c.id);
       else nextForcedPng.delete(c.id);
+      if (c.passthrough) nextPassthrough.add(c.id);
+      else nextPassthrough.delete(c.id);
     }
   }
-  return { excluded: nextExcluded, merged: nextMerged, forcedPng: nextForcedPng };
+  return { excluded: nextExcluded, merged: nextMerged, forcedPng: nextForcedPng, passthrough: nextPassthrough };
 }
 
 async function sendPreview(nodeId: string) {
@@ -816,7 +831,8 @@ async function handleMcp(req: McpRequest) {
                 options,
                 exportSets.excluded,
                 exportSets.merged,
-                exportSets.forcedPng
+                exportSets.forcedPng,
+                exportSets.passthrough
               );
               exports.push({
                 nodeId: id,
@@ -855,7 +871,8 @@ async function handleMcp(req: McpRequest) {
               options,
               exportSets.excluded,
               exportSets.merged,
-              exportSets.forcedPng
+              exportSets.forcedPng,
+              exportSets.passthrough
             );
             screens.push({
               nodeId: foundScreen.node.id,
