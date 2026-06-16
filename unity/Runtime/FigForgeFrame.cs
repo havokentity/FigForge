@@ -41,6 +41,13 @@ namespace FigForge
             if (m != null) m.Show(this);
         }
 
+        // Gate navigation INTO this screen: Frames.Settings.Guard(ctx => ...).
+        public void Guard(NavGuard guard)
+        {
+            var m = FrameManager.Resolve();
+            if (m != null) m.AddGuard(this, guard);
+        }
+
         public virtual void OnShow() { }
         public virtual void OnHide() { }
 

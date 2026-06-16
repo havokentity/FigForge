@@ -88,6 +88,10 @@ namespace FigForge
             sb.AppendLine("{");
             sb.AppendLine("    public partial class " + f.className + " : FigForge.FigForgeFrame");
             sb.AppendLine("    {");
+            sb.AppendLine("        // Stable navigation key for this screen (registry key for Frames.Guard<" + f.className + ">).");
+            sb.AppendLine("        // `__`-prefixed by convention so it can't collide with an element-named member.");
+            sb.AppendLine("        public const string __ScreenKey = \"" + Escape(f.screenKey) + "\";");
+            sb.AppendLine();
             if (f.members != null)
             {
                 foreach (var m in f.members)
@@ -224,6 +228,27 @@ namespace FigForge
             sb.AppendLine();
             sb.AppendLine("        // Typed + null-safe navigation: Frames.Show(Frames.Settings). (Or Frames.Settings.Show().)");
             sb.AppendLine("        public static void Show(FigForge.FigForgeFrame frame) { if (frame != null) frame.Show(); }");
+            sb.AppendLine();
+            sb.AppendLine("        // ---- navigation guards (preconditions) -------------------------------");
+            sb.AppendLine("        // Gate entry to a screen with real C#. Register once at runtime, e.g. in a");
+            sb.AppendLine("        // bootstrap component's Start():");
+            sb.AppendLine("        //   Frames.Guard<Checkout>(ctx => PlayerState.HasProfile");
+            sb.AppendLine("        //       ? FigForge.NavDecision.Allow()");
+            sb.AppendLine("        //       : FigForge.NavDecision.BlockDialog(Frames.CompleteProfileDialog));");
+            sb.AppendLine("        public static void Guard<TFrame>(FigForge.NavGuard guard) where TFrame : FigForge.FigForgeFrame");
+            sb.AppendLine("            => FigForge.FigForgeNavigation.AddGuard<TFrame>(guard);");
+            sb.AppendLine();
+            sb.AppendLine("        // Guard a specific screen instance: Frames.Guard(Frames.Checkout, ctx => ...).");
+            sb.AppendLine("        public static void Guard(FigForge.FigForgeFrame frame, FigForge.NavGuard guard)");
+            sb.AppendLine("            => FigForge.FigForgeNavigation.AddGuard(frame, guard);");
+            sb.AppendLine();
+            sb.AppendLine("        // Guard EVERY navigation (auth, feature flags). Runs before per-screen guards.");
+            sb.AppendLine("        public static void GuardAll(FigForge.NavGuard guard)");
+            sb.AppendLine("            => FigForge.FigForgeNavigation.AddGlobalGuard(guard);");
+            sb.AppendLine();
+            sb.AppendLine("        // React to a blocked navigation in code (or drop a FigForgeNavBlockedHandler component).");
+            sb.AppendLine("        public static void OnBlocked(System.Action<FigForge.NavContext, FigForge.NavDecision> handler)");
+            sb.AppendLine("            => FigForge.FigForgeNavigation.AddBlockedHandler(handler);");
             sb.AppendLine();
             sb.AppendLine("        // Ensure every registered frame has run OnBind(), including inactive pages.");
             sb.AppendLine("        public static void BindAll() { FigForge.FrameManager.Resolve()?.BindAll(); }");

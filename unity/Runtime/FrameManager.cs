@@ -98,8 +98,11 @@ namespace FigForge
 
         void Start()
         {
+            RegisterSceneGuards();
             if (screens.Count == 0) return;
-            Show(initialScreen != null ? initialScreen : screens[0]);
+            // The initial screen bypasses guards: there's no "from" yet, and blocking the
+            // entry point would leave nothing visible.
+            ShowUnguarded(initialScreen != null ? initialScreen : screens[0]);
         }
 
         public void Register(FigForgeFrame screen)
@@ -116,46 +119,181 @@ namespace FigForge
                     screens[i].BindOnce();
         }
 
-        public bool Show(string frameName) => Show(Find(frameName), frameName);
+        public bool Show(string frameName) => Show(frameName, null);
+
+        // Navigate by name, carrying the source link so guards can see the trigger/link.
+        public bool Show(string frameName, FigForgeNavLink via)
+            => ShowInternal(Find(frameName), frameName, true, 0, via);
 
         // Show a registered frame directly (reference equality, no name lookup).
         public bool Show(FigForgeFrame frame)
-            => Show(frame != null && screens.Contains(frame) ? frame : null,
-                    frame != null ? frame.ScreenKey : "<none>");
+            => ShowInternal(frame != null && screens.Contains(frame) ? frame : null,
+                            frame != null ? frame.ScreenKey : "<none>", true, 0, null);
 
-        bool Show(FigForgeFrame target, string label)
+        // Show without consulting navigation guards (initial screen / engine-internal).
+        internal bool ShowUnguarded(FigForgeFrame frame)
+            => ShowInternal(frame != null && screens.Contains(frame) ? frame : null,
+                            frame != null ? frame.ScreenKey : "<none>", false, 0, null);
+
+        const int MaxRedirectDepth = 8;
+
+        bool ShowInternal(FigForgeFrame target, string label, bool runGuards, int redirectDepth, FigForgeNavLink via)
         {
             BindAll();
-            if (target != null)
+            if (target == null)
             {
-                var activeShell = target.usesShell ? FindShell(target.shellKey) : null;
-                if (target.usesShell && activeShell == null)
+                Debug.LogWarning($"[FigForge] FrameManager: no screen named '{label}'.");
+                return false;
+            }
+
+            if (runGuards && (_globalGuards.Count > 0 || _guards.Count > 0))
+            {
+                var ctx = new NavContext(Current, target, target.ScreenKey,
+                                         via != null ? via.trigger : "navigate", via);
+                var decision = EvaluateGuards(ctx);
+                if (decision.Verdict == NavVerdict.Deny)
                 {
-                    Debug.LogWarning($"[FigForge] FrameManager: screen '{target.ScreenKey}' requires shell '{target.shellKey}', but no matching shell is registered.");
+                    RaiseBlocked(ctx, decision);
                     return false;
                 }
-                foreach (var s in screens)
-                    if (s != null && s != target && s != activeShell)
-                        s.SetVisible(false);
-
-                // The shown route snaps to fill its parent viewport. The design-time
-                // spread/thumbnail layout is just for authoring; at runtime the active
-                // frame takes the available space and the rest are hidden.
-                if (activeShell != null)
+                if (decision.Verdict == NavVerdict.Redirect)
                 {
-                    FillParent(activeShell.GetComponent<RectTransform>());
-                    activeShell.SetVisible(true);
-                    var content = FindContentSlot(activeShell.gameObject);
-                    target.transform.SetParent(content != null ? content : activeShell.transform, false);
-                    RefreshCompositors(target.gameObject);
+                    if (redirectDepth >= MaxRedirectDepth)
+                    {
+                        Debug.LogWarning($"[FigForge] FrameManager: navigation redirect loop (>{MaxRedirectDepth}) at '{label}' — aborting.");
+                        return false;
+                    }
+                    var redirect = decision.RedirectFrame ?? Find(decision.RedirectKey);
+                    if (redirect == null)
+                    {
+                        Debug.LogWarning($"[FigForge] FrameManager: guard redirect target '{decision.RedirectKey ?? "<frame>"}' not found.");
+                        return false;
+                    }
+                    return ShowInternal(redirect, redirect.ScreenKey, true, redirectDepth + 1, null);
                 }
-                FillParent(target.GetComponent<RectTransform>());
-                target.SetVisible(true);
-                Current = target;
-                if (shell != null) shell.SetActive(target.usesShell && activeShell == null);
             }
-            else Debug.LogWarning($"[FigForge] FrameManager: no screen named '{label}'.");
-            return target != null;
+
+            var activeShell = target.usesShell ? FindShell(target.shellKey) : null;
+            if (target.usesShell && activeShell == null)
+            {
+                Debug.LogWarning($"[FigForge] FrameManager: screen '{target.ScreenKey}' requires shell '{target.shellKey}', but no matching shell is registered.");
+                return false;
+            }
+            foreach (var s in screens)
+                if (s != null && s != target && s != activeShell)
+                    s.SetVisible(false);
+
+            // The shown route snaps to fill its parent viewport. The design-time
+            // spread/thumbnail layout is just for authoring; at runtime the active
+            // frame takes the available space and the rest are hidden.
+            if (activeShell != null)
+            {
+                FillParent(activeShell.GetComponent<RectTransform>());
+                activeShell.SetVisible(true);
+                var content = FindContentSlot(activeShell.gameObject);
+                target.transform.SetParent(content != null ? content : activeShell.transform, false);
+                RefreshCompositors(target.gameObject);
+            }
+            FillParent(target.GetComponent<RectTransform>());
+            target.SetVisible(true);
+            Current = target;
+            if (shell != null) shell.SetActive(target.usesShell && activeShell == null);
+            return true;
+        }
+
+        // ---- navigation guards (preconditions) ----------------------------------------
+        // Checked before Show switches frames. Guards live on THIS manager instance (not
+        // static), so nothing survives a domain reload. Public entry: FigForgeNavigation
+        // and the generated Frames.Guard helpers.
+        readonly Dictionary<string, List<NavGuard>> _guards = new Dictionary<string, List<NavGuard>>();
+        readonly List<NavGuard> _globalGuards = new List<NavGuard>();
+        internal event System.Action<NavContext, NavDecision> NavigationBlocked;
+
+        internal void AddGuard(string screenKey, NavGuard guard)
+        {
+            if (guard == null) return;
+            var key = SanitizeKey(screenKey);
+            if (string.IsNullOrEmpty(key)) { _globalGuards.Add(guard); return; }
+            if (!_guards.TryGetValue(key, out var list)) { list = new List<NavGuard>(); _guards[key] = list; }
+            list.Add(guard);
+        }
+
+        internal void AddGuard(FigForgeFrame frame, NavGuard guard)
+        {
+            if (frame != null) AddGuard(frame.ScreenKey, guard);
+        }
+
+        internal void AddGlobalGuard(NavGuard guard) { if (guard != null) _globalGuards.Add(guard); }
+
+        internal bool RemoveGuard(string screenKey, NavGuard guard)
+            => _guards.TryGetValue(SanitizeKey(screenKey), out var list) && list != null && list.Remove(guard);
+
+        internal bool RemoveGlobalGuard(NavGuard guard) => _globalGuards.Remove(guard);
+
+        internal void ClearGuards() { _guards.Clear(); _globalGuards.Clear(); }
+
+        internal void AddBlockedHandler(System.Action<NavContext, NavDecision> handler)
+        { if (handler != null) NavigationBlocked += handler; }
+
+        internal void RemoveBlockedHandler(System.Action<NavContext, NavDecision> handler)
+        { if (handler != null) NavigationBlocked -= handler; }
+
+        // Global guards first (auth / feature flags), then the destination's own guards.
+        // First non-Allow verdict wins.
+        NavDecision EvaluateGuards(NavContext ctx)
+        {
+            for (int i = 0; i < _globalGuards.Count; i++)
+            {
+                var d = SafeInvoke(_globalGuards[i], ctx);
+                if (d.Verdict != NavVerdict.Allow) return d;
+            }
+            if (_guards.TryGetValue(SanitizeKey(ctx.ToKey), out var list) && list != null)
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var d = SafeInvoke(list[i], ctx);
+                    if (d.Verdict != NavVerdict.Allow) return d;
+                }
+            return NavDecision.Allow();
+        }
+
+        // A throwing guard fails CLOSED (blocks) and is logged loudly — a buggy guard
+        // should surface, not silently wave navigation through.
+        static NavDecision SafeInvoke(NavGuard guard, NavContext ctx)
+        {
+            if (guard == null) return NavDecision.Allow();
+            try { return guard(ctx); }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[FigForge] Navigation guard for '{ctx.ToKey}' threw; blocking navigation.\n{e}");
+                return NavDecision.Block("A navigation guard raised an exception.");
+            }
+        }
+
+        void RaiseBlocked(NavContext ctx, NavDecision decision)
+        {
+            var handler = NavigationBlocked;
+            if (handler != null)
+            {
+                try { handler(ctx, decision); }
+                catch (System.Exception e) { Debug.LogException(e); }
+            }
+            else if (!string.IsNullOrEmpty(decision.Reason))
+                Debug.Log($"[FigForge] Navigation to '{ctx.ToKey}' blocked: {decision.Reason}");
+        }
+
+        // Collect FigForgeNavGuard components (including ones on hidden screens) once at
+        // Start — mirrors how FigForgeNavBinder wires inactive nav links.
+        void RegisterSceneGuards()
+        {
+            var comps = FindObjectsByType<FigForgeNavGuard>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < comps.Length; i++)
+            {
+                var c = comps[i];
+                if (c == null) continue;
+                var frame = c.TargetScreen;
+                if (frame != null) AddGuard(frame, c.Evaluate);
+                else AddGlobalGuard(c.Evaluate);
+            }
         }
 
         FigForgeFrame FindShell(string key)

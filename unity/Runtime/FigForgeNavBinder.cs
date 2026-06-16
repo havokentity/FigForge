@@ -43,7 +43,8 @@ namespace FigForge
                 if (btn == null) btn = link.GetComponentInChildren<Button>(true);
                 if (btn == null) continue;
                 var target = link.targetScreen;
-                btn.onClick.AddListener(() => screenManager.Show(target));
+                var via = link;
+                btn.onClick.AddListener(() => screenManager.Show(target, via));
             }
         }
     }
