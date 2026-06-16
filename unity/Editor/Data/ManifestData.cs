@@ -52,6 +52,8 @@ namespace FigForge
         public float[] offsetMin;
         public float[] offsetMax;
         public float rotationZ;
+        public bool flipX;               // mirror on X (negative localScale.x)
+        public bool flipY;               // mirror on Y (negative localScale.y)
     }
 
     public class GradientStop

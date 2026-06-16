@@ -1293,13 +1293,15 @@ namespace FigForge
 
             created = true;
             var go = new GameObject("FigForge Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+            var canvas = go.GetComponent<Canvas>();
+            canvas.pixelPerfect = true;
             var scaler = go.GetComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             float rh = ReferenceHeight(_manifest.screen.figmaSize.h);
             scaler.referenceResolution = new Vector2(
                 _manifest.screen.figmaSize.w * (rh / Mathf.Max(1f, _manifest.screen.figmaSize.h)), rh);
             scaler.matchWidthOrHeight = 0.5f;
-            return go.GetComponent<Canvas>();
+            return canvas;
         }
 
         // Point a FigForge page canvas at the dedicated FigForge camera in Screen Space -
@@ -1308,6 +1310,7 @@ namespace FigForge
         {
             if (canvas == null) return;
             canvas.renderMode = RenderMode.ScreenSpaceCamera;
+            canvas.pixelPerfect = true;
             var scaler = canvas.GetComponent<CanvasScaler>();
             float refH = scaler != null && scaler.referenceResolution.y > 1f ? scaler.referenceResolution.y : 1080f;
             canvas.worldCamera = EnsureFigForgeCamera(refH);

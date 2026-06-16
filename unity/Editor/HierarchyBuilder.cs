@@ -358,6 +358,40 @@ namespace FigForge
                 if (!string.IsNullOrEmpty(e.canonical.instanceName))
                     ctx.registered.Add(new KeyValuePair<string, GameObject>(e.canonical.instanceName, inst));
                 if (!string.IsNullOrEmpty(e.id)) ctx.byElementId[e.id] = inst;
+
+                // Designer's extra child layers — visuals the control does NOT consume
+                // as a state/part (a shared graphic meant to show across all states).
+                // The exporter emits them as this element's children in Figma paint
+                // order; build them on top of the synthesized control. Raycasts are
+                // stripped so a decorative overlay can't swallow the control's clicks.
+                if (e.children != null)
+                {
+                    foreach (var childId in e.children)
+                        if (index.TryGetValue(childId, out var extra))
+                        {
+                            var extraGo = BuildElement(extra, index, inst.transform, ctx);
+                            DisableRaycastTargets(extraGo);
+                            // exportAsync BAKES the control's rotation AND mirror into a
+                            // rasterized extra's PNG (the state layers dodge this — captured
+                            // from the UNROTATED, UNFLIPPED master). So a rasterized extra
+                            // would DOUBLE-transform: its PNG is already final AND it inherits
+                            // the control's rotation/flip. Flatten its world rotation and
+                            // cancel the inherited flip so the baked PNG shows as-is — its
+                            // position still follows the control. Procedural-mesh extras keep
+                            // both (their geometry is unrotated, unflipped node-local).
+                            if (extraGo != null && !string.IsNullOrEmpty(extra.asset) && !HasVector(extra.vector))
+                            {
+                                extraGo.transform.rotation = Quaternion.identity;
+                                if (e.transform != null && (e.transform.flipX || e.transform.flipY))
+                                {
+                                    var ls = extraGo.transform.localScale;
+                                    extraGo.transform.localScale = new Vector3(
+                                        e.transform.flipX ? -ls.x : ls.x,
+                                        e.transform.flipY ? -ls.y : ls.y, ls.z);
+                                }
+                            }
+                        }
+                }
                 return inst;
             }
 
@@ -384,7 +418,7 @@ namespace FigForge
                 go.AddComponent<Button>();
             }
 
-            if (e.clipsContent) ApplyClip(go);
+            if (e.clipsContent && ShouldClip(go, e, index)) ApplyClip(go);
             if (e.autoLayout != null) ApplyAutoLayout(go, e.autoLayout, ctx.scaleFactor);
             AttachNav(go, e, ctx);
 
@@ -401,11 +435,25 @@ namespace FigForge
         static bool IsStructuralContainer(ElementData e)
             => e != null && (e.type == "FRAME" || e.type == "GROUP");
 
+        // Strip raycast targets from a built subtree so a canonical control's extra
+        // decorative children don't intercept the control's own pointer events.
+        static void DisableRaycastTargets(GameObject root)
+        {
+            if (root == null) return;
+            var graphics = root.GetComponentsInChildren<Graphic>(true);
+            for (int i = 0; i < graphics.Length; i++)
+                if (graphics[i] != null) graphics[i].raycastTarget = false;
+        }
+
         static void ApplyTransform(RectTransform rt, ElementData e, BuildContext ctx)
         {
             float sf = ctx.scaleFactor;
             var t = e.transform;
-            rt.localScale = Vector3.one;
+            // Mirror via negative localScale. A Figma flip is a reflection, not a
+            // rotation — the exporter detects it from relativeTransform and emits
+            // flipX/flipY (with rotationZ carrying the true rotation), so a flipped
+            // node mirrors in place instead of being spun a spurious 180°.
+            rt.localScale = new Vector3(t != null && t.flipX ? -1f : 1f, t != null && t.flipY ? -1f : 1f, 1f);
 
             // Fall back to the raw rect when no mapped transform is present
             // (partial export, or an element kind the mapper skipped): centre-
@@ -429,8 +477,15 @@ namespace FigForge
             // (Figma's top-left in Unity pivot space) for rotated nodes so rotation
             // spins about the same corner Figma does, [0.5,0.5] otherwise.
             rt.pivot = V(t.pivot, 0.5f);
-            rt.offsetMin = V(t.offsetMin, 0f) * sf;
-            rt.offsetMax = V(t.offsetMax, 0f) * sf;
+            var offsetMin = V(t.offsetMin, 0f) * sf;
+            var offsetMax = V(t.offsetMax, 0f) * sf;
+            if (Mathf.Abs(t.rotationZ) <= 0.001f)
+            {
+                offsetMin = PixelSnap(offsetMin);
+                offsetMax = PixelSnap(offsetMax);
+            }
+            rt.offsetMin = offsetMin;
+            rt.offsetMax = offsetMax;
             // Sign convention: rotationZ is Figma's rotation in degrees, positive =
             // counterclockwise on screen. uGUI is y-up with +Z out of the screen, so
             // a +Z euler is also CCW on screen — pass through unchanged. (UxmlBuilder
@@ -439,6 +494,9 @@ namespace FigForge
             if (Mathf.Abs(t.rotationZ) > 0.001f)
                 rt.localEulerAngles = new Vector3(0, 0, t.rotationZ);
         }
+
+        static Vector2 PixelSnap(Vector2 v)
+            => new Vector2(Mathf.Round(v.x), Mathf.Round(v.y));
 
         static void ApplyVisual(GameObject go, ElementData e, BuildContext ctx, bool hasAsset)
         {
@@ -502,7 +560,10 @@ namespace FigForge
                 img.color = new Color(1, 1, 1, 0); // stroke-only container
             }
 
-            if (style?.stroke != null) AddStroke(go, e, ctx);
+            // Only a PROCEDURAL node gets a procedural rect stroke. A rasterized node
+            // (hasAsset) already has its stroke baked into the PNG — following the path
+            // for a vector — so adding a rect border here double-draws it as a box.
+            if (!hasAsset && style?.stroke != null) AddStroke(go, e, ctx);
         }
 
         // SDF panel covers solid (or fill-less) rounded/bordered rects AND linear
@@ -757,6 +818,45 @@ namespace FigForge
             }
         }
 
+        // Whether a clipsContent frame actually needs a runtime mask. Figma turns
+        // "Clip content" on for almost every frame, but a mask is only needed when
+        // content really leaves the frame — and RectMask2D's clip edge is soft-
+        // antialiased, so masking a frame whose children all fit is a visual no-op
+        // that only paints a ~1px background-bleed seam at the frame's edges.
+        static bool ShouldClip(GameObject go, ElementData e, Dictionary<string, ElementData> index)
+        {
+            // Rounded panels clip to their corners via a stencil Mask — always
+            // needed, even when content fits the rectangular bounds.
+            if (go.GetComponent<FigForgeRoundedRect>() != null || go.GetComponent<FigForgeLayeredRect>() != null)
+                return true;
+            // Flat rect → RectMask2D: only when content actually overflows.
+            return ContentOverflows(e, index);
+        }
+
+        // True if any direct child extends past the frame's rect. Bounds-unknown or
+        // no resolvable children (e.g. a runtime page-mount slot that fills with
+        // content later) → true, so we never drop a clip that might be needed.
+        // 0.5px tolerance treats flush, edge-aligned content as fitting.
+        static bool ContentOverflows(ElementData e, Dictionary<string, ElementData> index)
+        {
+            if (e.rect == null) return true;
+            const float eps = 0.5f;
+            float w = e.rect.w, h = e.rect.h;
+            int resolved = 0;
+            if (e.children != null)
+            {
+                foreach (var childId in e.children)
+                {
+                    if (string.IsNullOrEmpty(childId) || !index.TryGetValue(childId, out var c) || c.rect == null) continue;
+                    resolved++;
+                    var r = c.rect;
+                    if (r.x < -eps || r.y < -eps || r.x + r.w > w + eps || r.y + r.h > h + eps)
+                        return true;
+                }
+            }
+            return resolved == 0; // nothing measurable → keep clipping (safe)
+        }
+
         static void ApplyFill(Image img, StyleData style, BuildContext ctx)
         {
             var fill = style.fill;
@@ -833,6 +933,15 @@ namespace FigForge
             // wraps — so don't wrap, else a hair of width difference pushes a word
             // to the next line. Fixed-width/auto-height text still wraps.
             tmp.enableWordWrapping = !string.Equals(t.autoResize, "WIDTH_AND_HEIGHT", System.StringComparison.OrdinalIgnoreCase);
+            // ...and even when it DOES wrap, hand it a sliver of extra layout room.
+            // Figma sizes an auto-width box to its OWN text metrics, but Unity's TMP
+            // glyph advances run a hair wider (~0.5px on a snug box). On a pixel-perfect
+            // canvas that sub-pixel overflow is a coin-flip — a word that fit in Figma
+            // drops to the next line depending on where the rect rounds. A negative TMP
+            // margin moves NO rect and (grown on the side the text flows from) shifts
+            // nothing visible; it just stops a snug box wrapping on the metric gap.
+            if (tmp.enableWordWrapping)
+                tmp.margin = TextWrapSlack(t.alignH, ctx.scaleFactor);
             ApplyText_Outline(tmp, t);
             MatchTextWeight(tmp);
             ApplyOpacity(go, e, tmp.color);
@@ -843,6 +952,24 @@ namespace FigForge
             // colour (ApplyOpacity above), so the companion presents at opacity 1.
             if (e.style != null && NonNormalBlend(e.style.blendMode))
                 go.AddComponent<FigForgeTextBlend>().Configure(BlendModeFromManifest(e.style.blendMode));
+        }
+
+        // Extra horizontal LAYOUT room (negative TMP margin = outset) so wrap-enabled
+        // text doesn't break on the sub-pixel gap between Figma's measured box width and
+        // Unity TMP's glyph advances. Grown on the side the text flows FROM so alignment
+        // never shifts: left → right edge, right → left edge, centre/justified → split
+        // both halves. Scales with the layout scaleFactor. Tune TextWrapSlackPx.
+        const float TextWrapSlackPx = 2f;
+        static Vector4 TextWrapSlack(string alignH, float sf)
+        {
+            float s = TextWrapSlackPx * sf;
+            switch ((alignH ?? "").ToLowerInvariant())
+            {
+                case "right":     return new Vector4(-s, 0f, 0f, 0f);
+                case "center":
+                case "justified": return new Vector4(-s * 0.5f, 0f, -s * 0.5f, 0f);
+                default:          return new Vector4(0f, 0f, -s, 0f);
+            }
         }
 
         // A Figma text stroke → a TMP outline. Uses the per-instance fontMaterial
