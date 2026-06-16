@@ -38,7 +38,11 @@ namespace FigForge
         /// <summary>Apply manifest canonical data to the bound slots. Editor-time.</summary>
         public void Apply(string labelText, string value, List<string> options, Sprite iconSprite = null)
         {
-            if (label != null && !string.IsNullOrEmpty(labelText)) label.text = labelText;
+            if (label != null && labelText != null)
+            {
+                label.text = labelText;
+                label.gameObject.SetActive(!string.IsNullOrEmpty(labelText));
+            }
             if (icon != null && iconSprite != null)
             {
                 icon.sprite = iconSprite;

@@ -3476,11 +3476,21 @@ namespace FigForge
 
         static void StampLabel(GameObject inst, string label)
         {
-            if (string.IsNullOrEmpty(label)) return;
+            if (label == null) return;
             var tmp = inst.GetComponentInChildren<TMP_Text>(true);
-            if (tmp != null) { tmp.text = label; ConfigureButtonLabelText(tmp); return; }
+            if (tmp != null)
+            {
+                tmp.text = label;
+                tmp.gameObject.SetActive(!string.IsNullOrEmpty(label));
+                if (!string.IsNullOrEmpty(label)) ConfigureButtonLabelText(tmp);
+                return;
+            }
             var ui = inst.GetComponentInChildren<Text>(true);
-            if (ui != null) ui.text = label;
+            if (ui != null)
+            {
+                ui.text = label;
+                ui.gameObject.SetActive(!string.IsNullOrEmpty(label));
+            }
         }
 
         static void StampIcon(GameObject inst, Sprite sprite)
