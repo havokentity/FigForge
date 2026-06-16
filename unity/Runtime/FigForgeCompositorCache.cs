@@ -361,6 +361,12 @@ namespace FigForge
         static void ReleaseRT(RenderTexture rt)
         {
             if (rt == null) return;
+            // Trims can fire mid-frame from inside a render dispatch (a layered rect
+            // freeing its cached surface during the compositor's nested
+            // ForceUpdateCanvases), where a prior blit/capture may have left this very
+            // RT bound. Releasing the active target makes Unity warn every frame; clear
+            // it first. Anything downstream rebinds its own target before drawing.
+            if (RenderTexture.active == rt) RenderTexture.active = null;
             rt.Release();
             if (Application.isPlaying) Object.Destroy(rt);
             else Object.DestroyImmediate(rt);

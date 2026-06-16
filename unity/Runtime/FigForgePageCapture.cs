@@ -29,6 +29,14 @@ namespace FigForge
 {
     internal static class FigForgePageCapture
     {
+        // Hard re-entrancy guard. A capture (Camera.Render / SubmitRenderRequest)
+        // re-fires willRenderCanvases; if anything reaches back here mid-capture, a
+        // nested render request is rejected by SRP ("recursive rendering is not
+        // supported"). The compositor already defers across instances, but this is the
+        // last line of defense regardless of caller — callers treat the refusal as a
+        // (recoverable) capture miss and retry next frame.
+        static bool _capturing;
+
         // A page canvas the compositor can capture: Screen Space - Camera with a
         // camera assigned (resolved on the root canvas). Overlay has no camera to
         // render through — callers fall back to the per-graphic degrade path.
@@ -64,6 +72,8 @@ namespace FigForge
         public static bool Render(Camera cam, RenderTexture target)
         {
             if (cam == null || target == null) return false;
+            if (_capturing) return false; // refuse nested capture — SRP forbids it
+            _capturing = true;
             var prevFlags = cam.clearFlags;
             if (prevFlags != CameraClearFlags.SolidColor && prevFlags != CameraClearFlags.Skybox)
                 cam.clearFlags = CameraClearFlags.SolidColor;
@@ -76,6 +86,7 @@ namespace FigForge
             finally
             {
                 cam.clearFlags = prevFlags;
+                _capturing = false;
             }
         }
 

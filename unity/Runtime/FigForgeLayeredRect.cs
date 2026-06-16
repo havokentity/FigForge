@@ -238,6 +238,12 @@ namespace FigForge
         // RefreshRecipe runs on the per-canvas-update validity path — cache the visible
         // counts so the (serialized, debug-facing) string is only rebuilt on change.
         int _recipeFills = -1, _recipeStrokes = -1, _recipeEffects = -1;
+        // NormalizeLists also runs on that per-canvas-update path (via CurrentSurfaceDescriptor),
+        // and it loops + writes back every fill/stroke/effect. Normalization is idempotent and
+        // only matters when the data changed, so keep the lists normalized AT REST: do the work
+        // once, then no-op until a mutation point (edit/Configure/Set) clears this. Non-serialized,
+        // so it defaults false on load/instantiate → the first access normalizes.
+        bool _listsNormalized;
         FigForgePageCompositor _pageCompositor;
 
         public IReadOnlyList<FigForgeFill> Fills => fills;
@@ -330,6 +336,7 @@ namespace FigForge
             this.strokes = strokes != null ? new List<FigForgeStrokeLayer>(strokes) : new List<FigForgeStrokeLayer>();
             this.effects = effects != null ? new List<FigForgeEffectLayer>(effects) : new List<FigForgeEffectLayer>();
             corners = cornerRadii;
+            _listsNormalized = false;
             NormalizeLists();
             RefreshRecipe();
             MarkPageCompositorDirty();
@@ -359,6 +366,7 @@ namespace FigForge
             else fills[0] = fill;
             ReleaseCachedSurface();
             MarkPageCompositorDirty();
+            _listsNormalized = false;
             NormalizeLists();
             RefreshRecipe();
             SetVerticesDirty();
@@ -672,6 +680,8 @@ namespace FigForge
 
         void NormalizeLists()
         {
+            if (_listsNormalized) return;
+            _listsNormalized = true;
             appearanceOpacity = Mathf.Clamp01(appearanceOpacity);
             for (int i = 0; i < fills.Count; i++)
             {
@@ -1177,8 +1187,10 @@ namespace FigForge
             // The only per-frame-varying input is the camera projection (used by
             // RawSurfaceScaleFactor via WorldToScreenPoint). Reuse the cached quantized
             // scale unless the camera actually moved; rect-size changes invalidate it via
-            // OnRectTransformDimensionsChange. This stops the every-canvas-update re-bake
-            // loop where float jitter flipped the 0.25-quantized scale on an idle SceneView.
+            // OnRectTransformDimensionsChange. Since ProjectionCamera() now keys on the
+            // PRESENTATION camera (stable during editor navigation, not the Scene view),
+            // this stays a cache-hit through pan/orbit/zoom — the editor pays no re-bake
+            // for merely looking around, matching play mode.
             Camera cam = ProjectionCamera();
             Matrix4x4 camKey = cam != null ? cam.projectionMatrix * cam.worldToCameraMatrix : Matrix4x4.identity;
             if (_cachedScaleFactor > 0f && camKey == _scaleCamKey)
@@ -1216,17 +1228,32 @@ namespace FigForge
 
         Camera ProjectionCamera()
         {
-            Camera cam = null;
+            // Bake resolution must track the camera that PRESENTS this surface at
+            // runtime — the canvas's worldCamera — NOT the editor Scene-view camera.
+            // Keying on the Scene view made every pan/orbit/zoom change camKey, which
+            // (a) thrashed the scale cache (O(rects) WorldToScreenPoint per repaint) and
+            // (b) drifted the quantized bake size → re-bake + compositor dirty storm.
+            // Play mode never touches the Scene-view camera — which is exactly why it's
+            // butter-smooth — so the editor should bake for the same camera and stay
+            // cache-hot through navigation. Overlay has no present camera:
+            // WorldToScreenPoint(null) maps world→screen 1:1 (× canvasScaler), the right
+            // navigation-stable scale, so don't substitute the Scene-view camera there
+            // either. Fall back to the Scene-view/current camera ONLY when a camera-space
+            // canvas has no camera assigned, or there's no canvas at all.
+            var c = canvas;
+            if (c != null)
+            {
+                if (c.renderMode == RenderMode.ScreenSpaceOverlay) return null;
+                if (c.worldCamera != null) return c.worldCamera;
+            }
 #if UNITY_EDITOR
             if (!Application.isPlaying)
             {
-                cam = EditorSceneViewCamera();
+                var sv = EditorSceneViewCamera();
+                if (sv != null) return sv;
             }
 #endif
-            var c = canvas;
-            if (cam == null && c != null && c.renderMode != RenderMode.ScreenSpaceOverlay)
-                cam = c.worldCamera;
-            return cam != null ? cam : Camera.current;
+            return Camera.current;
         }
 
 #if UNITY_EDITOR
@@ -1298,6 +1325,14 @@ namespace FigForge
 
         void HandleWillRenderCanvases()
         {
+            // Skip off-screen elements: when uGUI has culled this renderer (e.g.
+            // RectMask2D fast-cull for content scrolled out of a viewport), it isn't
+            // being drawn, so don't spend the per-canvas-update budget re-hashing or
+            // re-baking its surface. This tracks uGUI's OWN draw decision exactly — we
+            // never skip something that's actually drawn — and self-heals: when the
+            // renderer un-culls, the next validity check re-bakes if the content drifted
+            // while it was off-screen.
+            if (canvasRenderer != null && canvasRenderer.cull) return;
             CheckCachedSurfaceValidity();
         }
 
@@ -1395,6 +1430,7 @@ namespace FigForge
         protected override void OnEnable()
         {
             EnsureCanvasRenderer();
+            _listsNormalized = false; // re-normalize once after (re)deserialization/enable
             Canvas.willRenderCanvases -= HandleWillRenderCanvases;
             Canvas.willRenderCanvases += HandleWillRenderCanvases;
             base.OnEnable();
@@ -1452,6 +1488,7 @@ namespace FigForge
         protected override void OnValidate()
         {
             ClampGraphicState();
+            _listsNormalized = false;
             NormalizeLists();
             RefreshRecipe();
             ReleaseCachedSurface();

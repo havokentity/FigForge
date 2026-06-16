@@ -51,6 +51,10 @@ namespace FigForge
         readonly List<Graphic> _canvasGraphics = new List<Graphic>();
         readonly List<Graphic> _rootCanvasGraphics = new List<Graphic>();
         readonly List<CanvasRenderer> _culled = new List<CanvasRenderer>();
+        // Per-rebuild scratch: layers + their source surfaces resolved at the real
+        // position, before the editor capture pose moves us to origin for the captures.
+        readonly List<IFigForgeCompositorSource> _renderLayers = new List<IFigForgeCompositorSource>();
+        readonly List<RenderTexture> _renderSurfaces = new List<RenderTexture>();
 
         // Auto-detect runtime changes to foreign graphics (plain Images, TMP text)
         // under blend layers: a linear scan of the canvas's graphics each canvas
@@ -78,6 +82,15 @@ namespace FigForge
         Canvas _cachedCanvas;
         bool _dirty = true;
         bool _inRebuild;
+        // _inRebuild guards THIS instance. _anyRebuilding guards ACROSS instances: a
+        // rebuild's page capture (Camera.Render / SubmitRenderRequest) re-fires
+        // willRenderCanvases, and a DIFFERENT compositor picking that up would start its
+        // own capture nested inside this one — which SRP rejects outright ("recursive
+        // rendering is not supported"). Multiple compositors only coexist on complex
+        // multi-page imports, which is why the recursion is complexity-gated. The other
+        // compositor isn't skipped, just deferred: it stays dirty and rebuilds in the
+        // same dispatch once this one's finally clears the flag (subscribers run in turn).
+        static bool _anyRebuilding;
         bool _warnedCaptureFailed;
         int _layoutHash;
         int _foreignHash;
@@ -229,7 +242,7 @@ namespace FigForge
 
         void HandleWillRenderCanvases()
         {
-            if (_inRebuild) return;
+            if (_inRebuild || _anyRebuilding) return;
             PruneAdvancedLayers();
             // Inline IsActive: the property's ActiveAdvancedCount would prune again.
             if (!isActiveAndEnabled || _advancedLayers.Count == 0) return;
@@ -252,8 +265,9 @@ namespace FigForge
             if (!_dirty) return;
 
             _inRebuild = true;
+            _anyRebuilding = true;
             try { Rebuild(cam); }
-            finally { _inRebuild = false; }
+            finally { _inRebuild = false; _anyRebuilding = false; }
         }
 
         void Rebuild(Camera cam)
@@ -282,6 +296,14 @@ namespace FigForge
             Canvas.ForceUpdateCanvases();
 
             CollectCanvasGraphics();
+
+            // Resolve each layer's source surface + blended target at the REAL position,
+            // BEFORE the editor capture pose moves us to origin. GetCompositorSurface()
+            // can trigger a re-bake whose resolution is derived from the rect's projected
+            // size, so it must run un-moved — baking inside the origin pose would size
+            // every surface for the wrong place. The capture loop reuses these instances.
+            _renderLayers.Clear();
+            _renderSurfaces.Clear();
             bool complete = true;
             for (int i = 0; i < _orderedLayers.Count; i++)
             {
@@ -296,67 +318,92 @@ namespace FigForge
                     complete = false;
                     continue;
                 }
-
-                CullAtOrAbove(layer);
-                var restorePose = BeginEditorCapturePose(cam);
-#if UNITY_EDITOR
-                DebugRebuildLog?.Invoke("layer=" + ((Component)layer).name
-                    + " dirty=" + _debugDirtySource
-                    + " culled=" + _culled.Count
-                    + " surface=" + surface.width + "x" + surface.height
-                    + " target=" + target.GetInstanceID() + ":" + target.width + "x" + target.height);
-#endif
-                RenderTexture capture = null;
-                Vector4 backdropRect = default;
-                try
-                {
-                    backdropRect = BackdropRect(layer, cam);
-                    capture = FigForgePageCapture.CaptureTemporary(cam);
-                }
-                finally
-                {
-                    EndEditorCapturePose(restorePose);
-                    RestoreCulled();
-                    if (restorePose.moved) Canvas.ForceUpdateCanvases();
-                }
-                if (capture == null)
-                {
-                    // Without a capture the layer's blended target is left unwritten —
-                    // its quad would present stale/garbage pixels. Say so, loudly once.
-                    if (!_warnedCaptureFailed)
-                    {
-                        _warnedCaptureFailed = true;
-                        Debug.LogWarning("[FigForge] Page capture failed — Tier-2 blends on this page are stale. " +
-                                         "Camera: " + (cam != null ? cam.name : "null"), this);
-                    }
-                    complete = false;
-                    break;
-                }
-                _warnedCaptureFailed = false;
-
-                _compositeMaterial.SetTexture("_Backdrop", capture);
-                _compositeMaterial.SetVector("_BackdropRect", backdropRect);
-                _compositeMaterial.SetVector("_BackdropSize", new Vector4(capture.width, capture.height, 0f, 0f));
-                _compositeMaterial.SetFloat("_BlendMode", (float)layer.CompositorBlendMode);
-                _compositeMaterial.SetFloat("_AppearanceOpacity", layer.CompositorOpacity);
-                var blurTex = PrepareBackdropBlur(layer, capture, target, backdropRect);
-                Graphics.Blit(surface, target, _compositeMaterial, 0);
-                if (blurTex != null) RenderTexture.ReleaseTemporary(blurTex);
-#if UNITY_EDITOR
-                if (DebugRebuildSink != null)
-                {
-                    var n = ((Component)layer).name;
-                    DebugRebuildSink(n + "_capture", capture);
-                    DebugRebuildSink(n + "_surface", surface);
-                    DebugRebuildSink(n + "_target", target);
-                }
-#endif
-                RenderTexture.ReleaseTemporary(capture);
+                _renderLayers.Add(layer);
+                _renderSurfaces.Add(surface);
             }
 
-            // Blit leaves the last blended target active; don't let anything
-            // downstream inherit it as a render target.
-            RenderTexture.active = null;
+            // Move to the capture pose ONCE around the whole loop, not per layer. The
+            // move is layer-independent, and each move/restore costs two global
+            // Canvas.ForceUpdateCanvases() — so a per-layer pose was O(layers) full
+            // canvas flushes per rebuild in the editor. Hoisted, it's two flushes total.
+            // (BeginEditorCapturePose is a no-op in play mode, so this is editor-only.)
+            // Culling is still per layer: cr.cull is honored at the capture's camera
+            // render without an intervening flush — the play-mode path already relies
+            // on exactly that (it never flushes between cull and capture).
+            var restorePose = BeginEditorCapturePose(cam);
+            try
+            {
+                for (int i = 0; i < _renderLayers.Count; i++)
+                {
+                    var layer = _renderLayers[i];
+                    var surface = _renderSurfaces[i];
+                    var target = GetBlendedSurface(layer);
+                    if (target == null) { complete = false; continue; }
+
+                    CullAtOrAbove(layer);
+#if UNITY_EDITOR
+                    DebugRebuildLog?.Invoke("layer=" + ((Component)layer).name
+                        + " dirty=" + _debugDirtySource
+                        + " culled=" + _culled.Count
+                        + " surface=" + surface.width + "x" + surface.height
+                        + " target=" + target.GetInstanceID() + ":" + target.width + "x" + target.height);
+#endif
+                    RenderTexture capture = null;
+                    Vector4 backdropRect = default;
+                    try
+                    {
+                        backdropRect = BackdropRect(layer, cam);
+                        capture = FigForgePageCapture.CaptureTemporary(cam);
+                    }
+                    finally
+                    {
+                        RestoreCulled();
+                    }
+                    if (capture == null)
+                    {
+                        // Without a capture the layer's blended target is left unwritten —
+                        // its quad would present stale/garbage pixels. Say so, loudly once.
+                        if (!_warnedCaptureFailed)
+                        {
+                            _warnedCaptureFailed = true;
+                            Debug.LogWarning("[FigForge] Page capture failed — Tier-2 blends on this page are stale. " +
+                                             "Camera: " + (cam != null ? cam.name : "null"), this);
+                        }
+                        complete = false;
+                        break;
+                    }
+                    _warnedCaptureFailed = false;
+
+                    _compositeMaterial.SetTexture("_Backdrop", capture);
+                    _compositeMaterial.SetVector("_BackdropRect", backdropRect);
+                    _compositeMaterial.SetVector("_BackdropSize", new Vector4(capture.width, capture.height, 0f, 0f));
+                    _compositeMaterial.SetFloat("_BlendMode", (float)layer.CompositorBlendMode);
+                    _compositeMaterial.SetFloat("_AppearanceOpacity", layer.CompositorOpacity);
+                    var blurTex = PrepareBackdropBlur(layer, capture, target, backdropRect);
+                    Graphics.Blit(surface, target, _compositeMaterial, 0);
+                    if (blurTex != null) RenderTexture.ReleaseTemporary(blurTex);
+#if UNITY_EDITOR
+                    if (DebugRebuildSink != null)
+                    {
+                        var n = ((Component)layer).name;
+                        DebugRebuildSink(n + "_capture", capture);
+                        DebugRebuildSink(n + "_surface", surface);
+                        DebugRebuildSink(n + "_target", target);
+                    }
+#endif
+                    RenderTexture.ReleaseTemporary(capture);
+                }
+            }
+            finally
+            {
+                // Blit leaves the last blended target active; don't let anything
+                // downstream inherit it as a render target.
+                RenderTexture.active = null;
+                EndEditorCapturePose(restorePose);
+                if (restorePose.moved) Canvas.ForceUpdateCanvases();
+                _renderLayers.Clear();
+                _renderSurfaces.Clear();
+            }
 
             // Rebind re-assert for layers whose target INSTANCE changed this rebuild:
             // a quad rebuild queued while its renderer is culled is consumed without
