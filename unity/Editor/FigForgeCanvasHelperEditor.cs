@@ -10,7 +10,7 @@ using UnityEngine.UI;
 namespace FigForge
 {
     [CustomEditor(typeof(FigForgeCanvasHelper))]
-    public class FigForgeCanvasHelperEditor : Editor
+    public class FigForgeCanvasHelperEditor : UnityEditor.Editor
     {
         public override void OnInspectorGUI()
         {
@@ -59,7 +59,7 @@ namespace FigForge
     }
 
     [CustomEditor(typeof(FrameManager))]
-    internal class FrameManagerEditor : Editor
+    internal class FrameManagerEditor : UnityEditor.Editor
     {
         public override void OnInspectorGUI()
         {

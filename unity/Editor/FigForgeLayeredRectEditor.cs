@@ -5,7 +5,7 @@ using UnityEngine;
 namespace FigForge
 {
     [CustomEditor(typeof(FigForgeLayeredRect))]
-    public class FigForgeLayeredRectEditor : Editor
+    public class FigForgeLayeredRectEditor : UnityEditor.Editor
     {
         SerializedProperty script;
         SerializedProperty fills;

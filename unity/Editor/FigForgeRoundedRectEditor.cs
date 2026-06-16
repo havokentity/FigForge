@@ -3,7 +3,7 @@ using UnityEditor;
 namespace FigForge
 {
     [CustomEditor(typeof(FigForgeRoundedRect))]
-    public class FigForgeRoundedRectEditor : Editor
+    public class FigForgeRoundedRectEditor : UnityEditor.Editor
     {
         SerializedProperty script;
 
