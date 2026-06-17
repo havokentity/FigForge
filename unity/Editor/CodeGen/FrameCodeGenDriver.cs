@@ -34,7 +34,7 @@ namespace FigForge
             return model;
         }
 
-        public static FrameModel BuildModel(Manifest m, string section, bool includeGroups = true)
+        public static FrameModel BuildModel(Manifest m, string section, bool includeGroups = true, bool isOverlay = false)
         {
             string className = IdentifierUtil.ToIdentifier(
                 !string.IsNullOrEmpty(m.screen.displayName) ? m.screen.displayName : m.screen.name);
@@ -74,6 +74,8 @@ namespace FigForge
                         : FrameCodeGen.CSharpType(picked[i]),
                     sourceName = picked[i].id, // element id — stable handle for prefab wiring
                     sourceType = picked[i].type,
+                    registryKey = picked[i].name ?? "", // sanitized name — runtime Dialogs.X lookup key
+
                     parentId = picked[i].parentId,
                     scopeParentId = scopeParentId,
                     exposeOnFrame = string.IsNullOrEmpty(scopeParentId),
@@ -88,6 +90,7 @@ namespace FigForge
                 screenKey = m.screen.name,
                 section = IdentifierUtil.ToIdentifier(section ?? "") == "_" ? "" : IdentifierUtil.ToIdentifier(section ?? ""),
                 scriptGuid = FrameCodeGen.DeterministicGuid(className),
+                isOverlay = isOverlay,
                 members = members,
             };
         }
@@ -151,12 +154,33 @@ namespace FigForge
             bool changed = false;
             changed |= WriteIfChanged(GenRoot + "/FigForge.Generated.asmdef", FrameCodeGen.EmitAsmdef());
 
-            string frameCs = FramesDir + "/" + f.className + ".g.cs";
-            changed |= WriteIfChanged(frameCs, FrameCodeGen.EmitFrameClass(f));
-            changed |= WriteIfChanged(frameCs + ".meta", FrameCodeGen.EmitScriptMeta(f.scriptGuid));
+            // Overlay layers are NOT navigable screens — they don't get a `<Frame> : FigForgeFrame`
+            // class or a Frames.X accessor (and a layer named "Dialogs" would collide with the static
+            // `Dialogs` accessor class). They only contribute global Dialogs.<Name> accessors below.
+            if (!f.isOverlay)
+            {
+                string frameCs = FramesDir + "/" + f.className + ".g.cs";
+                changed |= WriteIfChanged(frameCs, FrameCodeGen.EmitFrameClass(f));
+                changed |= WriteIfChanged(frameCs + ".meta", FrameCodeGen.EmitScriptMeta(f.scriptGuid));
 
-            changed |= WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f));
-            changed |= WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
+                changed |= WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f));
+                changed |= WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
+            }
+
+            // Overlay layers also surface their FigForgeModals as global Dialogs.<Name>.
+            string dialogsCs = GenRoot + "/Dialogs." + f.className + ".g.cs";
+            if (f.isOverlay && FrameCodeGen.HasDialogs(f))
+            {
+                changed |= WriteIfChanged(dialogsCs, FrameCodeGen.EmitDialogsForFrame(f));
+                changed |= WriteIfChanged(GenRoot + "/Dialogs.Core.g.cs", FrameCodeGen.EmitDialogsCore());
+            }
+            else if (File.Exists(dialogsCs))
+            {
+                // Frame stopped being an overlay (or lost its dialogs) — drop the stale accessors.
+                File.Delete(dialogsCs);
+                if (File.Exists(dialogsCs + ".meta")) File.Delete(dialogsCs + ".meta");
+                changed = true;
+            }
 
             // Compile on the next tick — never mid-import (a domain reload would abort it).
             if (changed)

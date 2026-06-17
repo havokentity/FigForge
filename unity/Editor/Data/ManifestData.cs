@@ -214,8 +214,9 @@ namespace FigForge
         public string placeholder;       // input placeholder text
         public List<string> options;     // dropdown options
         public string body;              // modal/toast body text
-        public string primaryLabel;      // modal primary action label
-        public string secondaryLabel;    // modal secondary action label
+        public string primaryLabel;      // modal primary action label (legacy / fallback)
+        public string secondaryLabel;    // modal secondary action label (legacy / fallback)
+        public List<ModalActionData> actions; // modal action buttons in design order (left→right), up to 3
         public string severity;          // toast: info | success | warning | error
         public string position;          // toast host position
         public float? duration;          // toast auto-dismiss seconds
@@ -322,6 +323,14 @@ namespace FigForge
     {
         public string title;
         public string subtitle;
+    }
+
+    /// <summary>One modal action button, in design (left→right) order.</summary>
+    public class ModalActionData
+    {
+        public string name;     // sanitized child name — role hint (primary / secondary / tertiary)
+        public string label;    // button text
+        public bool primary;    // the emphasized/confirm button (styled solid)
     }
 
     public class AssetBounds

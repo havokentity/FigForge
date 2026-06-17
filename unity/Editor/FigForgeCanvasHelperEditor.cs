@@ -96,17 +96,17 @@ namespace FigForge
 
             var manager = helper.GetComponent<FrameManager>();
             if (manager != null && manager.screens != null && manager.screens.Count > 0)
-            {
-                return OrderedFrames(manager.screens);
-            }
+                result.AddRange(OrderedFrames(manager.screens));
 
+            // Also include canvas-child frames NOT registered with the manager (e.g. overlay /
+            // dialog layers) so they tile in the spread instead of overlapping the screens.
             var canvas = helper.GetComponent<Canvas>();
             if (canvas == null) return result;
             var frames = canvas.GetComponentsInChildren<FigForgeFrame>(true);
             for (int i = 0; i < frames.Length; i++)
             {
                 var frame = frames[i];
-                if (frame != null && frame.transform.parent == canvas.transform)
+                if (frame != null && frame.transform.parent == canvas.transform && !result.Contains(frame))
                     result.Add(frame);
             }
             return result;

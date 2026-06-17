@@ -2918,7 +2918,7 @@ namespace FigForge
             var go = NewRect(ObjectName(e, "Modal"), parent);
             var modal = go.AddComponent<FigForgeModal>();
             modal.startOpen = false;
-            modal.closeOnBackdrop = true;
+            modal.closeOnBackdrop = false; // default: must pick an action / close — not dismiss-anywhere
 
             var backdropGo = NewRect("Backdrop", go.transform);
             Stretch(backdropGo.GetComponent<RectTransform>());
@@ -3005,8 +3005,29 @@ namespace FigForge
             hlg.childForceExpandWidth = false;
             hlg.childForceExpandHeight = false;
 
-            var secondary = AddModalButton(actionsGo.transform, "Secondary", c.secondaryLabel ?? "Cancel", false, ctx);
-            var primary = AddModalButton(actionsGo.transform, "Primary", c.primaryLabel ?? "OK", true, ctx);
+            // Build exactly the action buttons the designer drew (1–3), in left→right
+            // order. Roles: the emphasized one → primary; the rest, in order → secondary,
+            // tertiary. Falls back to Secondary+Primary for legacy manifests with no actions.
+            FigForgeButton primary = null, secondary = null, tertiary = null;
+            if (c.actions != null && c.actions.Count > 0)
+            {
+                foreach (var a in c.actions)
+                {
+                    string nm = string.IsNullOrEmpty(a.name)
+                        ? "Action"
+                        : char.ToUpperInvariant(a.name[0]) + a.name.Substring(1);
+                    var btn = AddModalButton(actionsGo.transform, nm, a.label, a.primary, ctx);
+                    if (a.primary && primary == null) primary = btn;
+                    else if (secondary == null) secondary = btn;
+                    else if (tertiary == null) tertiary = btn;
+                    else if (primary == null) primary = btn;
+                }
+            }
+            else
+            {
+                secondary = AddModalButton(actionsGo.transform, "Secondary", c.secondaryLabel ?? "Cancel", false, ctx);
+                primary = AddModalButton(actionsGo.transform, "Primary", c.primaryLabel ?? "OK", true, ctx);
+            }
 
             var close = AddModalButton(panelGo.transform, "Close", "x", false, ctx);
             var crt = close.GetComponent<RectTransform>();
@@ -3026,6 +3047,7 @@ namespace FigForge
             modal.tmpTxt_body = body;
             modal.primaryButton = primary;
             modal.secondaryButton = secondary;
+            modal.tertiaryButton = tertiary;
             modal.closeButton = close;
             modal.backdropButton = backdropButton;
 

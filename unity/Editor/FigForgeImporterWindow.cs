@@ -733,15 +733,17 @@ namespace FigForge
         // each member by its identifier so the post-compile hook can wire the subclass.
         // Reused unchanged frames still get rewired from their FigForgeScreen registry; this
         // repairs stale/null serialized refs without forcing a rebuild.
-        void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section, bool includeUnityCustomizations = false)
+        void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section, bool includeUnityCustomizations = false, bool isOverlay = false)
         {
             if (page == null || m == null) return;
-            var model = FrameCodeGenDriver.BuildModel(m, section ?? "", _includeGroupsInAccessors);
+            var model = FrameCodeGenDriver.BuildModel(m, section ?? "", _includeGroupsInAccessors, isOverlay);
             var targets = new Dictionary<string, GameObject>();
             ResolveFrameMemberTargets(model, ctx, page.GetComponent<FigForgeScreen>(), targets);
             int customCount = includeUnityCustomizations ? AddUnityCustomizationMembers(page, model, targets) : 0;
             FrameCodeGenDriver.WriteFiles(model);
-            if (frame != null) frame.generatedType = FrameCodeGen.GeneratedNamespace + "." + model.className;
+            // Overlays have no generated frame class to upgrade to (see WriteFiles) — leaving
+            // generatedType empty keeps FrameCodeGenWire from trying to swap in a missing type.
+            if (frame != null && !isOverlay) frame.generatedType = FrameCodeGen.GeneratedNamespace + "." + model.className;
             var reg = page.GetComponent<FigForgeScreen>();
             if (reg == null && model.members != null && model.members.Count > 0)
                 reg = page.AddComponent<FigForgeScreen>();
@@ -764,6 +766,19 @@ namespace FigForge
                     }
                 }
                 EditorUtility.SetDirty(reg);
+            }
+            // Overlay layer: tag each dialog with the same key its generated Dialogs.<Name>
+            // accessor resolves by, so FigForgeDialogHost can locate it globally.
+            if (isOverlay && model.members != null)
+            {
+                foreach (var mem in model.members)
+                {
+                    if (mem.csharpType != "FigForge.FigForgeModal") continue;
+                    if (!targets.TryGetValue(mem.sourceName, out var memGo) || memGo == null)
+                        memGo = reg != null ? (reg.Get(mem.Key) ?? reg.Get(mem.sourceName)) : null;
+                    var modal = memGo != null ? memGo.GetComponent<FigForgeModal>() : null;
+                    if (modal != null) { modal.dialogKey = mem.registryKey; EditorUtility.SetDirty(modal); }
+                }
             }
             if (frame != null && frame.GetType() != typeof(FigForgeFrame))
             {
@@ -1040,11 +1055,54 @@ namespace FigForge
                     shellContentBySection[shellKey] = shellContent;
                 }
 
+                // 1.5 Overlay layers (optional) — global dialog/notification layers that sit
+                // ABOVE shells and screens and are NEVER swapped by Show(). Authored as a
+                // top-level frame with role=overlay; the FigForgeModals inside become global
+                // Dialogs.<Name>. Not registered with the manager, so it never hides.
+                for (int i = 0; i < loaded.Count; i++)
+                {
+                    if (!FrameRoles.IsOverlay(loaded[i].ps.role)) continue;
+                    var ov = loaded[i];
+                    // An overlay must NEVER be able to abort the screens build — isolate it.
+                    try
+                    {
+                        EditorUtility.DisplayProgressBar("FigForge", $"Building overlay {ov.m.screen.name}…", (float)i / loaded.Count);
+                        var ovSprites = TextureImportHelper.Import(ov.m, ov.srcDir, $"{_spriteFolder}/{SafeName(ov.m.screen.name)}", _tex);
+                        var ovGo = ReuseOrBuildScreen(ov, proj.name, canvas.transform, ovSprites, false, out var ovCtx);
+                        if (ovGo == null) continue;
+                        // Explicit == null (NOT ??): in the editor GetComponent on a MISSING
+                        // component returns Unity's fake-null stub, which ?? treats as found —
+                        // so AddComponent never runs and the stub throws on first access.
+                        var ovFrame = ovGo.GetComponent<FigForgeFrame>();
+                        if (ovFrame == null) ovFrame = ovGo.AddComponent<FigForgeFrame>();
+                        ovFrame.isShell = false;
+                        ovFrame.usesShell = false;
+                        // Render above everything via a top-sorted nested canvas (just under the
+                        // Toasts host at 32760). Needs its own raycaster so dialog buttons work.
+                        var ovCanvas = ovGo.GetComponent<Canvas>();
+                        if (ovCanvas == null) ovCanvas = ovGo.AddComponent<Canvas>();
+                        ovCanvas.overrideSorting = true;
+                        ovCanvas.sortingOrder = 32750;
+                        if (ovGo.GetComponent<GraphicRaycaster>() == null) ovGo.AddComponent<GraphicRaycaster>();
+                        // Fills the canvas at play-time (it's never FrameManager-driven), so its
+                        // dialogs cover the screen wherever the editor spread left the layer.
+                        if (ovGo.GetComponent<FigForgeOverlayLayer>() == null) ovGo.AddComponent<FigForgeOverlayLayer>();
+                        GenerateAndWireFrame(ovGo, ov.m, ovCtx, ovFrame, ov.ps.section, includeUnityCustomizations, isOverlay: true);
+                        FigForgeFrameSceneTools.RefreshCompositors(ovGo);
+                        // Deliberately NOT mgr.Register(ovFrame): overlays are global, not screens.
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogError($"[FigForge] overlay '{ov.m.screen.name}' build failed (screens still built): {ex}");
+                        Log($"overlay '{ov.m.screen.name}' build failed: {ex.Message}", MessageType.Error);
+                    }
+                }
+
                 // 2. Screens.
                 int built = 0;
                 for (int i = 0; i < loaded.Count; i++)
                 {
-                    if (FrameRoles.IsShell(loaded[i].ps.role)) continue;
+                    if (FrameRoles.IsShell(loaded[i].ps.role) || FrameRoles.IsOverlay(loaded[i].ps.role)) continue;
                     var m = loaded[i].m;
                     EditorUtility.DisplayProgressBar("FigForge", $"Building {m.screen.name}…", (float)i / loaded.Count);
                     var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);

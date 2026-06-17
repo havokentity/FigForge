@@ -14,8 +14,9 @@ namespace FigForge
 {
     public enum FrameRole
     {
-        Screen = 0, // a normal full-screen page
-        Shell = 1,  // persistent chrome; other frames mount into its content slot
+        Screen = 0,  // a normal full-screen page
+        Shell = 1,   // persistent chrome; other frames mount into its content slot
+        Overlay = 2, // global layer above shells+screens; never swapped by Show (hosts dialogs)
         // Append new roles HERE (never reorder/remove) so serialized int values stay stable.
     }
 
@@ -35,6 +36,8 @@ namespace FigForge
         }
 
         public static bool IsShell(string role) => Parse(role) == FrameRole.Shell;
+
+        public static bool IsOverlay(string role) => Parse(role) == FrameRole.Overlay;
 
         /// <summary>The canonical lowercase wire string for a role (round-trips with Parse).</summary>
         public static string ToWire(FrameRole role) => role.ToString().ToLowerInvariant();
