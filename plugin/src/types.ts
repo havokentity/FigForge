@@ -233,6 +233,13 @@ export interface ListItemData {
   subtitle?: string;
 }
 
+/** One modal action button, captured in design (left→right) order. */
+export interface ModalAction {
+  name: string; // sanitized child name — role hint (primary / secondary / tertiary)
+  label: string; // button text
+  primary: boolean; // the emphasized/confirm button (styled solid in Unity)
+}
+
 export interface CanonicalRef {
   kind: CanonicalKind;
   ref: string; // canonical definition name to instantiate in Unity
@@ -243,8 +250,9 @@ export interface CanonicalRef {
   placeholder?: string; // input placeholder text
   options?: string[]; // dropdown options
   body?: string; // modal/toast body text
-  primaryLabel?: string; // modal primary action label
-  secondaryLabel?: string; // modal secondary action label
+  primaryLabel?: string; // modal primary action label (legacy / fallback)
+  secondaryLabel?: string; // modal secondary action label (legacy / fallback)
+  actions?: ModalAction[]; // modal action buttons in design order (left→right), up to 3
   severity?: 'info' | 'success' | 'warning' | 'error'; // toast variant
   position?: 'topRight' | 'topLeft' | 'bottomRight' | 'bottomLeft' | 'topCenter' | 'bottomCenter'; // toast host position
   duration?: number; // toast auto-dismiss seconds

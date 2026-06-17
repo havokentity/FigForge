@@ -453,8 +453,9 @@
             <button class="chip component-chip" id="createProgressBtn" title="Create a canonical Progress bar component — a Slider with no thumb and no input; resize the master's Fill width to set the initial value"><span class="chip-icon" aria-hidden="true">◔</span><span class="chip-label">Progress</span></button>
             <button class="chip component-chip" id="createListBtn" title="Create a canonical scrollable List component — click to pick which parts the list has"><span class="chip-icon" aria-hidden="true">☰</span><span class="chip-label">List</span></button>
             <button class="chip component-chip" id="createTableBtn" title="Create a canonical scrollable Table component — click to pick rows × columns"><span class="chip-icon" aria-hidden="true">▦</span><span class="chip-label">Table</span></button>
-            <button class="chip component-chip" id="createModalBtn" title="Create a canonical Dialog/Modal component with backdrop, panel, title, body, actions, and close button"><span class="chip-icon" aria-hidden="true">□</span><span class="chip-label">Dialog</span></button>
+            <button class="chip component-chip" id="createModalBtn" title="Create a Dialog (backdrop, panel, title, body, actions, close). Auto-added to a global 'Dialogs' layer — rename the instance to get a typed Dialogs.<Name> accessor in Unity"><span class="chip-icon" aria-hidden="true">□</span><span class="chip-label">Dialog</span></button>
             <button class="chip component-chip" id="createToastBtn" title="Create a canonical Toast host/template component for Toasts.Success(...) and related runtime calls"><span class="chip-icon" aria-hidden="true">!</span><span class="chip-label">Toast</span></button>
+            <button class="chip component-chip" id="createFrameBtn" title="Create a screen frame with a chosen width and height"><span class="chip-icon" aria-hidden="true">▣</span><span class="chip-label">Frame</span></button>
             <button class="chip component-chip" id="createShellBtn" title="Create a Section with Shell, Content slot, four sample screens, and nav buttons"><span class="chip-icon" aria-hidden="true">⌂</span><span class="chip-label">Shell</span></button>
           </div>
           <!-- Stepper options popover — floats under the ＋Stepper chip; orientations
@@ -509,6 +510,23 @@
             <label class="list-pop-row" title="Include the column-title strip pinned above the scrolling rows"><input type="checkbox" id="tableOptHeader" checked /><span>Header row</span></label>
             <label class="list-pop-row" title="Scrollbar thickness in px (non-default widths become their own master, e.g. 'Table SB14')"><span>Scrollbar width</span><input type="number" id="tableOptSbWidth" value="10" min="2" max="40" /></label>
             <button class="list-pop-create" id="tableOptsCreate" title="Create this Table variant">＋ Add Table</button>
+          </div>
+          <!-- Frame popover — creates a real Figma screen frame at the chosen size.
+               Export then uses that frame's actual dimensions. -->
+          <div class="list-pop" id="frameOpts" hidden>
+            <div class="list-pop-title">Frame layout</div>
+            <label class="list-pop-row" title="Generated frame name"><span>Name</span><input type="text" id="frameOptName" value="Screen" /></label>
+            <label class="list-pop-row" title="Generated frame width in Figma pixels"><span>Width</span><input type="number" id="frameOptWidth" value="1920" min="320" max="10000" /></label>
+            <label class="list-pop-row" title="Generated frame height in Figma pixels"><span>Height</span><input type="number" id="frameOptHeight" value="1080" min="240" max="10000" /></label>
+            <button class="list-pop-create" id="frameOptsCreate" title="Create this frame">＋ Add Frame</button>
+          </div>
+          <!-- Dialog popover — creates/resizes the actual modal component canvas.
+               The backdrop fills this size; the dialog panel remains centered. -->
+          <div class="list-pop" id="modalOpts" hidden>
+            <div class="list-pop-title">Dialog layout</div>
+            <label class="list-pop-row" title="Dialog/backdrop width in Figma pixels"><span>Width</span><input type="number" id="modalOptWidth" value="1920" min="320" max="10000" /></label>
+            <label class="list-pop-row" title="Dialog/backdrop height in Figma pixels"><span>Height</span><input type="number" id="modalOptHeight" value="1080" min="240" max="10000" /></label>
+            <button class="list-pop-create" id="modalOptsCreate" title="Create this Dialog component">＋ Add Dialog</button>
           </div>
           <!-- Shell scaffold popover — creates a page Section containing a persistent
                Shell frame, a Content mount slot, four sample screens, and nav buttons. -->

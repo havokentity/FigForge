@@ -191,7 +191,6 @@ for (const [id, kind] of [
   ['createSwitchBtn', 'switch'],
   ['createInputBtn', 'input'],
   ['createDropdownBtn', 'dropdown'],
-  ['createModalBtn', 'modal'],
   ['createToastBtn', 'toast'],
 ] as const) {
   $(`#${id}`).addEventListener('click', () => {
@@ -343,6 +342,46 @@ $('#tableOptsCreate').addEventListener('click', () => {
       header: (document.getElementById('tableOptHeader') as HTMLInputElement | null)?.checked !== false,
       scrollbarWidth: int('tableOptSbWidth', 10, 2, 40),
     },
+  });
+});
+
+// Screen frame: create a real Figma frame at the selected design size.
+const framePop = wirePopover($('#createFrameBtn') as HTMLElement, document.getElementById('frameOpts'));
+function readFrameSize(id: string, fallback: number, min: number): number {
+  const value = parseInt((document.getElementById(id) as HTMLInputElement | null)?.value ?? '', 10);
+  return Number.isFinite(value) ? Math.min(10000, Math.max(min, value)) : fallback;
+}
+function readFrameName(): string {
+  const value = (document.getElementById('frameOptName') as HTMLInputElement | null)?.value.trim();
+  return value || 'Screen';
+}
+$('#frameOptsCreate').addEventListener('click', () => {
+  const width = readFrameSize('frameOptWidth', 1920, 320);
+  const height = readFrameSize('frameOptHeight', 1080, 240);
+  framePop.hide();
+  setStatus('Creating frame…');
+  post({
+    type: 'create-frame',
+    frameOpts: { name: readFrameName(), width, height },
+  });
+});
+
+// Dialog/Modal: create a full-screen modal canvas with a centered panel.
+const modalPop = wirePopover($('#createModalBtn') as HTMLElement, document.getElementById('modalOpts'));
+function readModalSize(id: string, fallback: number, min: number): number {
+  const value = parseInt((document.getElementById(id) as HTMLInputElement | null)?.value ?? '', 10);
+  return Number.isFinite(value) ? Math.min(10000, Math.max(min, value)) : fallback;
+}
+$('#modalOptsCreate').addEventListener('click', () => {
+  const width = readModalSize('modalOptWidth', 1920, 320);
+  const height = readModalSize('modalOptHeight', 1080, 240);
+  modalPop.hide();
+  setStatus('Creating dialog component…');
+  post({
+    type: 'create-canonical',
+    kind: 'modal',
+    componentsPage: compPageOn(),
+    modalOpts: { width, height },
   });
 });
 
@@ -951,7 +990,10 @@ window.onmessage = (event: MessageEvent) => {
       currentTree = msg.tree;
       selectedId = null;
       if (currentTree && currentTree.id !== previousRootId) primeExpandedNodes(currentTree);
-      setStatus(`${msg.name} · ${msg.elementCount} layers`);
+      const size = msg.size && Number.isFinite(msg.size.w) && Number.isFinite(msg.size.h)
+        ? ` · ${Math.round(msg.size.w)}×${Math.round(msg.size.h)}`
+        : '';
+      setStatus(`${msg.name} · ${msg.elementCount} layers${size}`);
       ($('#exportBtn') as HTMLButtonElement).disabled = false;
       ($('#exportFrameUnityBtn') as HTMLButtonElement).disabled = false;
       renderTree();

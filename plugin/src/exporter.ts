@@ -35,6 +35,7 @@ import {
   type ManifestElement,
   type ManifestFont,
   type UnityTransform,
+  type ModalAction,
   type NavLink,
   type RGBA,
   type Stroke,
@@ -609,13 +610,28 @@ const RESERVED_CANONICAL_CHILD_NAMES = new Set([
   'hitarea', 'hit area', 'hit_area', 'hit-area',
 ]);
 
+// Per-kind STRUCTURAL part names a control builds procedurally (captured via parts /
+// labels, not as separate elements). Without this, a complex control's parts leak
+// through canonicalExtraChildren as "extra" layers and get DOUBLE-built — e.g. a modal
+// would render a second panel and its action frames as non-interactive duplicates over
+// the real FigForgeButtons. Reserving a direct child also suppresses its whole subtree.
+const CANONICAL_PART_NAMES: Record<string, Set<string>> = {
+  modal: new Set([
+    'backdrop', 'panel', 'dialog', 'title', 'header', 'body', 'message', 'description',
+    'actions', 'close', 'primary', 'secondary', 'tertiary', 'confirm', 'cancel',
+    'primarybutton', 'secondarybutton',
+  ]),
+};
+
 /** A canonical master's designer-added child layers (NOT state/part layers) —
  *  preserved in Figma paint order so the Unity builder can layer them faithfully. */
-function canonicalExtraChildren(node: SceneNode): SceneNode[] {
+function canonicalExtraChildren(node: SceneNode, kind?: string): SceneNode[] {
   if (!('children' in node)) return [];
+  const kindParts = kind ? CANONICAL_PART_NAMES[kind] : undefined;
   return ((node as ChildrenMixin).children as SceneNode[]).filter((c) => {
     if ((c as unknown as { visible?: boolean }).visible === false) return false;
-    return !RESERVED_CANONICAL_CHILD_NAMES.has(c.name.trim().toLowerCase());
+    const n = c.name.trim().toLowerCase();
+    return !RESERVED_CANONICAL_CHILD_NAMES.has(n) && !(kindParts !== undefined && kindParts.has(n));
   });
 }
 
@@ -990,7 +1006,7 @@ export async function exportDesign(
         // A canonical control consumes its state/part layers itself, but a designer
         // may add extra "common visual" layers — keep those as real children
         // (Figma paint order) so they render across every state in Unity.
-        ? canonicalExtraChildren(node)
+        ? canonicalExtraChildren(node, canonicalRef.kind)
         : !isMergeRoot && !rasterLeaf && 'children' in node
           // Pass-through children dissolve here: each marked descendant is replaced
           // by its own children, so this node parents the promoted grandchildren
@@ -1806,9 +1822,33 @@ export async function exportDesign(
       body: firstTextUnderNamedDescendant(master, ['Body', 'Message', 'Description']),
       primaryLabel: firstTextUnderNamedDescendant(master, ['Primary', 'PrimaryButton', 'Confirm']),
       secondaryLabel: firstTextUnderNamedDescendant(master, ['Secondary', 'SecondaryButton', 'Cancel']),
+      actions: captureModalActions(master),
       iconAsset: await iconAssetOf(master),
       parts: partsOf(master, ['Backdrop', 'Panel', 'Icon']),
     };
+  }
+
+  // Read the dialog's action buttons from its 'Actions' frame, in design (left→right)
+  // order, up to 3. The designer controls the count: one child per button. The primary
+  // (emphasized) button is detected by name; if none matches, the last one is primary.
+  function captureModalActions(master: SceneNode): ModalAction[] | undefined {
+    const actions = descendantByExactName(master, 'Actions');
+    if (!actions || !('children' in actions)) return undefined;
+    const out: ModalAction[] = [];
+    for (const child of (actions as ChildrenMixin).children as SceneNode[]) {
+      if ((child as unknown as { visible?: boolean }).visible === false) continue;
+      const raw = child.name.trim();
+      const lower = raw.toLowerCase();
+      out.push({
+        name: sanitize(raw),
+        label: firstTextLabel(child) ?? raw,
+        primary: /primary|confirm|^ok$|submit|save|delete/.test(lower),
+      });
+      if (out.length >= 3) break;
+    }
+    if (!out.length) return undefined;
+    if (!out.some((a) => a.primary)) out[out.length - 1].primary = true; // ensure one emphasized
+    return out;
   }
 
   async function captureToast(master: SceneNode) {

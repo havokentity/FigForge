@@ -49,13 +49,17 @@ function pushSelection() {
     return;
   }
   const tree = buildTree(root, excluded);
+  const size = {
+    w: (root as unknown as { width?: number }).width ?? 0,
+    h: (root as unknown as { height?: number }).height ?? 0,
+  };
   let count = 0;
   const walk = (n: typeof tree) => {
     count++;
     n.children.forEach(walk);
   };
   walk(tree);
-  figma.ui.postMessage({ type: 'selection-info', name: root.name, elementCount: count, tree });
+  figma.ui.postMessage({ type: 'selection-info', name: root.name, elementCount: count, size, tree });
 }
 
 figma.on('selectionchange', pushSelection);
@@ -70,6 +74,12 @@ pushSelection();
 // so the user should re-trigger deliberately). Cleared in `finally` on every path.
 let exportInFlight = false;
 const EXPORT_BUSY_MESSAGE = 'An export is already running — wait for it to finish, then try again.';
+
+function clampDimension(value: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
 
 // ---------------------------------------------------------------------------
 // UI → main
@@ -219,8 +229,8 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
             role: frameRole(found[i].node),
           });
         }
-        // Initial = first non-shell screen.
-        const firstScreen = screens.find((s) => s.role !== 'shell') || screens[0];
+        // Initial = first real screen (never a shell or a global overlay layer).
+        const firstScreen = screens.find((s) => s.role !== 'shell' && s.role !== 'overlay') || screens[0];
         figma.ui.postMessage({
           type: 'export-page-complete',
           target: (msg.target as string) || 'zip', // click-time destination, echoed — see 'export'
@@ -259,11 +269,23 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
           (msg as { sliderOpts?: Partial<SliderOptions> }).sliderOpts,
           (msg as { tableOpts?: Partial<TableOptions> }).tableOpts,
           (msg as { progressOpts?: Partial<ProgressOptions> }).progressOpts,
-          (msg as { stepperOpts?: Partial<StepperOptions> }).stepperOpts);
+          (msg as { stepperOpts?: Partial<StepperOptions> }).stepperOpts,
+          (msg as { modalOpts?: Partial<ModalOptions> }).modalOpts);
         const where = useComponentsPage ? 'on the FigForge Components page' : 'parked on this page (off to the left)';
         figma.ui.postMessage({ type: 'status', message: `${comp.name} instance placed. Master is ${where} — skin it; click again to add more (group related radios together).` });
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create failed: ' + String((e as Error)?.message || e) });
+      }
+      break;
+    }
+
+    case 'create-frame': {
+      try {
+        const frame = createScreenFrame((msg as { frameOpts?: Partial<FrameOptions> }).frameOpts);
+        figma.ui.postMessage({ type: 'status', message: `Frame created: ${frame.name} ${Math.round(frame.width)}×${Math.round(frame.height)}.` });
+        pushSelection();
+      } catch (e) {
+        figma.ui.postMessage({ type: 'export-error', message: 'Create frame failed: ' + String((e as Error)?.message || e) });
       }
       break;
     }
@@ -601,7 +623,7 @@ function listFrameRecords(currentPageOnly: boolean, includeHidden: boolean, scre
       if (node.type === 'FRAME') frames.push(frameRecord(page, node as FrameNode));
     }
   }
-  const initial = frames.find((f) => f.role !== 'shell') || frames[0] || null;
+  const initial = frames.find((f) => f.role !== 'shell' && f.role !== 'overlay') || frames[0] || null;
   return { currentPage: { id: figma.currentPage.id, name: figma.currentPage.name }, count: frames.length, initial, frames };
 }
 
@@ -883,7 +905,7 @@ async function handleMcp(req: McpRequest) {
               role: frameRole(foundScreen.node),
             });
           }
-          const firstScreen = found.find((s) => frameRole(s.node) !== 'shell') || found[0];
+          const firstScreen = found.find((s) => frameRole(s.node) !== 'shell' && frameRole(s.node) !== 'overlay') || found[0];
           response.data = {
             project: {
               name: figma.currentPage.name,
@@ -906,7 +928,8 @@ async function handleMcp(req: McpRequest) {
             (req.params as { sliderOpts?: Partial<SliderOptions> } | undefined)?.sliderOpts,
             (req.params as { tableOpts?: Partial<TableOptions> } | undefined)?.tableOpts,
             (req.params as { progressOpts?: Partial<ProgressOptions> } | undefined)?.progressOpts,
-            (req.params as { stepperOpts?: Partial<StepperOptions> } | undefined)?.stepperOpts);
+            (req.params as { stepperOpts?: Partial<StepperOptions> } | undefined)?.stepperOpts,
+            (req.params as { modalOpts?: Partial<ModalOptions> } | undefined)?.modalOpts);
         response.data = {
           created: true,
           kind,
@@ -1032,14 +1055,23 @@ function detachedCanonicalInstances(page: PageNode, screens: SceneNode[]): { nam
 }
 
 // A frame is the app "shell" if named Shell / Shell_* / * Shell, or tagged role=shell.
+// A frame is an "overlay" (global dialog layer) if named Overlay / Overlay_* / * Overlay
+// / Dialogs, or tagged role=overlay. Overlays sit above all screens and aren't swapped.
 function frameRole(node: SceneNode): string {
+  const tagged = node.getSharedPluginData('figforge', 'role');
+  if (tagged === 'shell' || tagged === 'overlay') return tagged;
   const n = node.name.toLowerCase();
-  if (node.getSharedPluginData('figforge', 'role') === 'shell') return 'shell';
   if (n === 'shell'
     || n.startsWith('shell_')
     || n.startsWith('shell ')
     || n.endsWith('_shell')
     || n.endsWith(' shell')) return 'shell';
+  if (n === 'overlay'
+    || n === 'dialogs'
+    || n.startsWith('overlay_')
+    || n.startsWith('overlay ')
+    || n.endsWith('_overlay')
+    || n.endsWith(' overlay')) return 'overlay';
   return 'screen';
 }
 
@@ -1206,9 +1238,13 @@ function solidRect(name: string, w: number, h: number, r: number, color: RGB, al
 
 type ShellPlacement = 'left' | 'top' | 'right' | 'bottom';
 type ShellOptions = { name: string; nav: ShellPlacement; header: ShellPlacement; width: number; height: number };
+type FrameOptions = { name: string; width: number; height: number };
+type ModalOptions = { width: number; height: number };
 type RectSpec = { x: number; y: number; w: number; h: number };
 
 const SHELL_DEFAULTS: ShellOptions = { name: 'App Shell', nav: 'left', header: 'top', width: 1920, height: 1080 };
+const FRAME_DEFAULTS: FrameOptions = { name: 'Screen', width: 1920, height: 1080 };
+const MODAL_DEFAULTS: ModalOptions = { width: 1920, height: 1080 };
 const SHELL_EDGES = new Set<ShellPlacement>(['left', 'top', 'right', 'bottom']);
 
 function normalizeShellOptions(opts?: Partial<ShellOptions>): ShellOptions {
@@ -1222,6 +1258,22 @@ function normalizeShellOptions(opts?: Partial<ShellOptions>): ShellOptions {
     ? Math.min(10000, Math.max(240, Math.round(opts.height)))
     : SHELL_DEFAULTS.height;
   return { name, nav, header, width, height };
+}
+
+function normalizeFrameOptions(opts?: Partial<FrameOptions>): FrameOptions {
+  const name = typeof opts?.name === 'string' && opts.name.trim() ? opts.name.trim() : FRAME_DEFAULTS.name;
+  return {
+    name,
+    width: clampDimension(opts?.width, 320, 10000, FRAME_DEFAULTS.width),
+    height: clampDimension(opts?.height, 240, 10000, FRAME_DEFAULTS.height),
+  };
+}
+
+function normalizeModalOptions(opts?: Partial<ModalOptions>): ModalOptions {
+  return {
+    width: clampDimension(opts?.width, 320, 10000, MODAL_DEFAULTS.width),
+    height: clampDimension(opts?.height, 240, 10000, MODAL_DEFAULTS.height),
+  };
 }
 
 function designPageForScaffold(): PageNode {
@@ -1280,6 +1332,23 @@ function createFrameNode(name: string, rect: RectSpec, fill: RGB | null, radius 
   frame.cornerRadius = radius;
   frame.clipsContent = true;
   frame.fills = fill ? [{ type: 'SOLID', color: fill }] : [];
+  return frame;
+}
+
+function createScreenFrame(optsIn?: Partial<FrameOptions>): FrameNode {
+  const opts = normalizeFrameOptions(optsIn);
+  const page = figma.currentPage;
+  const name = uniquePageFrameName(page, opts.name);
+  const center = figma.viewport.center;
+  const frame = createFrameNode(
+    name,
+    { x: center.x - opts.width / 2, y: center.y - opts.height / 2, w: opts.width, h: opts.height },
+    { r: 1, g: 1, b: 1 },
+    0
+  );
+  page.appendChild(frame);
+  page.selection = [frame];
+  figma.viewport.scrollAndZoomIntoView([frame]);
   return frame;
 }
 
@@ -1438,7 +1507,8 @@ async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
                                sliderOpts?: Partial<SliderOptions>,
                                tableOpts?: Partial<TableOptions>,
                                progressOpts?: Partial<ProgressOptions>,
-                               stepperOpts?: Partial<StepperOptions>): Promise<ComponentNode> {
+                               stepperOpts?: Partial<StepperOptions>,
+                               modalOpts?: Partial<ModalOptions>): Promise<ComponentNode> {
   switch (kind) {
     case 'toggle': return createToggleLike('toggle', 'Toggle', false);
     case 'radio': return createToggleLike('radio', 'Radio', true);
@@ -1450,7 +1520,7 @@ async function createCanonical(kind: string, listOpts?: Partial<ListOptions>,
     case 'progress': return createProgress(progressOpts);
     case 'list': return createList({ ...LIST_DEFAULTS, ...(listOpts ?? {}) });
     case 'table': return createTable({ ...TABLE_DEFAULTS, ...(tableOpts ?? {}) });
-    case 'modal': return createModal();
+    case 'modal': return createModal(modalOpts);
     case 'toast': return createToast();
     default: throw new Error(`unknown canonical kind '${kind}'`);
   }
@@ -1611,12 +1681,65 @@ async function normalizeInputFieldMaster(comp: ComponentNode): Promise<void> {
   }
 }
 
-async function createModal(): Promise<ComponentNode> {
+// The auto-managed global dialog layer. Creating a dialog drops the instance HERE — a
+// top-level frame tagged role=overlay — so it exports as the global overlay and becomes
+// a typed Dialogs.<Name> in Unity. The user never builds, names, or manages this frame.
+const DIALOG_LAYER_NAME = 'Dialogs';
+
+// Sized to the dialog (w,h), not the screen, so the layer/master/instance all agree.
+// Its authored size is cosmetic anyway — at runtime FigForgeOverlayLayer fills it to
+// the canvas. New layer is parked to the right of the screens so it doesn't overlap.
+function ensureDialogLayer(page: PageNode, w: number, h: number): FrameNode {
+  for (const node of page.children)
+    if (node.type === 'FRAME' && frameRole(node as FrameNode) === 'overlay') return node as FrameNode;
+
+  const screens = screenFrames(page).filter((f) => frameRole(f) === 'screen' && f.visible !== false);
+  const layer = figma.createFrame();
+  layer.name = DIALOG_LAYER_NAME;
+  layer.resize(w, h);
+  layer.fills = [];          // transparent — each dialog brings its own backdrop
+  layer.clipsContent = false;
+  layer.setSharedPluginData('figforge', 'role', 'overlay');
+  const rightEdge = screens.reduce((m, f) => Math.max(m, f.x + f.width), Number.NEGATIVE_INFINITY);
+  layer.x = Number.isFinite(rightEdge) ? Math.round(rightEdge + 120) : 0;
+  layer.y = screens.length ? Math.round(screens[0].y) : 0;
+  return layer;
+}
+
+// Drop a dialog instance into the global dialog layer (NOT the current screen). The
+// instance keeps the MASTER's size — no resize — so master, instance, and layer all
+// match. New dialogs stack at the origin (each is hidden until opened at runtime).
+function placeDialogInstance(comp: ComponentNode): InstanceNode {
+  let page = figma.currentPage;
+  if (page.name === COMPONENTS_PAGE) {
+    page = (figma.root.children.find((p) => p.name !== COMPONENTS_PAGE) as PageNode | undefined)
+      ?? (() => { const p = figma.createPage(); p.name = 'FigForge Sandbox'; return p; })();
+    figma.currentPage = page;
+  }
+  const inst = comp.createInstance();                       // keep the master's size
+  const layer = ensureDialogLayer(page, inst.width, inst.height);
+  layer.appendChild(inst);
+  inst.x = 0; inst.y = 0;
+  // Grow the layer to contain the dialog (never shrink — earlier dialogs may differ).
+  if (layer.width < inst.width || layer.height < inst.height)
+    layer.resize(Math.max(layer.width, inst.width), Math.max(layer.height, inst.height));
+  figma.currentPage.selection = [inst];
+  figma.viewport.scrollAndZoomIntoView([inst]);
+  figma.notify('Added to the global “Dialogs” layer — rename this instance (e.g. “ConfirmDialog”) to set its Dialogs.<Name> code accessor.');
+  return inst;
+}
+
+async function createModal(optsIn?: Partial<ModalOptions>): Promise<ComponentNode> {
+  const opts = normalizeModalOptions(optsIn);
   const reuse = findMaster('Dialog');
-  if (reuse) { placeInstance(reuse); return reuse; }
+  if (reuse) {
+    layoutModalMaster(reuse, opts.width, opts.height);
+    placeDialogInstance(reuse);
+    return reuse;
+  }
 
   const font = await loadUiFont();
-  const W = 640, H = 420;
+  const W = opts.width, H = opts.height;
   const comp = figma.createComponent();
   comp.name = 'Dialog'; comp.resize(W, H); comp.fills = [];
 
@@ -1625,7 +1748,7 @@ async function createModal(): Promise<ComponentNode> {
   comp.appendChild(backdrop);
 
   const panel = solidRect('Panel', 420, 260, 14, { r: 1, g: 1, b: 1 });
-  panel.x = 110; panel.y = 80; panel.constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+  panel.x = 0; panel.y = 0; panel.constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
   panel.effects = [{ type: 'DROP_SHADOW', color: { r: 0, g: 0, b: 0, a: 0.22 }, offset: { x: 0, y: 16 }, radius: 32, spread: -8, visible: true, blendMode: 'NORMAL' }];
   comp.appendChild(panel);
 
@@ -1633,18 +1756,18 @@ async function createModal(): Promise<ComponentNode> {
   title.fontName = font; title.name = 'Title'; title.characters = 'Delete project?';
   title.fontSize = 22; title.fills = [{ type: 'SOLID', color: { r: 0.08, g: 0.08, b: 0.1 } }];
   title.textAutoResize = 'NONE'; title.resize(340, 32);
-  title.x = 134; title.y = 104; title.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+  title.x = 0; title.y = 0; title.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
   comp.appendChild(title);
 
   const body = figma.createText();
   body.fontName = font; body.name = 'Body'; body.characters = 'This action cannot be undone.';
   body.fontSize = 15; body.fills = [{ type: 'SOLID', color: { r: 0.28, g: 0.28, b: 0.34 } }];
   body.textAutoResize = 'NONE'; body.resize(372, 86);
-  body.x = 134; body.y = 150; body.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  body.x = 0; body.y = 0; body.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
   comp.appendChild(body);
 
   const actions = figma.createFrame();
-  actions.name = 'Actions'; actions.resize(250, 40); actions.x = 256; actions.y = 276;
+  actions.name = 'Actions'; actions.resize(250, 40); actions.x = 0; actions.y = 0;
   actions.fills = []; actions.layoutMode = 'HORIZONTAL'; actions.itemSpacing = 10;
   actions.primaryAxisAlignItems = 'MAX'; actions.counterAxisAlignItems = 'CENTER';
   actions.constraints = { horizontal: 'MAX', vertical: 'MAX' };
@@ -1656,7 +1779,7 @@ async function createModal(): Promise<ComponentNode> {
   actions.appendChild(primary);
 
   const close = figma.createFrame();
-  close.name = 'Close'; close.resize(32, 32); close.x = 474; close.y = 96;
+  close.name = 'Close'; close.resize(32, 32); close.x = 0; close.y = 0;
   close.fills = [{ type: 'SOLID', color: { r: 0.93, g: 0.94, b: 0.97 }, opacity: 1 }];
   close.cornerRadius = 16; close.constraints = { horizontal: 'MAX', vertical: 'MIN' };
   comp.appendChild(close);
@@ -1666,10 +1789,68 @@ async function createModal(): Promise<ComponentNode> {
   close.appendChild(closeText);
   closeText.x = (32 - closeText.width) / 2; closeText.y = (32 - closeText.height) / 2;
 
+  layoutModalMaster(comp, W, H);
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'modal', ref: 'Dialog' }));
   parkMaster(comp);
-  placeInstance(comp);
+  placeDialogInstance(comp);
   return comp;
+}
+
+function layoutModalMaster(comp: ComponentNode, w: number, h: number): void {
+  comp.resize(w, h);
+  const panelW = Math.min(520, Math.max(280, w - 48));
+  const panelH = Math.min(300, Math.max(200, h - 48));
+  const px = Math.round((w - panelW) / 2);
+  const py = Math.round((h - panelH) / 2);
+
+  const backdrop = comp.findOne((n) => n.name === 'Backdrop') as RectangleNode | null;
+  if (backdrop) {
+    backdrop.resize(w, h);
+    backdrop.x = 0;
+    backdrop.y = 0;
+    backdrop.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  }
+
+  const panel = comp.findOne((n) => n.name === 'Panel') as RectangleNode | null;
+  if (panel) {
+    panel.resize(panelW, panelH);
+    panel.x = px;
+    panel.y = py;
+    panel.constraints = { horizontal: 'CENTER', vertical: 'CENTER' };
+  }
+
+  const title = comp.findOne((n) => n.type === 'TEXT' && n.name === 'Title') as TextNode | null;
+  if (title) {
+    title.textAutoResize = 'NONE';
+    title.resize(Math.max(1, panelW - 96), 32);
+    title.x = px + 24;
+    title.y = py + 24;
+    title.constraints = { horizontal: 'STRETCH', vertical: 'MIN' };
+  }
+
+  const body = comp.findOne((n) => n.type === 'TEXT' && n.name === 'Body') as TextNode | null;
+  if (body) {
+    body.textAutoResize = 'NONE';
+    body.resize(Math.max(1, panelW - 48), Math.max(44, panelH - 150));
+    body.x = px + 24;
+    body.y = py + 70;
+    body.constraints = { horizontal: 'STRETCH', vertical: 'STRETCH' };
+  }
+
+  const actions = comp.findOne((n) => n.type === 'FRAME' && n.name === 'Actions') as FrameNode | null;
+  if (actions) {
+    actions.resize(Math.min(250, Math.max(1, panelW - 48)), 40);
+    actions.x = px + panelW - 24 - actions.width;
+    actions.y = py + panelH - 64;
+    actions.constraints = { horizontal: 'MAX', vertical: 'MAX' };
+  }
+
+  const close = comp.findOne((n) => n.type === 'FRAME' && n.name === 'Close') as FrameNode | null;
+  if (close) {
+    close.x = px + panelW - 56;
+    close.y = py + 16;
+    close.constraints = { horizontal: 'MAX', vertical: 'MIN' };
+  }
 }
 
 async function modalActionFrame(name: string, label: string, font: FontName, primary: boolean): Promise<FrameNode> {
