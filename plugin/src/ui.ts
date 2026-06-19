@@ -675,10 +675,15 @@ function readFontFaceDilate(): number {
 function currentOptions(): ExportOptions {
   return {
     autoMerge: ($('#optAutoMerge input') as HTMLInputElement).checked,
-    rasterizeStrokes: ($('#optRasterStroke input') as HTMLInputElement).checked,
+    // The "Raster / No Shader" chip IS the no-shader (vanilla) mode now — the separate Vanilla
+    // chip is gone. Strokes stay manifest data (rasterizeStrokes:false) so vanilla renders them
+    // shader-free from the procedural outline cache; forcing them to raster here would make them
+    // vanish (vanilla bakes no PNG to hold a rasterized stroke).
+    rasterizeStrokes: false,
     emitGradients: ($('#optGradients input') as HTMLInputElement).checked,
     emitImageFills: true,
     fontFaceDilate: readFontFaceDilate(),
+    vanilla: ($('#optRasterStroke input') as HTMLInputElement).checked,
   };
 }
 

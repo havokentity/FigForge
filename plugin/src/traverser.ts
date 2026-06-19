@@ -246,7 +246,7 @@ export function buildTree(root: SceneNode, excluded: Set<string>): TreeNode {
       visible: isVisible(node) && !excluded.has(node.id),
       canExportPng: node.type === 'TEXT' || isExportable(node),
       canMerge: canMerge(node),
-      canPassthrough: canPassthrough(node),
+      canPassthrough: depth > 0 && canPassthrough(node),
       passthroughByName: isPassthroughName(node.name),
       canonicalRef: canonical ? canonical.ref : undefined,
       children: childNodes,

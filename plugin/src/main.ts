@@ -218,16 +218,40 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
           name: string; manifest: string; assets: BinaryAsset[];
           section: string; role: string;
         }[] = [];
+        // Per-frame resilience: one frame that throws (an export-time error, an
+        // out-of-memory bake) must NOT discard every other frame. Isolate each
+        // frame, report the ones that fail, and ship the ones that succeed.
+        const failed: string[] = [];
         for (let i = 0; i < found.length; i++) {
           figma.ui.postMessage({ type: 'progress', current: i, total: found.length, label: found[i].node.name });
-          const result = await exportDesign(found[i].node, scale, options, excluded, merged, forcedPng, passthrough);
-          screens.push({
-            name: sanitize(found[i].node.name),
-            manifest: JSON.stringify(result.manifest, null, 2),
-            assets: result.assets,
-            section: found[i].section,
-            role: frameRole(found[i].node),
+          try {
+            const result = await exportDesign(found[i].node, scale, options, excluded, merged, forcedPng, passthrough);
+            screens.push({
+              name: sanitize(found[i].node.name),
+              manifest: JSON.stringify(result.manifest, null, 2),
+              assets: result.assets,
+              section: found[i].section,
+              role: frameRole(found[i].node),
+            });
+          } catch (e) {
+            failed.push(found[i].node.name);
+            figma.ui.postMessage({
+              type: 'status',
+              message: `Frame "${found[i].node.name}" failed — skipped (${String((e as Error)?.message || e)})`,
+              error: true,
+            });
+          }
+        }
+        if (failed.length) {
+          figma.ui.postMessage({
+            type: 'status',
+            message: `${failed.length} frame(s) failed: ${failed.join(', ')}. Continuing with ${screens.length} that exported.`,
+            error: true,
           });
+        }
+        if (screens.length === 0) {
+          figma.ui.postMessage({ type: 'export-error', message: 'No frames exported — every frame failed.' });
+          break;
         }
         // Initial = first real screen (never a shell or a global overlay layer).
         const firstScreen = screens.find((s) => s.role !== 'shell' && s.role !== 'overlay') || screens[0];

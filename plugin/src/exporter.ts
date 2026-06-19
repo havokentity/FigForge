@@ -271,6 +271,16 @@ function extractShadows(node: SceneNode): Shadow[] {
   return out;
 }
 
+// VANILLA effect filter: keep only DROP shadows. Unity renders a drop shadow
+// shader-free — a soft, offset, tinted 9-sliced sprite behind the element. Layer/
+// background blur (needs to sample underlying pixels) and inner shadows can't be
+// done without a shader, so they're dropped in vanilla.
+function vanillaEffects(effects: Shadow[] | undefined): Shadow[] | undefined {
+  if (!effects) return undefined;
+  const drops = effects.filter((e) => e.kind === 'dropShadow' || (!e.kind && e.inner === false));
+  return drops.length ? drops : undefined;
+}
+
 function buildStyle(node: SceneNode, options: ExportOptions, hasAsset: boolean): Style | undefined {
   const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
   const blendMode = nodeBlendMode(node);
@@ -611,11 +621,29 @@ const RESERVED_CANONICAL_CHILD_NAMES = new Set([
 ]);
 
 // Per-kind STRUCTURAL part names a control builds procedurally (captured via parts /
-// labels, not as separate elements). Without this, a complex control's parts leak
-// through canonicalExtraChildren as "extra" layers and get DOUBLE-built — e.g. a modal
-// would render a second panel and its action frames as non-interactive duplicates over
-// the real FigForgeButtons. Reserving a direct child also suppresses its whole subtree.
+// labels / state colours, not as separate elements). Without this, a complex control's
+// parts leak through canonicalExtraChildren as "extra" layers and get DOUBLE-built — e.g.
+// a dropdown renders a second Arrow over its real one, a modal a second panel + action
+// frames over the real FigForgeButtons. Reserving a direct child also suppresses its whole
+// subtree. Buttons need no entry: their parts (Regular/RollOver/Pressed/Label/Icon/HitArea)
+// are all in RESERVED_CANONICAL_CHILD_NAMES already. Names mirror each capture<Kind>()'s
+// partsOf(master, …) + childByName(master, …) lookups (lower-cased).
 const CANONICAL_PART_NAMES: Record<string, Set<string>> = {
+  toggle: new Set(['checkmark']),
+  radio: new Set(['checkmark']),
+  switch: new Set(['track', 'fill', 'thumb', 'thumbrollover', 'thumbpressed']),
+  input: new Set(['placeholder', 'value']),
+  dropdown: new Set(['arrow', 'options', 'dropdownoption', 'bgrollover', 'bgpressed']),
+  stepper: new Set([
+    'minus', 'minuslabel', 'minusrollover', 'minuspressed',
+    'plus', 'pluslabel', 'plusrollover', 'pluspressed',
+    'inputfield', 'value',
+  ]),
+  slider: new Set(['track', 'fill', 'thumb', 'thumbrollover', 'thumbpressed', 'ticks', 'value']),
+  progress: new Set(['track', 'fill', 'indeterminate', 'value']),
+  list: new Set(['item', 'header', 'scrollbar', 'mask']),
+  table: new Set(['row', 'header', 'scrollbar', 'mask']),
+  toast: new Set(['toast', 'accent']),
   modal: new Set([
     'backdrop', 'panel', 'dialog', 'title', 'header', 'body', 'message', 'description',
     'actions', 'close', 'primary', 'secondary', 'tertiary', 'confirm', 'cancel',
@@ -998,6 +1026,12 @@ export async function exportDesign(
     // controls have their own capture path, so all three are excluded here.
     // VIDEO fills are NOT handled (hasImageFill is IMAGE-only): a structural
     // container's video fill still vanishes — punt until a poster-frame bake.
+    // NOTE: vanilla does NOT bake structural containers here. A separate full-size
+    // PNG for every rounded/gradient/stroked card across a dense page exhausts
+    // Figma's heap and the export dies midway. In vanilla such a container instead
+    // keeps a flattened solid style (flattenVanillaStyle) and Unity renders it as a
+    // plain Image — square corners, no gradient/stroke, but bake-free and scalable.
+    // Only IMAGE fills (a real photo, unrepresentable as a colour) still bake.
     const bakeSelf =
       !exportable && !canonicalRef && 'children' in node && hasImageFill(node);
 
@@ -1336,16 +1370,68 @@ export async function exportDesign(
     return shape;
   }
 
+  // VANILLA: keep a captured control shape on Unity's shader-free path WITHOUT
+  // baking a per-part PNG. Baking a separate sprite for every shape (track, thumb,
+  // box, …) means thousands of exportAsync calls across a dense page — each holding
+  // a PNG in memory until the whole page is sent — which exhausts Figma's heap and
+  // kills the export midway. Instead we just drop the vector mesh + effect data;
+  // Unity renders the shape as a plain tinted Image (AddVanillaFlatImage) from its
+  // solid fill, shader-free and bake-free. A no-op when vanilla is off.
+  function vanillaShape(shape: ButtonShape | null): ButtonShape | null {
+    if (!options.vanilla || !shape) return shape;
+    shape.vector = undefined;
+    // A baked shape (asset) already has its shadow composed into the PNG; an
+    // un-baked one keeps its drop shadows for Unity to draw as a soft sprite.
+    shape.effects = shape.asset ? undefined : vanillaEffects(shape.effects);
+    return shape;
+  }
+
+  // A control PART shape (slider track/thumb, scrollbar, stepper button, …): plain
+  // `shapeOf` geometry, with vector/effect hints stripped in VANILLA so Unity
+  // renders it as a flat tinted Image. Identical to `shapeOf` in normal mode, so
+  // normal-mode output is unchanged.
+  function partShape(node: SceneNode): ButtonShape | null {
+    return vanillaShape(shapeOf(node));
+  }
+
+  // VANILLA: a non-canonical, non-text element renders as a plain flat Image — any
+  // shader-needing paint is already baked into its PNG (via bakeSelf/exportable).
+  // Drop the structured render-hints so Unity never builds an SDF/blend/vector
+  // graphic: no effects, normal blend, and — once a sprite is baked — no fill or
+  // stroke stacks (cornerRadius stays: it only drives the cheap RectMask2D clip,
+  // never a shader, once UseSdf is gated off). A no-op when vanilla is off.
+  function flattenVanillaStyle(style: Style | undefined, hasAsset: boolean): Style | undefined {
+    if (!options.vanilla || !style) return style;
+    // Drop only what genuinely needs a shader/compositor: effects (shadow/blur) and
+    // live blends. Solid fills, GRADIENTS, corner radius and strokes are KEPT —
+    // Unity renders them shader-free from the procedural sprite caches
+    // (RoundedRect / Gradient / RoundedOutline), so they survive at full fidelity.
+    if (style.blendMode && !isNormalBlend(style.blendMode)) style.blendMode = 'normal';
+    if (hasAsset) {
+      // The PNG already composes fill+stroke+corners+effects (image/vector/icon).
+      delete style.fill;
+      delete style.fills;
+      delete style.stroke;
+      delete style.strokes;
+      delete style.effects;
+    } else {
+      // Keep DROP shadows for Unity's shader-free soft-sprite shadow; drop blur.
+      style.effects = vanillaEffects(style.effects);
+    }
+    return style;
+  }
+
   async function shapeOfWithAsset(node: SceneNode): Promise<ButtonShape | null> {
     let shape = shapeOf(node);
     if (shape && VECTOR_SHAPE_TYPES.has(node.type)) {
       // Crisp procedural mesh when the path geometry is representable; the PNG is
-      // still exported as the fallback Unity uses if the mesh is absent.
+      // still exported as the fallback Unity uses if the mesh is absent. (Vanilla
+      // drops the mesh in vanillaShape below but keeps the baked PNG.)
       const vector = buildVectorDrawing(node);
       if (vector) shape.vector = vector;
       const asset = await exportNodeAsset(node, `${node.name}_shape`);
       if (asset) shape.asset = asset;
-      return shape;
+      return vanillaShape(shape);
     }
     // An icon-only container (multi-path glyph grouped under a FRAME/GROUP) can't be
     // rebuilt as a rounded rect — rasterize the WHOLE subtree as one sprite instead
@@ -1361,7 +1447,7 @@ export async function exportDesign(
         shape.asset = asset;
       }
     }
-    return shape;
+    return vanillaShape(shape);
   }
 
   function mergeShapeFallbacks(shape: ButtonShape | null, fallbacks: SceneNode[]): ButtonShape | null {
@@ -1683,6 +1769,7 @@ export async function exportDesign(
         style = textStyle(node);
       } else {
         style = buildStyle(node, options, hasAsset);
+        style = flattenVanillaStyle(style, hasAsset);
         if (hasAsset || style?.fill || style?.stroke) components.push('Image');
       }
 
@@ -1699,7 +1786,7 @@ export async function exportDesign(
         style,
         text,
         asset: asset ? asset.file : null,
-        vector: hasAsset && VECTOR_SHAPE_TYPES.has(node.type) ? (buildVectorDrawing(node) ?? undefined) : undefined,
+        vector: !options.vanilla && hasAsset && VECTOR_SHAPE_TYPES.has(node.type) ? (buildVectorDrawing(node) ?? undefined) : undefined,
         assetBounds: asset
           ? { x: nx, y: ny, w: nw, h: nh, pixelWidth: asset.w, pixelHeight: asset.h, exportScale: scaleNum }
           : undefined,
@@ -1769,9 +1856,9 @@ export async function exportDesign(
     const fillVisible = fillNode ? (fillNode as unknown as { visible?: boolean }).visible !== false : false;
     const value = tagValue === 'on' || tagValue === 'off' ? tagValue : (fillVisible ? 'on' : 'off');
     return {
-      trackShape: shapeOf(trackNode) ?? undefined,
-      fillShape: fillNode ? (shapeOf(fillNode) ?? undefined) : undefined,
-      thumbShape: thumbNode ? (shapeOf(thumbNode) ?? undefined) : undefined,
+      trackShape: await partShape(trackNode) ?? undefined,
+      fillShape: fillNode ? (await partShape(fillNode) ?? undefined) : undefined,
+      thumbShape: thumbNode ? (await partShape(thumbNode) ?? undefined) : undefined,
       thumbRollover: thumbRoll ? (stateSolid(thumbRoll) ?? undefined) : undefined,
       thumbPressed: thumbPress ? (stateSolid(thumbPress) ?? undefined) : undefined,
       value,
@@ -1915,9 +2002,9 @@ export async function exportDesign(
     const plusRoll = childByName(master, 'PlusRollover');
     const plusPress = childByName(master, 'PlusPressed');
     return {
-      minusShape: shapeOf(minus) ?? undefined,
-      inputShape: shapeOf(input) ?? undefined,
-      plusShape: shapeOf(plus) ?? undefined,
+      minusShape: await partShape(minus) ?? undefined,
+      inputShape: await partShape(input) ?? undefined,
+      plusShape: await partShape(plus) ?? undefined,
       minusRollover: minusRoll ? (stateSolid(minusRoll) ?? undefined) : undefined,
       minusPressed: minusPress ? (stateSolid(minusPress) ?? undefined) : undefined,
       plusRollover: plusRoll ? (stateSolid(plusRoll) ?? undefined) : undefined,
@@ -1950,7 +2037,7 @@ export async function exportDesign(
     const bgRollover = bgRoll ? (stateSolid(bgRoll) ?? undefined) : undefined;
     const bgPressed = bgPress ? (stateSolid(bgPress) ?? undefined) : undefined;
     const optsFrame = childByName(master, 'Options');
-    const popupShape = (optsFrame ? shapeOf(optsFrame) : null) ?? shape ?? undefined;
+    const popupShape = (optsFrame ? await partShape(optsFrame) : null) ?? shape ?? undefined;
     const optionNodes = optsFrame && 'children' in optsFrame
       ? ((optsFrame as ChildrenMixin).children as SceneNode[])
       : [];
@@ -2085,8 +2172,8 @@ export async function exportDesign(
     const sbTrackNode = sbNode ? (childByName(sbNode, 'Track') ?? sbNode) : undefined;
     const sbThumbNode = sbNode ? childByName(sbNode, 'Thumb') : undefined;
     const scrollbarWidth = sbNode ? ((sbNode as unknown as { width?: number }).width ?? undefined) : undefined;
-    const scrollTrackShape = sbTrackNode ? (shapeOf(sbTrackNode) ?? undefined) : undefined;
-    const scrollThumbShape = sbThumbNode ? (shapeOf(sbThumbNode) ?? undefined) : undefined;
+    const scrollTrackShape = sbTrackNode ? (await partShape(sbTrackNode) ?? undefined) : undefined;
+    const scrollThumbShape = sbThumbNode ? (await partShape(sbThumbNode) ?? undefined) : undefined;
     // Hidden hover/press colour layers for the thumb (same convention as row states).
     const sbThumbRoll = sbNode ? childByName(sbNode, 'ThumbRollover') : undefined;
     const sbThumbPress = sbNode ? childByName(sbNode, 'ThumbPressed') : undefined;
@@ -2096,7 +2183,7 @@ export async function exportDesign(
     // The Mask layer's own styling — its corner radius drives the ROUNDED clip in
     // Unity (rounded stencil mask), so the clip shape is entirely designer-defined.
     const maskNode = childByName(master, 'Mask');
-    const maskShape = maskNode ? (shapeOf(maskNode) ?? undefined) : undefined;
+    const maskShape = maskNode ? (await partShape(maskNode) ?? undefined) : undefined;
 
     return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
       itemHeight, headerHeight, label: rowLabel,
@@ -2187,14 +2274,14 @@ export async function exportDesign(
     const sbTrackNode = sbNode ? (childByName(sbNode, 'Track') ?? sbNode) : undefined;
     const sbThumbNode = sbNode ? childByName(sbNode, 'Thumb') : undefined;
     const scrollbarWidth = sbNode ? ((sbNode as unknown as { width?: number }).width ?? undefined) : undefined;
-    const scrollTrackShape = sbTrackNode ? (shapeOf(sbTrackNode) ?? undefined) : undefined;
-    const scrollThumbShape = sbThumbNode ? (shapeOf(sbThumbNode) ?? undefined) : undefined;
+    const scrollTrackShape = sbTrackNode ? (await partShape(sbTrackNode) ?? undefined) : undefined;
+    const scrollThumbShape = sbThumbNode ? (await partShape(sbThumbNode) ?? undefined) : undefined;
     const sbThumbRoll = sbNode ? childByName(sbNode, 'ThumbRollover') : undefined;
     const sbThumbPress = sbNode ? childByName(sbNode, 'ThumbPressed') : undefined;
     const scrollThumbRollover = sbThumbRoll ? (stateSolid(sbThumbRoll) ?? undefined) : undefined;
     const scrollThumbPressed = sbThumbPress ? (stateSolid(sbThumbPress) ?? undefined) : undefined;
     const maskNode = childByName(master, 'Mask');
-    const maskShape = maskNode ? (shapeOf(maskNode) ?? undefined) : undefined;
+    const maskShape = maskNode ? (await partShape(maskNode) ?? undefined) : undefined;
 
     return { shape: shape ?? undefined, itemShape, itemRollover, itemPressed, itemSelected,
       itemHeight, headerHeight,
@@ -2250,11 +2337,11 @@ export async function exportDesign(
     let maxValue = tag.maxValue ?? 1;
     if (!(maxValue > minValue)) { minValue = 0; maxValue = 1; } // malformed tag → legacy 0..1
     const slots = tag.slots !== undefined && tag.slots >= 2 ? tag.slots : undefined;
-    const trackShape = shapeOf(trackNode) ?? undefined;
+    const trackShape = await partShape(trackNode) ?? undefined;
     const fillNode = childByName(master, 'Fill');
-    const fillShape = fillNode ? (shapeOf(fillNode) ?? undefined) : undefined;
+    const fillShape = fillNode ? (await partShape(fillNode) ?? undefined) : undefined;
     const thumbNode = childByName(master, 'Thumb');
-    const thumbShape = thumbNode ? (shapeOf(thumbNode) ?? undefined) : undefined;
+    const thumbShape = thumbNode ? (await partShape(thumbNode) ?? undefined) : undefined;
     const thumbRoll = childByName(master, 'ThumbRollover');
     const thumbPress = childByName(master, 'ThumbPressed');
     const thumbRollover = thumbRoll ? (stateSolid(thumbRoll) ?? undefined) : undefined;
@@ -2345,8 +2432,8 @@ export async function exportDesign(
       ? ((fillNode as ChildrenMixin).children as SceneNode[])
       : undefined;
     const fillShapeNode = fillKids ? fillKids[0] : fillNode;
-    const trackShape = trackShapeNode ? (shapeOf(trackShapeNode) ?? undefined) : undefined;
-    const fillShape = fillShapeNode ? (shapeOf(fillShapeNode) ?? undefined) : undefined;
+    const trackShape = trackShapeNode ? (await partShape(trackShapeNode) ?? undefined) : undefined;
+    const fillShape = fillShapeNode ? (await partShape(fillShapeNode) ?? undefined) : undefined;
 
     const ring = style === 'ring' ? ringGeometryOf(trackNode) : undefined;
     let segments: number | undefined;
@@ -2665,6 +2752,7 @@ export async function exportDesign(
         delete style.stroke;
         delete style.strokes;
       }
+      style = flattenVanillaStyle(style, hasAsset);
       if (hasAsset || style?.fill || style?.stroke) components.push('Image');
     }
     if (interactive(node.name) && !p.canonicalRef) components.push('Button');
@@ -2799,7 +2887,8 @@ export async function exportDesign(
       // Crisp procedural mesh for raw vector nodes; Unity prefers it over the PNG.
       // Gated on hasAsset so it only replaces a PNG that would have rendered here —
       // a merged vector (baked into a parent's PNG) must not also draw its own mesh.
-      vector: hasAsset && VECTOR_SHAPE_TYPES.has(node.type) ? (buildVectorDrawing(node) ?? undefined) : undefined,
+      // Vanilla bakes everything flat: no meshes, only the PNG sprite.
+      vector: !options.vanilla && hasAsset && VECTOR_SHAPE_TYPES.has(node.type) ? (buildVectorDrawing(node) ?? undefined) : undefined,
       assetBounds: asset
         ? {
             x: nodeX,
@@ -2849,6 +2938,7 @@ export async function exportDesign(
     canonicalSchema: CANONICAL_SCHEMA, // importer warns when ≠ HierarchyBuilder.CanonicalSchema
     generator: 'FigForge',
     exportedAt: new Date().toISOString(),
+    vanilla: options.vanilla || undefined, // omit the field entirely when off
     screen: {
       id: root.id,
       name: sanitize(root.name),

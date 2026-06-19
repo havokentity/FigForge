@@ -505,6 +505,10 @@ export interface Manifest {
   canonicalSchema: number;
   generator: 'FigForge';
   exportedAt: string;
+  // Vanilla export: the manifest is fully baked to flat sprites. The Unity
+  // importer honours this to skip the page compositor / SDF shaders and render
+  // any residual shapeless geometry as a plain Image. Absent/false = normal.
+  vanilla?: boolean;
   screen: ScreenInfo;
   elements: ManifestElement[];
   assets: ManifestAsset[];
@@ -550,6 +554,11 @@ export interface ExportOptions {
   emitGradients: boolean;
   emitImageFills: boolean;
   fontFaceDilate: number;
+  // Vanilla: bake EVERYTHING to flat PNGs — no vector meshes, no gradient/effect/
+  // blend render-hints, no SDF/compositor in Unity. Decorative shapes bake to
+  // sprites; interactive controls keep their components but render every part from
+  // a baked sprite instead of the SDF shader; TEXT stays TMP. For low-end devices.
+  vanilla: boolean;
 }
 
 export const DEFAULT_EXPORT_SCALE: ExportScale = { type: 'scale', value: 2 };
@@ -559,6 +568,7 @@ export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
   emitGradients: true,
   emitImageFills: true,
   fontFaceDilate: 0.15,
+  vanilla: false,
 };
 
 export interface ElementConfig {
