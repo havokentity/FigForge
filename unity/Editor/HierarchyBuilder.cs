@@ -29,6 +29,11 @@ namespace FigForge
         public Dictionary<string, Sprite> sprites = new Dictionary<string, Sprite>();
         public Func<string, string, TMP_FontAsset> resolveFont;
         public CanonicalLibrary canonical;
+        // Vanilla import (manifest.vanilla): render everything from baked sprites —
+        // no SDF/vector/layered shaders, no page compositor. The plugin bakes a PNG
+        // onto every shape, so this only governs the assetless fallback (plain Image
+        // instead of a procedural rounded rect) and skips the compositor pass.
+        public bool vanilla = false;
         public bool disableRaycasts = true;
         public int warmUpBatchSize = 256;
         public Action<string> log = _ => { };
@@ -80,6 +85,17 @@ namespace FigForge
             }
             finally { FigForgePageCompositor.SuppressAutoCreate = false; }
 
+            // The page root receives FigForgeFrame from the importer; the FigForgeFrameElement
+            // the builder added to it as a structural container would just duplicate it (same
+            // isVisible / RectTransform / visibility helpers), so drop it. Nested groups, which
+            // are NOT the page root, keep theirs. (In the multi-root case the page root is a
+            // plain wrapper with no FigForgeFrameElement, so this is a no-op there.)
+            if (pageRoot != null)
+            {
+                var rootElement = pageRoot.GetComponent<FigForgeFrameElement>();
+                if (rootElement != null) UnityEngine.Object.DestroyImmediate(rootElement);
+            }
+
             // Registry of named controls, for code to fetch by Figma name.
             if (pageRoot != null && ctx.registered.Count > 0)
             {
@@ -94,6 +110,10 @@ namespace FigForge
         static void ConfigurePageCompositor(GameObject pageRoot, BuildContext ctx)
         {
             if (pageRoot == null) return;
+            // Vanilla builds carry no destination-reading blends/backdrop blur (the
+            // plugin bakes everything flat), so no source needs the compositor — skip
+            // the pass entirely rather than rely on the source-count early-out below.
+            if (ctx.vanilla) return;
             var sources = pageRoot.GetComponentsInChildren<IFigForgeCompositorSource>(true);
             bool needsPageCompositor = false;
             for (int i = 0; i < sources.Length; i++)
@@ -310,6 +330,33 @@ namespace FigForge
                 }
                 ApplyTransform(inst.GetComponent<RectTransform>() ?? inst.AddComponent<RectTransform>(), e, ctx);
 
+                // Vanilla: one soft drop shadow behind the control (shader-free), added to the live
+                // INSTANCE so it works for cached prefab instances too. The shadow can live in a few
+                // places: a toggle puts it on `shape`, a BUTTON puts it on its normal STATE shape
+                // (and RootShadowShape stores it under `shadows`, not `effects`) — so gather from all
+                // of them via ShapeShadows rather than reading one field.
+                if (ctx.vanilla)
+                {
+                    var normalState = e.canonical.stateShapes != null ? e.canonical.stateShapes.normal : null;
+                    CanonicalShape shadowShape = null;
+                    List<ShadowData> shadows = null;
+                    foreach (var s in new[] { e.canonical.rootShape, normalState, e.canonical.shape })
+                    {
+                        var found = ShapeShadows(s);
+                        if (found.Count > 0) { shadowShape = s; shadows = found; break; }
+                    }
+                    if (shadowShape != null && shadows != null && shadows.Count > 0)
+                    {
+                        // Shadow the BACKGROUND graphic, not the whole control (toggle box, switch
+                        // track, …); fall back to the instance — a plain button shadows its whole face.
+                        var bgBind = inst.GetComponentInChildren<FigForgeBindings>(true);
+                        var shadowOwner = bgBind != null && bgBind.background != null
+                            ? bgBind.background.gameObject : inst;
+                        AddVanillaDropShadows(shadowOwner, shadows,
+                            shadowShape.cornerRadius > 0.01f ? Mathf.RoundToInt(shadowShape.cornerRadius * ctx.scaleFactor) : 0, ctx);
+                    }
+                }
+
                 // Fill the prefab's binding slots (label/value/options); else stamp label.
                 var bindings = inst.GetComponentInChildren<FigForgeBindings>(true);
                 var iconSprite = SpriteByFile(e.canonical.iconAsset, ctx);
@@ -522,7 +569,9 @@ namespace FigForge
             // per-corner) and ANY panel with a live blend mode (the Image path can
             // only composite as normal alpha). Plain flat solids stay a cheap Image;
             // image fills are textures.
-            if (!hasAsset && UseSdf(style)) { BuildSdfPanel(go, e, ctx); return; }
+            // Vanilla never builds the SDF panel — an assetless rounded/bordered/
+            // gradient panel degrades to a plain (square) tinted Image below.
+            if (!hasAsset && !ctx.vanilla && UseSdf(style)) { BuildSdfPanel(go, e, ctx); return; }
 
             var img = go.AddComponent<Image>();
             img.raycastTarget = !ctx.disableRaycasts;
@@ -563,7 +612,15 @@ namespace FigForge
             // Only a PROCEDURAL node gets a procedural rect stroke. A rasterized node
             // (hasAsset) already has its stroke baked into the PNG — following the path
             // for a vector — so adding a rect border here double-draws it as a box.
+            // AddStroke uses RoundedOutlineSpriteCache (a 9-sliced sprite, no shader),
+            // so it runs in vanilla too — borders survive shader-free.
             if (!hasAsset && style?.stroke != null) AddStroke(go, e, ctx);
+
+            // Vanilla drop shadow: a soft sprite behind this element (shader-free).
+            // Only drop shadows reach here (the plugin drops blur/inner in vanilla).
+            if (ctx.vanilla && style?.effects != null)
+                AddVanillaDropShadows(go, style.effects,
+                    style.cornerRadius > 0.01f ? Mathf.RoundToInt(style.cornerRadius * ctx.scaleFactor) : 0, ctx);
         }
 
         // SDF panel covers solid (or fill-less) rounded/bordered rects AND linear
@@ -950,7 +1007,9 @@ namespace FigForge
             // surface and composites it — Tier-2 via the page compositor, Multiply/
             // Screen/PlusLighter via GPU blend state. Opacity rides the TMP vertex
             // colour (ApplyOpacity above), so the companion presents at opacity 1.
-            if (e.style != null && NonNormalBlend(e.style.blendMode))
+            // Vanilla keeps text as plain TMP — no live-blend companion (it would pull
+            // in the bake surface / page compositor). The blend just folds to normal.
+            if (e.style != null && !ctx.vanilla && NonNormalBlend(e.style.blendMode))
                 go.AddComponent<FigForgeTextBlend>().Configure(BlendModeFromManifest(e.style.blendMode));
         }
 
@@ -1212,6 +1271,14 @@ namespace FigForge
                 return;
             if (allowOwnerRenderer && TryBuildShapeAsset(owner, shape, ctx, false))
                 return;
+            // Vanilla: no SDF/layered shader stack — render the shape from the
+            // procedural sprite caches (rounded corners, gradient, outline border),
+            // all shader-free 9-sliced/baked sprites on the default UI material.
+            if (ctx.vanilla)
+            {
+                if (allowOwnerRenderer) AddVanillaShapeGraphic(owner, shape, ctx);
+                return;
+            }
 
             var fills = ShapeFills(shape);
             var strokes = ShapeStrokes(shape);
@@ -1939,9 +2006,144 @@ namespace FigForge
             if (g != null) g.raycastTarget = true;
         }
 
+        // VANILLA shape renderer: draw a CanonicalShape WITHOUT any FigForge SDF/
+        // vector/layered shader, using the procedural sprite caches instead — a
+        // 9-sliced RoundedRect sprite (tinted) for rounded fills, a baked Gradient
+        // sprite for gradients, and a RoundedOutline ring child for strokes. All are
+        // plain Images on the default UI shader and cached per radius/params, so this
+        // keeps corners + gradients + borders while staying shader-free and scalable.
+        static Image AddVanillaShapeGraphic(GameObject go, CanonicalShape sh, BuildContext ctx)
+        {
+            RemoveOwnerVisualRenderers(go);
+            if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>();
+            // RemoveOwnerVisualRenderers only clears FigForge shape renderers; a plain Image (or a
+            // TMP_Text) left by an earlier pass can still hold the GameObject's single Graphic slot,
+            // so a blind AddComponent<Image> returns null and the next line NREs — which dropped the
+            // whole frame. Reuse an existing Image (reset to a clean baseline), and bail gracefully
+            // if a non-Image Graphic is in the way instead of crashing.
+            var img = go.GetComponent<Image>();
+            if (img == null) img = go.AddComponent<Image>();
+            if (img == null)
+            {
+                Debug.LogWarning($"[FigForge] vanilla shape on '{go.name}' skipped — a non-Image Graphic occupies the slot.");
+                return null;
+            }
+            img.raycastTarget = false;
+            img.sprite = null;
+            img.type = Image.Type.Simple;
+            if (sh == null) { img.color = new Color(1, 1, 1, 0); return img; }
+
+            int radius = sh.cornerRadius > 0.01f ? Mathf.RoundToInt(sh.cornerRadius * ctx.scaleFactor) : 0;
+            float opacity = Mathf.Clamp01(sh.opacity); // overall layer opacity — was dropped on fills
+            bool hasGradient = sh.gradient != null && sh.gradient.stops != null && sh.gradient.stops.Count > 0;
+            Sprite grad = hasGradient ? GradientSpriteCache.Get(sh.gradient) : null;
+
+            // Stroke is resolved up front so a gradient fill can tuck inside it (drawn below).
+            var stroke = sh.stroke ?? (sh.strokes != null && sh.strokes.Count > 0 ? sh.strokes[0] : null);
+            bool hasStroke = stroke != null && stroke.color != null && stroke.weight > 0.01f;
+            int strokeThickness = hasStroke ? Mathf.Max(1, Mathf.RoundToInt(stroke.weight * ctx.scaleFactor)) : 0;
+
+            bool gradientBakedStroke = false;
+            if (grad != null && radius > 0)
+            {
+                // Bake the gradient AND its stroke (if any) into ONE per-element sprite from a single
+                // rounded-rect SDF — fill + border are aligned BY CONSTRUCTION (no separate ring to
+                // line up, no magic offset). A flat gradient sprite is a square box; a stencil mask
+                // gives a hard edge that overshoots. Falls back to the flat gradient if size is 0.
+                //
+                // Supersample by the EXPORT scale so the procedural gradient is as crisp as the 2×
+                // PNG assets — otherwise it's a 1× texture upscaled on a HiDPI canvas (soft edges).
+                int ss = Mathf.Clamp(Mathf.RoundToInt(ctx.exportScale), 1, 4);
+                var size = go.GetComponent<RectTransform>().rect.size;
+                var rounded = RoundedGradientSpriteCache.Get(sh.gradient, radius * ss,
+                    Mathf.RoundToInt(size.x) * ss, Mathf.RoundToInt(size.y) * ss,
+                    hasStroke ? stroke.color : null, strokeThickness * ss);
+                img.sprite = rounded != null ? rounded : grad;
+                img.type = Image.Type.Simple;
+                img.color = new Color(1f, 1f, 1f, opacity);
+                gradientBakedStroke = rounded != null && hasStroke; // stroke baked in → skip the ring
+            }
+            else if (grad != null)
+            {
+                img.sprite = grad;
+                img.color = new Color(1f, 1f, 1f, opacity); // gradient texture carries the colour
+            }
+            else
+            {
+                if (radius > 0)
+                {
+                    img.sprite = RoundedRectSpriteCache.Get(radius);
+                    img.type = Image.Type.Sliced;
+                    img.pixelsPerUnitMultiplier = 1f;
+                }
+                var fill = (sh.fill != null && sh.fill.Length >= 4) ? ToColor(sh.fill) : new Color(1, 1, 1, 0);
+                fill.a *= opacity;
+                img.color = fill;
+            }
+
+            // Border: a 9-sliced rounded-outline ring child (shader-free), like AddStroke.
+            // Skipped when a gradient already baked the stroke into its own sprite.
+            if (hasStroke && !gradientBakedStroke)
+            {
+                int thickness = strokeThickness;
+                var strokeGo = NewRect("Stroke", go.transform);
+                Stretch(strokeGo.GetComponent<RectTransform>());
+                var sImg = strokeGo.AddComponent<Image>();
+                sImg.raycastTarget = false;
+                sImg.sprite = RoundedOutlineSpriteCache.Get(radius, thickness);
+                sImg.type = Image.Type.Sliced;
+                sImg.pixelsPerUnitMultiplier = 1f;
+                var sc = ToColor(stroke.color); sc.a *= opacity; sImg.color = sc;
+            }
+            return img;
+        }
+
         // Background Graphic from a CanonicalShape (crisp SDF) or a transparent Image.
         // Add the CanvasRenderer up front: Toggle.isOn cross-fades graphic.canvasRenderer
         // the instant we set it, before RequireComponent would otherwise add one.
+        // VANILLA drop shadow: a soft, offset, tinted sprite placed as a sibling
+        // BEHIND `element` (earlier sibling = drawn first). Shader-free — a feathered
+        // 9-sliced sprite (SoftRoundedRectSpriteCache) on the default UI material.
+        // Blur/inner shadows are filtered out upstream (the plugin), so only drop
+        // shadows reach here. Sized to the element grown by spread+blur and shifted
+        // by the Figma offset (+y down → Unity -y).
+        static void AddVanillaDropShadows(GameObject element, List<ShadowData> effects, int cornerRadiusPx, BuildContext ctx)
+        {
+            if (effects == null || element == null || element.transform.parent == null) return;
+            var elemRT = element.GetComponent<RectTransform>();
+            if (elemRT == null) return;
+            float sf = ctx.scaleFactor;
+            foreach (var s in effects)
+            {
+                if (s == null || EffectKind(s) != "dropShadow" || s.color == null) continue;
+                var col = ToColor(s.color);
+                if (col.a <= 0.001f) continue;
+                int blur = Mathf.Clamp(Mathf.RoundToInt(s.blur * sf), 1, 128);
+                int spread = Mathf.RoundToInt(s.spread * sf);
+                int coreR = Mathf.Max(0, cornerRadiusPx + spread);
+                float grow = (spread + blur) * 2f;
+
+                var shadowGo = NewRect("Shadow", element.transform.parent);
+                var rt = shadowGo.GetComponent<RectTransform>();
+                rt.anchorMin = elemRT.anchorMin;
+                rt.anchorMax = elemRT.anchorMax;
+                rt.pivot = elemRT.pivot;
+                rt.localScale = elemRT.localScale;
+                rt.localRotation = elemRT.localRotation;
+                rt.sizeDelta = elemRT.sizeDelta + new Vector2(grow, grow);
+                rt.anchoredPosition = elemRT.anchoredPosition + new Vector2(s.offsetX * sf, -s.offsetY * sf);
+
+                var img = shadowGo.AddComponent<Image>();
+                img.raycastTarget = false;
+                img.sprite = SoftRoundedRectSpriteCache.Get(coreR, blur);
+                img.type = Image.Type.Sliced;
+                img.pixelsPerUnitMultiplier = 1f;
+                img.color = col;
+
+                shadowGo.transform.SetSiblingIndex(element.transform.GetSiblingIndex()); // behind the element
+            }
+        }
+
         static Graphic AddShapeGraphic(GameObject go, CanonicalShape sh, BuildContext ctx)
         {
             if (go.GetComponent<CanvasRenderer>() == null) go.AddComponent<CanvasRenderer>();
@@ -1950,6 +2152,10 @@ namespace FigForge
                 return go.GetComponent<FigForgeVectorGraphic>();
             if (TryBuildShapeAsset(go, sh, ctx, false))
                 return go.GetComponent<Image>();
+            // Vanilla: render the shape from the procedural sprite caches (rounded /
+            // gradient / outline) — corners + gradients + borders, but no shader.
+            if (ctx.vanilla)
+                return AddVanillaShapeGraphic(go, sh, ctx);
             EnsureSdfShaderIncluded();
             var fills = ShapeFills(sh);
             var strokes = ShapeStrokes(sh);
@@ -2060,7 +2266,22 @@ namespace FigForge
             {
                 var ckGo = NewRect("Checkmark", go.transform);
                 AnchorPart(ckGo.GetComponent<RectTransform>(), c.parts, "Checkmark");
-                toggle.graphic = AddShapeGraphic(ckGo, c.checkShape, ctx);
+                var ckGraphic = AddShapeGraphic(ckGo, c.checkShape, ctx);
+                if (ctx.vanilla)
+                {
+                    // Vanilla renders the checkmark as a fill Image PLUS a separate stroke-ring CHILD.
+                    // Toggle.graphic cross-fade only alphas the fill graphic, leaving the stroke ring
+                    // visible when off (the stray inner box). Hide the whole subtree via SetActive
+                    // instead — same as the composite-checkmark path above.
+                    toggle.graphic = null;
+                    ckGo.SetActive(false);
+                    var reveal = go.AddComponent<FigForgeToggleGraphicObject>();
+                    reveal.toggle = toggle; reveal.graphicRoot = ckGo;
+                }
+                else
+                {
+                    toggle.graphic = ckGraphic;
+                }
             }
 
             TextMeshProUGUI label = null;
@@ -2685,12 +2906,13 @@ namespace FigForge
                 Debug.LogWarning($"[FigForge] {kindLabel} '{e.name}': the Mask layer has corner radius 0, so the clip is SQUARE — " +
                                  "row fills will poke past the rounded Background at the corners. Give the Mask layer a corner " +
                                  "radius in Figma (clicking the create chip once repairs un-touched default masks), then re-export.");
-            if (clips && maskR > 0.5f)
+            if (!ctx.vanilla && clips && maskR > 0.5f)
             {
                 // ROUNDED clip, designer-defined by the Mask layer's own corner radius.
                 // The rounded SDF graphic doubles as drag target and stencil source — its
                 // shader discards outside the rounded shape, so the stencil Mask clips
                 // rows to the curve at EVERY scroll position (same pattern as ApplyClip).
+                // (Vanilla forces the square RectMask2D path below — no shader.)
                 var rr = viewport.AddComponent<FigForgeRoundedRect>();
                 rr.Configure(FigForgeFill.Solid(new Color(1f, 1f, 1f, 0.004f)), FigForgeStroke.None,
                     new Vector4(maskR, maskR, maskR, maskR));
@@ -3710,7 +3932,7 @@ namespace FigForge
             string kind = string.IsNullOrEmpty(e.canonical.kind) ? "button" : e.canonical.kind;
             string refName = e.canonical.Ref;
             if (string.IsNullOrEmpty(refName)) return null;
-            string sig = CanonicalSignature(e, kind, ctx.scaleFactor);
+            string sig = CanonicalSignature(e, kind, ctx.scaleFactor, ctx.vanilla);
             bool signatureShare = CanShareCanonicalBySignature(e, kind);
             // Only the FIRST element of a (kind, ref) in a build may regenerate the
             // shared prefab — see BuildContext.resolvedCanonicalRefs.
@@ -3934,7 +4156,7 @@ namespace FigForge
         // Counterpart constant: plugin/src/types.ts CANONICAL_SCHEMA — the plugin
         // stamps its number into the manifest (canonicalSchema) and ManifestParser
         // warns when the two differ. Bump BOTH together.
-        internal const int CanonicalSchema = 60;
+        internal const int CanonicalSchema = 63; // bumped: forces frames to rebuild so vanilla shadow/fill fixes re-apply
 
         // Invariant culture for every signature number: signatures persist in the
         // committed library asset, so a comma-decimal locale (de-DE, fr-FR, …) must
@@ -3950,11 +4172,15 @@ namespace FigForge
             return h.ToString("x");
         }
 
-        static string CanonicalSignature(ElementData e, string kind, float sf)
+        static string CanonicalSignature(ElementData e, string kind, float sf, bool vanilla)
         {
             var c = e.canonical;
             var sb = new System.Text.StringBuilder();
-            sb.Append("v=").Append(CanonicalSchema).Append(";k=").Append(kind).Append(";sf=").Append(sf.ToString("0.###", Inv));
+            // Vanilla and normal builds render the SAME shape data along different paths
+            // (baked sprite vs SDF shader), so they must NEVER share a generated prefab —
+            // discriminate the signature, or a vanilla import would reuse a cached SDF one.
+            sb.Append("v=").Append(CanonicalSchema).Append(";k=").Append(kind)
+              .Append(vanilla ? ";van=1" : "").Append(";sf=").Append(sf.ToString("0.###", Inv));
             if (e.rect != null)
                 sb.Append(";sz=").Append(e.rect.w.ToString("0.###", Inv)).Append('x').Append(e.rect.h.ToString("0.###", Inv));
             var sh = c.shape;
@@ -4285,7 +4511,10 @@ namespace FigForge
         }
         static string ObjectName(ElementData e, string fallback)
         {
-            if (e != null && !string.IsNullOrEmpty(e.displayName)) return e.displayName;
+            // Drop a leading "[s]" serialize marker so the GameObject name stays clean
+            // (the marker only opts the element into the generated accessors).
+            string dn = e != null ? IdentifierUtil.StripSerializeMarker(e.displayName) : null;
+            if (!string.IsNullOrEmpty(dn)) return dn;
             if (e != null && !string.IsNullOrEmpty(e.name)) return e.name;
             return !string.IsNullOrEmpty(fallback) ? fallback : "Node";
         }

@@ -53,6 +53,7 @@ namespace FigForge
         bool _connectedScene = true;       // build under a shared FrameManager
         bool _disableRaycasts = true;
         bool _includeGroupsInAccessors = true;
+        bool _componentsOnlyAccessors = true;  // accessors for controls only; labels/images need a [s] name marker
         int _warmUpBatchSize = DefaultWarmUpBatchSize;
         int _editorColumns = DefaultEditorColumns;
         string _spriteFolder = "Assets/FigForge/Sprites";
@@ -69,7 +70,7 @@ namespace FigForge
         // ---- ui state ----
         Vector2 _scroll, _logScroll;
         readonly List<(string msg, MessageType kind)> _log = new List<(string, MessageType)>();
-        bool _showCanvas = true, _showFonts = true, _showTextures, _showAtlas, _showCanonical = true, _showLive = true;
+        bool _showCanvas = true, _showFonts = true, _showTextures, _showAtlas, _showCanonical = true, _showLive;
 
         GUIStyle _h1;
 
@@ -145,6 +146,16 @@ namespace FigForge
             if (_manifestPaths.Count == 0) { _manifest = null; return; }
             _manifest = ManifestParser.Load(_manifestPaths[_selected]);
             if (_manifest != null) BuildFontKeys();
+        }
+
+        void FocusFontsFoldout()
+        {
+            _showLive = false;
+            _showCanvas = false;
+            _showFonts = true;
+            _showCanonical = false;
+            _showTextures = false;
+            _showAtlas = false;
         }
 
         void RefreshFonts()
@@ -224,9 +235,24 @@ namespace FigForge
                 AtlasSection();
                 BuildBar();
             }
+            RefsBar();
             LogSection();
 
             EditorGUILayout.EndScrollView();
+        }
+
+        // Maintenance for an already-built page: re-wire serialized accessor refs, or report
+        // which ones are missing — across every FigForgeFrame in the open scene(s). Independent
+        // of the loaded manifest, so it's available even without a manifest selected.
+        void RefsBar()
+        {
+            Divider();
+            EditorGUILayout.LabelField("Page references", EditorStyles.miniBoldLabel);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Validate Page Refs")) FigForgeRefTools.ValidateSceneRefs();
+                if (GUILayout.Button("Populate Page Refs")) FigForgeRefTools.PopulateSceneRefs();
+            }
         }
 
         void Header()
@@ -247,7 +273,13 @@ namespace FigForge
         void LiveImportSection()
         {
             _showLive = Foldout(_showLive, "Live import (Figma → Unity)");
-            if (!_showLive) return;
+            if (!_showLive)
+            {
+                using (new EditorGUI.IndentLevelScope())
+                    LiveImportTokenRow(false);
+                Divider();
+                return;
+            }
             using (new EditorGUI.IndentLevelScope())
             {
                 bool en = EditorGUILayout.ToggleLeft("Run live import server", FigForgeLiveImport.Enabled);
@@ -258,19 +290,7 @@ namespace FigForge
                     int port = EditorGUILayout.DelayedIntField("Port", FigForgeLiveImport.Port);
                     if (port != FigForgeLiveImport.Port) FigForgeLiveImport.Port = port;
 
-                    using (new EditorGUILayout.HorizontalScope())
-                    {
-                        EditorGUILayout.PrefixLabel("Plugin token");
-                        EditorGUILayout.SelectableLabel(FigForgeLiveImport.Token, EditorStyles.textField,
-                            GUILayout.Height(EditorGUIUtility.singleLineHeight));
-                        if (GUILayout.Button("Copy", EditorStyles.miniButton, GUILayout.Width(46)))
-                            EditorGUIUtility.systemCopyBuffer = FigForgeLiveImport.Token;
-                        if (GUILayout.Button("New", EditorStyles.miniButton, GUILayout.Width(40)) &&
-                            EditorUtility.DisplayDialog("Regenerate live-import token?",
-                                "The Figma plugin won't be able to import again until the new token is pasted into its Unity token field.",
-                                "Regenerate", "Cancel"))
-                            FigForgeLiveImport.RegenerateToken();
-                    }
+                    LiveImportTokenRow(true);
                 }
 
                 EditorGUILayout.LabelField(
@@ -283,11 +303,29 @@ namespace FigForge
             Divider();
         }
 
+        void LiveImportTokenRow(bool allowRegenerate)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.PrefixLabel("Plugin token");
+                EditorGUILayout.SelectableLabel(FigForgeLiveImport.Token, EditorStyles.textField,
+                    GUILayout.Height(EditorGUIUtility.singleLineHeight));
+                if (GUILayout.Button("Copy", EditorStyles.miniButton, GUILayout.Width(46)))
+                    EditorGUIUtility.systemCopyBuffer = FigForgeLiveImport.Token;
+                if (allowRegenerate && GUILayout.Button("New", EditorStyles.miniButton, GUILayout.Width(40)) &&
+                    EditorUtility.DisplayDialog("Regenerate live-import token?",
+                        "The Figma plugin won't be able to import again until the new token is pasted into its Unity token field.",
+                        "Regenerate", "Cancel"))
+                    FigForgeLiveImport.RegenerateToken();
+            }
+        }
+
         /// <summary>Entry point used by the live-import HTTP receiver: discover
         /// the freshly-written bundle and build it with the window's settings.</summary>
         public void LiveBuildPage(string projectJsonAssetPath)
         {
             RefreshManifests();
+            FocusFontsFoldout();
             BuildPageProject(projectJsonAssetPath);
             Repaint();
         }
@@ -300,18 +338,18 @@ namespace FigForge
 
         void ManifestPicker()
         {
-            // Whole-page project bundles (project.json) → Build Page.
+            // Whole-page project bundles (project.json) → Forge Page.
             if (_projectPaths.Count > 0)
             {
                 _selectedProject = EditorGUILayout.Popup("Page bundle", _selectedProject,
                     _projectPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / project.json").ToArray());
                 GUI.backgroundColor = new Color(0.49f, 0.36f, 1f);
-                if (GUILayout.Button($"Build Page → {_backend} (all screens)", GUILayout.Height(26)))
+                if (GUILayout.Button($"Forge Page → {_backend} (all screens)", GUILayout.Height(26)))
                     BuildPageProject(_projectPaths[_selectedProject]);
                 using (new EditorGUI.DisabledScope(_backend != UIBackend.uGUI))
                 {
                     GUI.backgroundColor = new Color(0.9f, 0.16f, 0.12f);
-                    if (GUILayout.Button("Build Page with Customizations → uGUI", GUILayout.Height(24)))
+                    if (GUILayout.Button("Forge Page with Customizations → uGUI", GUILayout.Height(24)))
                         BuildPageProject(_projectPaths[_selectedProject], includeUnityCustomizations: true);
                 }
                 GUI.backgroundColor = Color.white;
@@ -359,6 +397,7 @@ namespace FigForge
             RefreshManifests();
             var idx = _manifestPaths.IndexOf(manifestPath);
             if (idx >= 0) { _selected = idx; LoadSelected(); }
+            FocusFontsFoldout();
         }
 
         void CanvasSection()
@@ -387,12 +426,13 @@ namespace FigForge
                         if (_existingCanvas == null) _existingCanvas = FirstSceneCanvas();
                         _existingCanvas = (Canvas)EditorGUILayout.ObjectField("Canvas", _existingCanvas, typeof(Canvas), true);
                         if (_existingCanvas == null)
-                            EditorGUILayout.HelpBox("No Canvas in the scene yet — one will be created on Build, then reused next time.", MessageType.None);
+                            EditorGUILayout.HelpBox("No Canvas in the scene yet — one will be created on Forge, then reused next time.", MessageType.None);
                     }
                     _scalePreset = (ScalePreset)EditorGUILayout.EnumPopup("Reference height", _scalePreset);
                     if (_scalePreset == ScalePreset.Custom)
                         _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
                     _disableRaycasts = EditorGUILayout.ToggleLeft("Disable raycast targets on non-interactive graphics", _disableRaycasts);
+                    _componentsOnlyAccessors = EditorGUILayout.ToggleLeft(new GUIContent("Accessors for components only (skip labels & images)", "On: only canonical controls (buttons, toggles, inputs, …) get C# accessors. Off: labels and images do too (legacy behavior).\nEither way, prefix a layer name with [s] to force-include that one element; the [s] is dropped from the GameObject and variable name."), _componentsOnlyAccessors);
                     _includeGroupsInAccessors = EditorGUILayout.ToggleLeft("Generate C# accessors for Figma groups/frames", _includeGroupsInAccessors);
                     int warmUpBatchSize = Mathf.Clamp(EditorGUILayout.DelayedIntField("Import warmup batch size", _warmUpBatchSize), 1, 8192);
                     if (warmUpBatchSize != _warmUpBatchSize)
@@ -481,7 +521,7 @@ namespace FigForge
         {
             Divider();
             GUI.backgroundColor = new Color(0.49f, 0.36f, 1f);
-            if (GUILayout.Button($"Build “{_manifest.screen?.name}”", GUILayout.Height(34)))
+            if (GUILayout.Button($"Forge “{_manifest.screen?.name}”", GUILayout.Height(34)))
                 Build();
             GUI.backgroundColor = Color.white;
         }
@@ -490,7 +530,7 @@ namespace FigForge
         {
             if (_log.Count == 0) return;
             Divider();
-            EditorGUILayout.LabelField("Build log", EditorStyles.miniBoldLabel);
+            EditorGUILayout.LabelField("Forge log", EditorStyles.miniBoldLabel);
             _logScroll = EditorGUILayout.BeginScrollView(_logScroll, GUILayout.Height(120));
             foreach (var (msg, kind) in _log) EditorGUILayout.HelpBox(msg, kind);
             EditorGUILayout.EndScrollView();
@@ -516,9 +556,38 @@ namespace FigForge
 
                 if (_atlas.create) SpriteAtlasHelper.Build(_manifest.screen.name, screenFolder, _atlas);
 
-                EditorUtility.DisplayProgressBar("FigForge", "Building hierarchy…", 0.55f);
+                EditorUtility.DisplayProgressBar("FigForge", "Forging hierarchy…", 0.55f);
                 var canvas = ResolveCanvas(out bool canvasCreated);
                 Transform parent = canvas.transform;
+
+                // Treat the lone manifest as a one-screen bundle so it runs through the SAME
+                // stamp-based reuse as Forge Page: re-Forging the same screen patches the frame in
+                // place (no duplicate) instead of building a second copy, and the manual-control
+                // guard runs.
+                //
+                // If an earlier Forge already imported this screen — a page bundle (stamped with the
+                // Figma project name) OR a prior single Forge — adopt ITS import scope (project /
+                // section / role) so importKey + manifestHash line up with how it was built and
+                // ReuseOrBuildScreen patches that exact frame. Without this, a page-built frame
+                // wouldn't match the single scope and we'd build a duplicate beside it. With no
+                // prior frame, fall back to a fresh per-screen single scope so stale-removal can
+                // never reach a sibling single import.
+                var scope = ImportScope(parent);
+                var prior = FindImportedByScreen(scope, _manifest.screen.name);
+                var ps = prior != null
+                    ? new ProjectScreen { name = _manifest.screen.name, manifest = "", section = prior.section, role = prior.role }
+                    : new ProjectScreen { name = _manifest.screen.name, manifest = "", section = "", role = "screen" };
+                var ls = new LoadedScreen
+                {
+                    m = _manifest, srcDir = sourceDir, ps = ps,
+                    importKey = ImportKey(ps, _manifest),
+                    manifestHash = ManifestHash(_manifest, ps, _includeGroupsInAccessors, _componentsOnlyAccessors),
+                };
+                string projectName = prior != null ? prior.projectName : "single/" + ls.importKey;
+
+                if (!canvasCreated && !ConfirmPageForge(new List<LoadedScreen> { ls }, scope, projectName, false))
+                { Log("Forge cancelled — manual controls preserved", MessageType.Info); return; }
+
                 FrameManager mgr = null;
                 if (_connectedScene)
                 {
@@ -526,22 +595,10 @@ namespace FigForge
                     mgr.editorColumns = _editorColumns;
                 }
 
-                float refH = ReferenceHeight(_manifest.screen.figmaSize.h);
-                float sf = _manifest.screen.figmaSize.h > 0 ? refH / _manifest.screen.figmaSize.h : 1f;
-
-                var ctx = new BuildContext
-                {
-                    scaleFactor = sf,
-                    exportScale = _manifest.screen.exportScale,
-                    sprites = sprites,
-                    canonical = _canonicalLibrary,
-                    disableRaycasts = _disableRaycasts,
-                    warmUpBatchSize = _warmUpBatchSize,
-                    resolveFont = ResolveFontAsset,
-                    log = m => Log(m, MessageType.Warning),
-                };
-
-                var page = HierarchyBuilder.BuildPage(_manifest, parent, ctx);
+                // Reuse the existing frame when the design is unchanged; otherwise rebuild it in
+                // place (the old one is replaced, not duplicated). builtCtx is null on reuse — then
+                // GenerateAndWireFrame re-wires from the registry instead of doing a fresh build.
+                var page = ReuseOrBuildScreen(ls, projectName, parent, sprites, false, out var ctx);
                 if (page == null) { Log("build produced no page", MessageType.Error); return; }
 
                 var screen = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
@@ -564,10 +621,10 @@ namespace FigForge
                 // Creation-undo covers only what THIS import created: the canvas when we
                 // made it (its children — the page — go with it), else the page alone
                 // (unless Prefab-only output already destroyed the scene instance).
+                // ReuseOrBuildScreen registers a NEWLY-built frame for creation-undo (a reused
+                // frame deliberately survives undo); here we only add the canvas when we made it.
                 if (canvasCreated)
                     Undo.RegisterCreatedObjectUndo(canvas.gameObject, "FigForge Build");
-                else if (_output != OutputMode.Prefab)
-                    Undo.RegisterCreatedObjectUndo(page, "FigForge Build");
                 Undo.SetCurrentGroupName("FigForge Build");
                 EditorUtility.SetDirty(canvas);
                 if (mgr != null) EditorUtility.SetDirty(mgr);
@@ -601,6 +658,7 @@ namespace FigForge
                 scaleFactor = sf, sprites = sprites, canonical = _canonicalLibrary, disableRaycasts = _disableRaycasts,
                 warmUpBatchSize = _warmUpBatchSize,
                 exportScale = m.screen != null ? m.screen.exportScale : 1f,
+                vanilla = m.vanilla,
                 resolveFont = ResolveFontAsset,
                 log = mm => Log(mm, MessageType.Warning),
             };
@@ -640,7 +698,7 @@ namespace FigForge
             return $"{role}|{section}|{name}";
         }
 
-        static string ManifestHash(Manifest m, ProjectScreen ps, bool includeGroupsInAccessors)
+        static string ManifestHash(Manifest m, ProjectScreen ps, bool includeGroupsInAccessors, bool componentsOnlyAccessors)
         {
             string exportedAt = m.exportedAt;
             m.exportedAt = "";
@@ -654,7 +712,8 @@ namespace FigForge
                 // the Figma design itself is unchanged.
                 return StableHash(JsonConvert.SerializeObject(m) + "\nrole=" + role + "\nsection=" + section
                     + "\nbuild=" + HierarchyBuilder.CanonicalSchema
-                    + "\nincludeGroupsInAccessors=" + includeGroupsInAccessors);
+                    + "\nincludeGroupsInAccessors=" + includeGroupsInAccessors
+                    + "\ncomponentsOnlyAccessors=" + componentsOnlyAccessors);
             }
             finally
             {
@@ -668,6 +727,17 @@ namespace FigForge
             foreach (var stamp in scope.GetComponentsInChildren<FigForgeImportStamp>(true))
                 if (stamp != null && stamp.projectName == projectName && stamp.importKey == importKey)
                     return stamp;
+            return null;
+        }
+
+        // Find a frame already imported for this screen by NAME, regardless of which Forge path
+        // stamped it (page bundles use the Figma project name; single Forge a "single/..." scope).
+        // Lets single Forge adopt a page-built frame and patch it in place instead of duplicating.
+        static FigForgeImportStamp FindImportedByScreen(Transform scope, string screenName)
+        {
+            if (scope == null || string.IsNullOrEmpty(screenName)) return null;
+            foreach (var stamp in scope.GetComponentsInChildren<FigForgeImportStamp>(true))
+                if (stamp != null && stamp.screenName == screenName) return stamp;
             return null;
         }
 
@@ -710,6 +780,7 @@ namespace FigForge
             {
                 existing.transform.SetParent(parent, false);
                 if (stretch) StretchToParent(existing.gameObject);
+                EnsureImportMarkers(existing.gameObject); // migrate a legacy (pre-marker) frame
                 Log($"reused unchanged '{screen.m.screen.name}'", MessageType.Info);
                 return existing.gameObject; // reused → its generated accessors already exist
             }
@@ -726,6 +797,7 @@ namespace FigForge
             builtCtx = ctx; // expose the build context so the caller can generate + wire accessors
             if (stretch) StretchToParent(page);
             StampImported(page, projectName, screen);
+            EnsureImportMarkers(page); // fresh build: everything here is imported
             return page;
         }
 
@@ -736,7 +808,7 @@ namespace FigForge
         void GenerateAndWireFrame(GameObject page, Manifest m, BuildContext ctx, FigForgeFrame frame, string section, bool includeUnityCustomizations = false, bool isOverlay = false)
         {
             if (page == null || m == null) return;
-            var model = FrameCodeGenDriver.BuildModel(m, section ?? "", _includeGroupsInAccessors, isOverlay);
+            var model = FrameCodeGenDriver.BuildModel(m, section ?? "", _includeGroupsInAccessors, _componentsOnlyAccessors, isOverlay);
             var targets = new Dictionary<string, GameObject>();
             ResolveFrameMemberTargets(model, ctx, page.GetComponent<FigForgeScreen>(), targets);
             int customCount = includeUnityCustomizations ? AddUnityCustomizationMembers(page, model, targets) : 0;
@@ -760,6 +832,10 @@ namespace FigForge
                         {
                             var frameElement = memGo.GetComponent<FigForgeFrameElement>() ?? memGo.AddComponent<FigForgeFrameElement>();
                             frameElement.ConfigureType(mem.sourceType);
+                            // Record the generated group component so the post-compile hook swaps
+                            // this placeholder for it and wires the group's child refs.
+                            if (!string.IsNullOrEmpty(mem.groupTypeName))
+                                frameElement.generatedType = FrameCodeGen.GeneratedNamespace + "." + mem.groupTypeName;
                             EditorUtility.SetDirty(frameElement);
                         }
                         reg.Register(mem.Key, memGo);
@@ -773,7 +849,7 @@ namespace FigForge
             {
                 foreach (var mem in model.members)
                 {
-                    if (mem.csharpType != "FigForge.FigForgeModal") continue;
+                    if (mem.csharpType != "FigForgeModal") continue;
                     if (!targets.TryGetValue(mem.sourceName, out var memGo) || memGo == null)
                         memGo = reg != null ? (reg.Get(mem.Key) ?? reg.Get(mem.sourceName)) : null;
                     var modal = memGo != null ? memGo.GetComponent<FigForgeModal>() : null;
@@ -880,27 +956,158 @@ namespace FigForge
             isControlRoot = false;
             if (go == null) return false;
 
-            if (go.GetComponent<FigForgeButton>() != null) { csharpType = "FigForge.FigForgeButton"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeSwitch>() != null) { csharpType = "FigForge.FigForgeSwitch"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeToggle>() != null) { csharpType = "FigForge.FigForgeToggle"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeDropdown>() != null) { csharpType = "FigForge.FigForgeDropdown"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeInputField>() != null) { csharpType = "FigForge.FigForgeInputField"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeStepper>() != null) { csharpType = "FigForge.FigForgeStepper"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeSlider>() != null) { csharpType = "FigForge.FigForgeSlider"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeProgress>() != null) { csharpType = "FigForge.FigForgeProgress"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeList>() != null) { csharpType = "FigForge.FigForgeList"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeTable>() != null) { csharpType = "FigForge.FigForgeTable"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeModal>() != null) { csharpType = "FigForge.FigForgeModal"; isControlRoot = true; return true; }
-            if (go.GetComponent<FigForgeToastHost>() != null) { csharpType = "FigForge.FigForgeToastHost"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeButton>() != null) { csharpType = "FigForgeButton"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeSwitch>() != null) { csharpType = "FigForgeSwitch"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeToggle>() != null) { csharpType = "FigForgeToggle"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeDropdown>() != null) { csharpType = "FigForgeDropdown"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeInputField>() != null) { csharpType = "FigForgeInputField"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeStepper>() != null) { csharpType = "FigForgeStepper"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeSlider>() != null) { csharpType = "FigForgeSlider"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeProgress>() != null) { csharpType = "FigForgeProgress"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeList>() != null) { csharpType = "FigForgeList"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeTable>() != null) { csharpType = "FigForgeTable"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeModal>() != null) { csharpType = "FigForgeModal"; isControlRoot = true; return true; }
+            if (go.GetComponent<FigForgeToastHost>() != null) { csharpType = "FigForgeToastHost"; isControlRoot = true; return true; }
 
-            if (go.GetComponent<Button>() != null) { csharpType = "UnityEngine.UI.Button"; isControlRoot = true; return true; }
-            if (go.GetComponent<Toggle>() != null) { csharpType = "UnityEngine.UI.Toggle"; isControlRoot = true; return true; }
-            if (go.GetComponent<TMP_Dropdown>() != null) { csharpType = "TMPro.TMP_Dropdown"; isControlRoot = true; return true; }
-            if (go.GetComponent<TMP_InputField>() != null) { csharpType = "TMPro.TMP_InputField"; isControlRoot = true; return true; }
-            if (go.GetComponent<Slider>() != null) { csharpType = "UnityEngine.UI.Slider"; isControlRoot = true; return true; }
-            if (go.GetComponent<Scrollbar>() != null) { csharpType = "UnityEngine.UI.Scrollbar"; isControlRoot = true; return true; }
+            if (go.GetComponent<Button>() != null) { csharpType = "Button"; isControlRoot = true; return true; }
+            if (go.GetComponent<Toggle>() != null) { csharpType = "Toggle"; isControlRoot = true; return true; }
+            if (go.GetComponent<TMP_Dropdown>() != null) { csharpType = "TMP_Dropdown"; isControlRoot = true; return true; }
+            if (go.GetComponent<TMP_InputField>() != null) { csharpType = "TMP_InputField"; isControlRoot = true; return true; }
+            if (go.GetComponent<Slider>() != null) { csharpType = "Slider"; isControlRoot = true; return true; }
+            if (go.GetComponent<Scrollbar>() != null) { csharpType = "Scrollbar"; isControlRoot = true; return true; }
 
             return false;
+        }
+
+        // Stamp every imported control with a FigForgeImportedControl marker, so the manual-control
+        // check can tell imported from hand-added with certainty — the name-keyed registry can't,
+        // since repeated Figma names collapse to one entry (real imported controls then look manual).
+        // Idempotent + migration-safe: stamps only when the frame carries NO markers yet — a fresh
+        // build (all imported) or a legacy frame being migrated (assumed all-imported, true unless
+        // the developer already hand-added a control). A frame already marked is left alone, so
+        // controls added LATER stay unmarked and are correctly flagged.
+        static void EnsureImportMarkers(GameObject frameRoot)
+        {
+            if (frameRoot == null) return;
+            if (frameRoot.GetComponentInChildren<FigForgeImportedControl>(true) != null) return; // already marked
+            foreach (var tr in frameRoot.GetComponentsInChildren<Transform>(true))
+            {
+                var go = tr.gameObject;
+                if (IsGeneratedInfrastructure(go)) continue;
+                if (TryGetUnityCustomizationType(go, out _, out _))
+                    go.AddComponent<FigForgeImportedControl>();
+            }
+        }
+
+        // Controls a developer added to a built frame BY HAND — those WITHOUT the importer's
+        // FigForgeImportedControl marker. A destructive re-Forge rebuilds the frame, so these don't
+        // survive it; we surface them first. A frame with NO markers at all predates this (or hasn't
+        // been re-Forged since) — we can't judge it, so report nothing rather than false-flagging
+        // every imported control (EnsureImportMarkers migrates it on this same Forge).
+        static List<GameObject> CollectUserAddedControls(GameObject frameRoot)
+        {
+            var result = new List<GameObject>();
+            if (frameRoot == null) return result;
+            if (frameRoot.GetComponentInChildren<FigForgeImportedControl>(true) == null) return result;
+
+            var userRoots = new List<Transform>();
+            foreach (var tr in frameRoot.GetComponentsInChildren<Transform>(true))
+            {
+                if (tr == null || tr == frameRoot.transform) continue;
+                var go = tr.gameObject;
+                if (IsGeneratedInfrastructure(go)) continue;                      // FigForge plumbing
+                if (go.GetComponent<FigForgeImportedControl>() != null) continue; // imported → not manual
+                if (IsDescendantOfAny(tr, userRoots)) continue;                   // already counted via its root
+                if (!TryGetUnityCustomizationType(go, out _, out var isRoot)) continue;
+                result.Add(go);
+                if (isRoot) userRoots.Add(tr);
+            }
+            return result;
+        }
+
+        // One consolidated notice covering hand-added controls a Forge touches, split by fate:
+        //   • lost — on a frame being rebuilt/removed → won't survive (a real warning).
+        //   • kept — on a reused (unchanged) frame → preserved, but NOT generated as an accessor
+        //     unless you Forge with Customizations (informational — this is the case people miss:
+        //     the frame is reused, not destroyed, so the control is still there, just not in code).
+        // Returns true to proceed, false to cancel the whole Forge.
+        static bool ReportManualControls(List<(string frame, List<GameObject> controls)> lost,
+                                         List<(string frame, List<GameObject> controls)> kept)
+        {
+            int nLost = 0; foreach (var a in lost) nLost += a.controls.Count;
+            int nKept = 0; foreach (var a in kept) nKept += a.controls.Count;
+            if (nLost == 0 && nKept == 0) return true;
+
+            var lines = new List<string>();
+            if (nLost > 0)
+            {
+                lines.Add("⚠  LOST — on frames being rebuilt/removed, these won't survive:");
+                AppendControls(lines, lost);
+            }
+            if (nKept > 0)
+            {
+                if (lines.Count > 0) lines.Add("");
+                lines.Add("KEPT — the unchanged frame is reused (not destroyed), so these survive, but");
+                lines.Add("they are NOT generated as code accessors. Use “Forge Page with Customizations”");
+                lines.Add("to include them:");
+                AppendControls(lines, kept);
+            }
+            string body = string.Join("\n", lines);
+            Debug.LogWarning($"[FigForge] manual controls detected on Forge:\n{body}");
+
+            string head = nLost > 0
+                ? $"{nLost} manual control(s) will be LOST" + (nKept > 0 ? $" and {nKept} kept-but-unexposed." : ".")
+                : $"{nKept} manual control(s) are kept, but not exposed as code accessors.";
+            string proceed = nLost > 0 ? "Forge anyway" : "Continue";
+            string tail = nLost > 0 ? "\n\nForge anyway? (Cancel leaves the scene untouched.)" : "";
+            return EditorUtility.DisplayDialog("FigForge — manual controls", head + "\n\n" + body + tail, proceed, "Cancel");
+        }
+
+        static void AppendControls(List<string> lines, List<(string frame, List<GameObject> controls)> groups)
+        {
+            foreach (var a in groups)
+            {
+                lines.Add("• " + a.frame + ":");
+                int shown = 0;
+                foreach (var go in a.controls)
+                {
+                    if (shown++ == 10) { lines.Add("      … and " + (a.controls.Count - 10) + " more"); break; }
+                    lines.Add("      – " + go.name);
+                }
+            }
+        }
+
+        // Pre-Forge guard for the whole-page build. Splits hand-added controls by fate:
+        //   • a changed frame is rebuilt → its controls are LOST.
+        //   • a dropped frame is removed → its controls are LOST.
+        //   • an unchanged frame is reused → its controls are KEPT (but not exposed as accessors
+        //     unless Forge-with-Customizations is on, which turns them into accessors).
+        static bool ConfirmPageForge(List<LoadedScreen> loaded, Transform scope, string projectName, bool includeCustomizations)
+        {
+            if (scope == null) return true;
+            var lost = new List<(string, List<GameObject>)>();
+            var kept = new List<(string, List<GameObject>)>();
+            var expected = new HashSet<string>(loaded.Select(s => s.importKey));
+
+            foreach (var s in loaded)
+            {
+                var existing = FindImported(scope, projectName, s.importKey);
+                if (existing == null) continue;
+                var c = CollectUserAddedControls(existing.gameObject);
+                if (c.Count == 0) continue;
+                if (existing.manifestHash == s.manifestHash) kept.Add((existing.screenName, c)); // reused → preserved
+                else lost.Add((existing.screenName, c));                                          // rebuilt → lost
+            }
+            foreach (var stamp in scope.GetComponentsInChildren<FigForgeImportStamp>(true))
+            {
+                if (stamp == null || stamp.projectName != projectName || expected.Contains(stamp.importKey)) continue;
+                var c = CollectUserAddedControls(stamp.gameObject);
+                if (c.Count > 0) lost.Add((stamp.screenName + " (removed)", c));
+            }
+
+            // Forge-with-Customizations turns kept controls INTO accessors, so they need no notice.
+            if (includeCustomizations) kept.Clear();
+            return ReportManualControls(lost, kept);
         }
 
         static bool IsDescendantOfAny(Transform tr, List<Transform> roots)
@@ -1003,7 +1210,7 @@ namespace FigForge
                     srcDir = Path.GetDirectoryName(mp),
                     ps = ps,
                     importKey = ImportKey(ps, m),
-                    manifestHash = ManifestHash(m, ps, _includeGroupsInAccessors),
+                    manifestHash = ManifestHash(m, ps, _includeGroupsInAccessors, _componentsOnlyAccessors),
                 });
             }
             if (loaded.Count == 0) { Log("no buildable screens in bundle", MessageType.Error); return; }
@@ -1014,6 +1221,8 @@ namespace FigForge
                 if (_backend == UIBackend.UIToolkit) { BuildPageUITK(proj, loaded); return; }
 
                 var canvas = ResolveCanvas(out bool canvasCreated);
+                if (!canvasCreated && !ConfirmPageForge(loaded, ImportScope(canvas.transform), proj.name, includeUnityCustomizations))
+                { Log("Forge cancelled — manual controls preserved", MessageType.Info); return; }
                 var mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
                 mgr.editorColumns = _editorColumns;
                 mgr.screens.Clear();
@@ -1030,7 +1239,7 @@ namespace FigForge
                     if (!FrameRoles.IsShell(loaded[i].ps.role)) continue;
                     var sh = loaded[i];
                     string shellKey = sh.ps.section ?? "";
-                    EditorUtility.DisplayProgressBar("FigForge", $"Building shell {sh.m.screen.name}…", (float)i / loaded.Count);
+                    EditorUtility.DisplayProgressBar("FigForge", $"Forging shell {sh.m.screen.name}…", (float)i / loaded.Count);
                     var shSprites = TextureImportHelper.Import(sh.m, sh.srcDir, $"{_spriteFolder}/{SafeName(sh.m.screen.name)}", _tex);
                     var shellGo = ReuseOrBuildScreen(sh, proj.name, canvas.transform, shSprites, false, out var shellCtx);
                     if (shellGo == null) continue;
@@ -1066,7 +1275,7 @@ namespace FigForge
                     // An overlay must NEVER be able to abort the screens build — isolate it.
                     try
                     {
-                        EditorUtility.DisplayProgressBar("FigForge", $"Building overlay {ov.m.screen.name}…", (float)i / loaded.Count);
+                        EditorUtility.DisplayProgressBar("FigForge", $"Forging overlay {ov.m.screen.name}…", (float)i / loaded.Count);
                         var ovSprites = TextureImportHelper.Import(ov.m, ov.srcDir, $"{_spriteFolder}/{SafeName(ov.m.screen.name)}", _tex);
                         var ovGo = ReuseOrBuildScreen(ov, proj.name, canvas.transform, ovSprites, false, out var ovCtx);
                         if (ovGo == null) continue;
@@ -1104,20 +1313,31 @@ namespace FigForge
                 {
                     if (FrameRoles.IsShell(loaded[i].ps.role) || FrameRoles.IsOverlay(loaded[i].ps.role)) continue;
                     var m = loaded[i].m;
-                    EditorUtility.DisplayProgressBar("FigForge", $"Building {m.screen.name}…", (float)i / loaded.Count);
-                    var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
-                    string shellKey = loaded[i].ps.section ?? "";
-                    bool usesShell = !string.IsNullOrEmpty(shellKey) && shellContentBySection.ContainsKey(shellKey);
-                    var page = ReuseOrBuildScreen(loaded[i], proj.name, canvas.transform, sprites, false, out var frameCtx);
-                    if (page == null) continue;
-                    var bs = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
-                    bs.isShell = false;
-                    bs.usesShell = usesShell;
-                    bs.shellKey = usesShell ? shellKey : "";
-                    GenerateAndWireFrame(page, m, frameCtx, bs, loaded[i].ps.section, includeUnityCustomizations);
-                    FigForgeFrameSceneTools.RefreshCompositors(page);
-                    mgr.Register(bs);
-                    built++;
+                    // Isolate each screen like the overlay loop above: ONE bad frame must never
+                    // abort the rest of the page — or skip the arrange/finalize that runs AFTER
+                    // this loop (which is what left frames un-arranged when a build threw).
+                    try
+                    {
+                        EditorUtility.DisplayProgressBar("FigForge", $"Forging {m.screen.name}…", (float)i / loaded.Count);
+                        var sprites = TextureImportHelper.Import(m, loaded[i].srcDir, $"{_spriteFolder}/{SafeName(m.screen.name)}", _tex);
+                        string shellKey = loaded[i].ps.section ?? "";
+                        bool usesShell = !string.IsNullOrEmpty(shellKey) && shellContentBySection.ContainsKey(shellKey);
+                        var page = ReuseOrBuildScreen(loaded[i], proj.name, canvas.transform, sprites, false, out var frameCtx);
+                        if (page == null) continue;
+                        var bs = page.GetComponent<FigForgeFrame>() ?? page.AddComponent<FigForgeFrame>();
+                        bs.isShell = false;
+                        bs.usesShell = usesShell;
+                        bs.shellKey = usesShell ? shellKey : "";
+                        GenerateAndWireFrame(page, m, frameCtx, bs, loaded[i].ps.section, includeUnityCustomizations);
+                        FigForgeFrameSceneTools.RefreshCompositors(page);
+                        mgr.Register(bs);
+                        built++;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogError($"[FigForge] screen '{m.screen?.name}' build failed (other screens still built): {ex}");
+                        Log($"screen '{m.screen?.name}' build failed: {ex.Message}", MessageType.Error);
+                    }
                 }
 
                 mgr.initialScreen = mgr.Find(proj.initial);

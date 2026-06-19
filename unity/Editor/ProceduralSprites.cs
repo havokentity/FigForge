@@ -20,7 +20,7 @@ namespace FigForge
 {
     public static class RoundedRectSpriteCache
     {
-        const string Folder = "Assets/FigForge/_Generated/Rounded";
+        const string Folder = "Assets/FigForge/_GeneratedSprites/Rounded";
         static readonly Dictionary<int, Sprite> _mem = new Dictionary<int, Sprite>();
 
         public static Sprite Get(int radius)
@@ -73,10 +73,68 @@ namespace FigForge
         }
     }
 
+    // Soft (blurred-edge) rounded-rect sprite for shader-free DROP SHADOWS: a rounded
+    // rect of corner `radius` whose alpha feathers from 1 to 0 over `blur` px outside
+    // the boundary. 9-sliced (border = radius + blur) and tinted via Image.color, so
+    // one sprite per (radius, blur) serves every shadow at that size. No shader — just
+    // a transparent PNG on the default UI material.
+    public static class SoftRoundedRectSpriteCache
+    {
+        const string Folder = "Assets/FigForge/_GeneratedSprites/SoftRect";
+        static readonly Dictionary<string, Sprite> _mem = new Dictionary<string, Sprite>();
+
+        public static Sprite Get(int radius, int blur)
+        {
+            radius = Mathf.Clamp(radius, 0, 256);
+            blur = Mathf.Clamp(blur, 1, 128);
+            string key = $"{radius}_{blur}";
+            if (_mem.TryGetValue(key, out var cached) && cached != null) return cached;
+
+            string path = $"{Folder}/Soft_{key}.asset";
+            var existing = AssetDatabase.LoadAssetAtPath<Sprite>(path);
+            if (existing != null) { _mem[key] = existing; return existing; }
+
+            ProceduralSpriteUtil.EnsureFolder(Folder);
+
+            int border = radius + blur;
+            int size = border * 2 + 2; // 2px solid centre for the 9-slice middle
+            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                name = $"Soft_{key}_Tex", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear,
+            };
+            var px = new Color32[size * size];
+            // Corner centres sit `border` in from each edge; alpha is 1 within `radius`
+            // of them (the solid rounded core) then falls off over `blur` px.
+            float cxL = border, cxR = size - border, cyB = border, cyT = size - border;
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float fx = x + 0.5f, fy = y + 0.5f;
+                    float dx = fx < cxL ? cxL - fx : (fx > cxR ? fx - cxR : 0f);
+                    float dy = fy < cyB ? cyB - fy : (fy > cyT ? fy - cyT : 0f);
+                    float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                    float a = Mathf.Clamp01((radius + blur - dist) / blur);
+                    px[y * size + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            }
+            tex.SetPixels32(px); tex.Apply();
+            var b = new Vector4(border, border, border, border);
+            var sprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f),
+                100f, 0, SpriteMeshType.FullRect, b);
+            sprite.name = $"Soft_{key}";
+            AssetDatabase.CreateAsset(sprite, path);
+            AssetDatabase.AddObjectToAsset(tex, sprite);
+            AssetDatabase.SaveAssets();
+            _mem[key] = sprite;
+            return sprite;
+        }
+    }
+
     // Rounded (or square) outline ring, 9-sliced, for real stroke borders.
     public static class RoundedOutlineSpriteCache
     {
-        const string Folder = "Assets/FigForge/_Generated/Outline";
+        const string Folder = "Assets/FigForge/_GeneratedSprites/Outline";
         static readonly Dictionary<string, Sprite> _mem = new Dictionary<string, Sprite>();
 
         public static Sprite Get(int radius, int thickness)
@@ -131,7 +189,7 @@ namespace FigForge
 
     public static class GradientSpriteCache
     {
-        const string Folder = "Assets/FigForge/_Generated/Gradient";
+        const string Folder = "Assets/FigForge/_GeneratedSprites/Gradient";
         const int Res = 128;
         static readonly Dictionary<string, Sprite> _mem = new Dictionary<string, Sprite>();
 
@@ -181,7 +239,7 @@ namespace FigForge
             return sprite;
         }
 
-        static Color32 Sample(List<GradientStop> stops, float t)
+        internal static Color32 Sample(List<GradientStop> stops, float t)
         {
             GradientStop a = stops[0], b = stops[stops.Count - 1];
             for (int i = 0; i < stops.Count - 1; i++)
@@ -197,7 +255,7 @@ namespace FigForge
         static Color ToColor(float[] c) =>
             c != null && c.Length >= 4 ? new Color(c[0], c[1], c[2], c[3]) : Color.white;
 
-        static string Key(Fill fill)
+        internal static string Key(Fill fill)
         {
             var sb = new System.Text.StringBuilder(fill.gradient ?? "linear");
             foreach (var s in fill.stops)
@@ -207,6 +265,77 @@ namespace FigForge
                     foreach (var ch in s.color) sb.Append(Mathf.RoundToInt(ch * 255)).Append('x');
             }
             return sb.ToString().Replace('.', '_');
+        }
+    }
+
+    // Gradient baked WITH anti-aliased rounded-rect corners, at the element's pixel size — for
+    // vanilla gradient fills that must respect cornerRadius. A flat gradient sprite renders as a
+    // square box, and a stencil mask only yields a hard/fringed edge that overshoots the stroke;
+    // baking the rounded alpha in matches the solid RoundedRect fill's corners exactly. Per-size
+    // (the gradient can't 9-slice — it varies across the rect), so it won't reflow if the element
+    // resizes at runtime; vanilla UI is static. Texture capped at 1024 on the long side.
+    public static class RoundedGradientSpriteCache
+    {
+        const string Folder = "Assets/FigForge/_GeneratedSprites/RoundedGradient";
+        static readonly Dictionary<string, Sprite> _mem = new Dictionary<string, Sprite>();
+
+        // Bakes the gradient AND (optionally) its stroke border into ONE sprite from a single
+        // rounded-rect SDF, so fill and border are pixel-perfectly aligned BY CONSTRUCTION — no
+        // separate stroke sprite to line up, no magic offset. strokeColor null / thickness <= 0 →
+        // fill only. The outer rounded edge is the shape edge (AA); the outer `strokeThickness` px
+        // are the stroke, everything inside is the gradient.
+        public static Sprite Get(Fill fill, int radius, int w, int h, float[] strokeColor, int strokeThickness)
+        {
+            if (fill == null || fill.stops == null || fill.stops.Count == 0 || w < 4 || h < 4) return null;
+
+            float scale = Mathf.Max(w, h) > 2048 ? 2048f / Mathf.Max(w, h) : 1f; // cap raised for 2× supersample
+            int tw = Mathf.Clamp(Mathf.RoundToInt(w * scale), 4, 2048);
+            int th = Mathf.Clamp(Mathf.RoundToInt(h * scale), 4, 2048);
+            int tr = Mathf.Clamp(Mathf.RoundToInt(radius * scale), 0, Mathf.Min(tw, th) / 2);
+            bool hasStroke = strokeColor != null && strokeColor.Length >= 4 && strokeThickness > 0;
+            float st = hasStroke ? strokeThickness * scale : 0f;
+            Color sc = hasStroke ? new Color(strokeColor[0], strokeColor[1], strokeColor[2], strokeColor[3]) : Color.clear;
+
+            string key = $"{GradientSpriteCache.Key(fill)}_{tw}x{th}_r{tr}"
+                       + (hasStroke ? $"_s{Mathf.RoundToInt(st)}_{(int)(sc.r * 255)}.{(int)(sc.g * 255)}.{(int)(sc.b * 255)}.{(int)(sc.a * 255)}" : "");
+            if (_mem.TryGetValue(key, out var cached) && cached != null) return cached;
+            string path = $"{Folder}/RG_{key}.asset";
+            var existing = AssetDatabase.LoadAssetAtPath<Sprite>(path);
+            if (existing != null) { _mem[key] = existing; return existing; }
+            ProceduralSpriteUtil.EnsureFolder(Folder);
+
+            bool radial = fill.gradient == "radial" || fill.gradient == "diamond";
+            var tex = new Texture2D(tw, th, TextureFormat.RGBA32, false)
+            { name = $"RG_{key}_Tex", wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+            var px = new Color32[tw * th];
+            float cx = (tw - 1) * 0.5f, cy = (th - 1) * 0.5f, maxR = Mathf.Sqrt(cx * cx + cy * cy);
+            float hx = tw * 0.5f, hy = th * 0.5f;
+            for (int y = 0; y < th; y++)
+                for (int x = 0; x < tw; x++)
+                {
+                    float t = radial
+                        ? Mathf.Clamp01(Mathf.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / maxR)
+                        : (float)x / (tw - 1);
+                    Color c = GradientSpriteCache.Sample(fill.stops, t);
+                    // signed distance to the outer rounded-rect boundary (negative inside)
+                    float qx = Mathf.Abs(x + 0.5f - hx) - (hx - tr);
+                    float qy = Mathf.Abs(y + 0.5f - hy) - (hy - tr);
+                    float outside = Mathf.Sqrt(Mathf.Max(qx, 0f) * Mathf.Max(qx, 0f) + Mathf.Max(qy, 0f) * Mathf.Max(qy, 0f));
+                    float dist = outside + Mathf.Min(Mathf.Max(qx, qy), 0f) - tr;
+                    // outer `st` px = stroke (lerp gradient → stroke, AA at the inner edge); rest = gradient
+                    if (st > 0f) c = Color.Lerp(c, sc, Mathf.Clamp01(dist + st + 0.5f));
+                    c.a *= Mathf.Clamp01(0.5f - dist); // outer AA coverage
+                    px[y * tw + x] = c;
+                }
+            tex.SetPixels32(px); tex.Apply();
+
+            var sprite = Sprite.Create(tex, new Rect(0, 0, tw, th), new Vector2(0.5f, 0.5f), 100f);
+            sprite.name = $"RG_{key}";
+            AssetDatabase.CreateAsset(sprite, path);
+            AssetDatabase.AddObjectToAsset(tex, sprite);
+            AssetDatabase.SaveAssets();
+            _mem[key] = sprite;
+            return sprite;
         }
     }
 

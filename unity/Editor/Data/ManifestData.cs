@@ -16,6 +16,10 @@ namespace FigForge
         public int canonicalSchema;     // plugin's CANONICAL_SCHEMA (types.ts); 0 = pre-2.0 manifest
         public string generator;
         public string exportedAt;
+        // Vanilla export: the manifest is fully baked to flat sprites. The importer
+        // honours this to skip the page compositor / SDF shaders and render any
+        // residual shapeless geometry as a plain Image. Absent/false = normal.
+        public bool vanilla;
         public ScreenInfo screen;
         public List<ElementData> elements = new List<ElementData>();
         public List<AssetEntry> assets = new List<AssetEntry>();

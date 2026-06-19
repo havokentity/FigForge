@@ -34,7 +34,7 @@ namespace FigForge
             return model;
         }
 
-        public static FrameModel BuildModel(Manifest m, string section, bool includeGroups = true, bool isOverlay = false)
+        public static FrameModel BuildModel(Manifest m, string section, bool includeGroups = true, bool componentsOnly = true, bool isOverlay = false)
         {
             string className = IdentifierUtil.ToIdentifier(
                 !string.IsNullOrEmpty(m.screen.displayName) ? m.screen.displayName : m.screen.name);
@@ -49,9 +49,10 @@ namespace FigForge
             var rawIds = new List<string>();
             foreach (var e in m.elements)
             {
-                if (e == null || e.id == rootId || !IsMember(e, includeGroups)) continue;
+                if (e == null || e.id == rootId || !IsMember(e, includeGroups, componentsOnly)) continue;
                 picked.Add(e);
-                rawIds.Add(IdentifierUtil.ToIdentifier(!string.IsNullOrEmpty(e.displayName) ? e.displayName : e.name));
+                rawIds.Add(IdentifierUtil.ToIdentifier(
+                    IdentifierUtil.StripSerializeMarker(!string.IsNullOrEmpty(e.displayName) ? e.displayName : e.name)));
             }
             var ids = IdentifierUtil.Dedupe(rawIds, (orig, renamed) =>
                 Debug.LogWarning($"[FigForge] frame '{className}': duplicate accessor name '{orig}' → '{renamed}'."));
@@ -70,7 +71,7 @@ namespace FigForge
                 {
                     identifier = ids[i],
                     csharpType = isScope
-                        ? "FigForge.FigForgeFrameElement"
+                        ? "FigForgeFrameElement"
                         : FrameCodeGen.CSharpType(picked[i]),
                     sourceName = picked[i].id, // element id — stable handle for prefab wiring
                     sourceType = picked[i].type,
@@ -82,7 +83,7 @@ namespace FigForge
                     isGroup = isScope,
                 });
             }
-            AssignScopeTypeNames(members);
+            AssignScopeTypeNames(className, members);
 
             return new FrameModel
             {
@@ -95,27 +96,37 @@ namespace FigForge
             };
         }
 
-        // Which elements get a typed accessor: canonical controls + text + image/graphics.
-        // Structural Figma containers can also be surfaced as generated child scopes
-        // when the importer option is on. Treat FRAME like GROUP here: a nested
-        // frame with an image fill is still a scope, not just an Image leaf.
-        static bool IsMember(ElementData e, bool includeGroups)
+        // Which elements get a typed accessor. Canonical controls (buttons, toggles,
+        // inputs, …) always qualify. Labels (text) and plain images qualify only when
+        // components-only mode is OFF — by default they're skipped to keep the generated
+        // API focused on interactive controls. A "[s]" name marker force-includes any
+        // single element regardless. Structural Figma containers surface as child scopes
+        // when the groups toggle is on. Treat FRAME like GROUP here: a nested frame with
+        // an image fill is still a scope, not just an Image leaf.
+        static bool IsMember(ElementData e, bool includeGroups, bool componentsOnly)
         {
+            if (e == null) return false;
+            if (IdentifierUtil.HasSerializeMarker(e.displayName)) return true; // [s] force-include
             if (e.canonical != null && !string.IsNullOrEmpty(e.canonical.kind)) return true;
-            if (e.type == "TEXT") return true;
-            if (e.components != null && (e.components.Contains("TextMeshProUGUI") || e.components.Contains("Image"))) return true;
             if (includeGroups && IsScopeContainer(e)) return true;
+            if (!componentsOnly)
+            {
+                if (e.type == "TEXT") return true;
+                if (e.components != null && (e.components.Contains("TextMeshProUGUI") || e.components.Contains("Image"))) return true;
+            }
             return false;
         }
 
         static bool IsScopeContainer(ElementData e)
             => e != null && (e.type == "GROUP" || e.type == "FRAME");
 
-        static void AssignScopeTypeNames(List<FrameMember> members)
+        // Each group becomes a top-level FigForgeFrameElement subclass (its own component +
+        // file), so its type name must be unique in the FigForge.Generated namespace — we
+        // frame-qualify it (e.g. LaunchPage_HeaderGroup) and dedupe within the frame. The
+        // group's ref is typed as that component, so set csharpType to match.
+        static void AssignScopeTypeNames(string className, List<FrameMember> members)
         {
-            var taken = new HashSet<string>();
-            foreach (var member in members)
-                taken.Add((member.identifier ?? "").TrimStart('@'));
+            var taken = new HashSet<string> { className }; // never collide with the frame class itself
 
             for (int i = 0; i < members.Count; i++)
             {
@@ -124,13 +135,14 @@ namespace FigForge
 
                 string stem = (m.identifier ?? "").TrimStart('@');
                 string typeSuffix = m.sourceType == "FRAME" ? "Frame" : "Group";
-                string baseName = IdentifierUtil.ToIdentifier(stem + typeSuffix).TrimStart('@');
+                string baseName = className + "_" + IdentifierUtil.ToIdentifier(stem + typeSuffix).TrimStart('@');
                 string typeName = baseName;
                 int suffix = 2;
                 while (!taken.Add(typeName))
                     typeName = baseName + suffix++;
 
                 m.groupTypeName = typeName;
+                m.csharpType = typeName; // the group ref is typed as its generated component
                 members[i] = m;
             }
         }
@@ -163,6 +175,8 @@ namespace FigForge
                 changed |= WriteIfChanged(frameCs, FrameCodeGen.EmitFrameClass(f));
                 changed |= WriteIfChanged(frameCs + ".meta", FrameCodeGen.EmitScriptMeta(f.scriptGuid));
 
+                changed |= WriteGroupFiles(f); // one component per group, in Frames/<Frame>.g/
+
                 changed |= WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f));
                 changed |= WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
             }
@@ -185,6 +199,50 @@ namespace FigForge
             // Compile on the next tick — never mid-import (a domain reload would abort it).
             if (changed)
                 EditorApplication.delayCall += () => AssetDatabase.Refresh();
+        }
+
+        // One generated component file per group, in a folder beside the frame: Frames/<Frame>.g/.
+        // Files are deterministically named + GUID'd (seeded by frame + group type) so prefab
+        // YAML can reference the group component before it compiles. Stale files from removed or
+        // renamed groups are deleted, and the folder is dropped when the frame has no groups.
+        static bool WriteGroupFiles(FrameModel f)
+        {
+            string dir = FramesDir + "/" + f.className + ".g";
+            bool changed = false;
+            var expected = new HashSet<string>();
+
+            if (f.members != null)
+            {
+                foreach (var m in f.members)
+                {
+                    if (!m.isGroup) continue;
+                    if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                    string fileName = m.groupTypeName + ".g.cs";
+                    string path = dir + "/" + fileName;
+                    string guid = FrameCodeGen.DeterministicGuid(f.className + "." + m.groupTypeName);
+                    changed |= WriteIfChanged(path, FrameCodeGen.EmitGroupClass(f, m));
+                    changed |= WriteIfChanged(path + ".meta", FrameCodeGen.EmitScriptMeta(guid));
+                    expected.Add(fileName);
+                }
+            }
+
+            if (Directory.Exists(dir))
+            {
+                foreach (var file in Directory.GetFiles(dir, "*.g.cs"))
+                {
+                    if (expected.Contains(Path.GetFileName(file))) continue;
+                    File.Delete(file);
+                    if (File.Exists(file + ".meta")) File.Delete(file + ".meta");
+                    changed = true;
+                }
+                if (expected.Count == 0) // no groups left — drop the folder entirely
+                {
+                    try { Directory.Delete(dir, true); } catch { /* best-effort */ }
+                    if (File.Exists(dir + ".meta")) File.Delete(dir + ".meta");
+                    changed = true;
+                }
+            }
+            return changed;
         }
 
         static bool WriteIfChanged(string path, string content)

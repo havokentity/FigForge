@@ -77,11 +77,16 @@ namespace FigForge
                 EditorUtility.SetDirty(manager);
             }
 
-            if (afterColumns == beforeColumns) return;
-            FigForgeImporterWindow.SetEditorColumnsPref(afterColumns);
-            var helper = FigForgeFrameSceneTools.EnsureHelper(manager);
-            if (helper != null)
-                FigForgeFrameSceneTools.ArrangeRootFrames(helper);
+            if (afterColumns != beforeColumns)
+            {
+                FigForgeImporterWindow.SetEditorColumnsPref(afterColumns);
+                var helper = FigForgeFrameSceneTools.EnsureHelper(manager);
+                if (helper != null)
+                    FigForgeFrameSceneTools.ArrangeRootFrames(helper);
+            }
+
+            EditorGUILayout.Space();
+            FigForgeRefTools.DrawManagerToolbar(manager);
         }
     }
 

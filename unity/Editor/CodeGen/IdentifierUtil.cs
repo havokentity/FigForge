@@ -56,6 +56,29 @@ namespace FigForge
             return s;
         }
 
+        // ---------------------------------------------------------------------
+        // Force-serialize marker. A layer named "[s]Total" opts that one element
+        // into the generated accessor layer even when it's a label or image the
+        // importer skips in components-only mode. Detected on the RAW display name
+        // (case-insensitive, optional surrounding spaces) and STRIPPED here so the
+        // "[s]" never leaks into the GameObject name or the C# variable.
+        // ---------------------------------------------------------------------
+        public static bool HasSerializeMarker(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return false;
+            int i = 0;
+            while (i < raw.Length && char.IsWhiteSpace(raw[i])) i++;
+            return i + 2 < raw.Length && raw[i] == '[' && (raw[i + 1] == 's' || raw[i + 1] == 'S') && raw[i + 2] == ']';
+        }
+
+        public static string StripSerializeMarker(string raw)
+        {
+            if (!HasSerializeMarker(raw)) return raw;
+            int i = 0;
+            while (char.IsWhiteSpace(raw[i])) i++;
+            return raw.Substring(i + 3).TrimStart();
+        }
+
         /// <summary>
         /// Resolve a list of identifiers within one scope (a frame). The first occurrence
         /// keeps its name; later collisions get _2, _3, ... in the given (document) order.

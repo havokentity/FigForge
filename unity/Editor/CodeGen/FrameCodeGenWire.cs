@@ -44,6 +44,10 @@ namespace FigForge
 
         static void UpgradePendingFrames()
         {
+            // Groups first: swap each group placeholder for its generated component so a frame's
+            // ref to a group component resolves when the frame wires below.
+            UpgradePendingGroups();
+
             var frames = Resources.FindObjectsOfTypeAll<FigForgeFrame>();
             bool any = false;
             var managers = new System.Collections.Generic.HashSet<FrameManager>();
@@ -76,6 +80,49 @@ namespace FigForge
                 HierarchyBuilder.WarmUpGeneratedGraphics(root, batchSize);
 
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+        }
+
+        // Swap each group placeholder (a plain FigForgeFrameElement carrying a generatedType)
+        // for its generated subclass, then wire every group's child refs in a second pass —
+        // once all group components exist, so a group's ref to a nested child group resolves
+        // regardless of the order they were upgraded in.
+        static void UpgradePendingGroups()
+        {
+            var elements = Resources.FindObjectsOfTypeAll<FigForgeFrameElement>();
+            var upgraded = new System.Collections.Generic.List<FigForgeFrameElement>();
+            foreach (var el in elements)
+            {
+                if (el == null) continue;
+                if (el.GetType() != typeof(FigForgeFrameElement)) continue;   // already the generated subclass
+                if (string.IsNullOrEmpty(el.generatedType)) continue;          // no generated group for this element
+                if (!el.gameObject.scene.IsValid()) continue;                 // skip prefab assets / non-scene objects
+
+                var t = ResolveType(el.generatedType);
+                if (t == null || !typeof(FigForgeFrameElement).IsAssignableFrom(t)) continue; // not compiled yet
+
+                var comp = UpgradeGroup(el, t);
+                if (comp != null) upgraded.Add(comp);
+            }
+            foreach (var g in upgraded)
+            {
+                if (g == null) continue;
+                g.__WireGroup(g.GetComponentInParent<FigForgeScreen>(true));
+                EditorUtility.SetDirty(g);
+            }
+        }
+
+        static FigForgeFrameElement UpgradeGroup(FigForgeFrameElement baseEl, Type t)
+        {
+            var go = baseEl.gameObject;
+            string typeKey = baseEl.FigmaTypeKey;
+            string genType = baseEl.generatedType;
+            // FigForgeFrameElement is [DisallowMultipleComponent], so the base must go before the
+            // subclass can be added.
+            UnityEngine.Object.DestroyImmediate(baseEl);
+            if (!(go.AddComponent(t) is FigForgeFrameElement comp)) return null;
+            comp.ConfigureType(typeKey);
+            comp.generatedType = genType;
+            return comp;
         }
 
         static bool UpgradeFrame(FigForgeFrame baseFrame, Type t, out FrameManager manager, out FigForgeFrame upgraded)
