@@ -52,14 +52,24 @@ namespace FigForge
                         var name = Path.GetFileName(entry.FullName);
                         if (string.IsNullOrEmpty(name)) continue; // directory entry
 
-                        var outPath = Path.Combine(destAbs, name);
-                        using (var es = entry.Open())
-                        using (var os = File.Create(outPath))
-                            es.CopyTo(os);
+                        try
+                        {
+                            var outPath = Path.Combine(destAbs, name);
+                            using (var es = entry.Open())
+                            using (var os = File.Create(outPath))
+                                es.CopyTo(os);
 
-                        files++;
-                        if (name.Equals("manifest.json", StringComparison.OrdinalIgnoreCase))
-                            hasManifest = true;
+                            files++;
+                            if (name.Equals("manifest.json", StringComparison.OrdinalIgnoreCase))
+                                hasManifest = true;
+                        }
+                        catch (Exception entryEx)
+                        {
+                            // One bad entry shouldn't abort the whole extract —
+                            // log it and keep going with the rest.
+                            Debug.LogWarning($"[FigForge] skipped zip entry '{entry.FullName}': {entryEx.Message}");
+                            continue;
+                        }
                     }
                 }
 

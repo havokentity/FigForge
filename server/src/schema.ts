@@ -48,6 +48,7 @@ export const exportOptions = z
     emitGradients: z.boolean().optional(),
     emitImageFills: z.boolean().optional(),
     fontFaceDilate: z.number().min(0).max(1).optional(),
+    vanilla: z.boolean().optional(),
   })
   .describe('Exporter options; omitted fields use the plugin panel defaults/current values.');
 
@@ -56,6 +57,7 @@ export const elementConfig = z.object({
   excluded: z.boolean().optional(),
   merged: z.boolean().optional(),
   rasterize: z.boolean().optional(),
+  passthrough: z.boolean().optional(),
 });
 
 export const exportUnityInput = {
@@ -140,3 +142,34 @@ export const createShellInput = {
     .optional()
     .describe('Shell scaffold options, matching the plugin UI.'),
 };
+
+// Allow-list of bridge tool names the plugin understands — these are the
+// message `type`s the leader forwards over the WebSocket (the literals passed
+// to `sender.send(...)` in tools.ts). The follower /rpc handler validates
+// against this set so a hostile local process can't drive the plugin with an
+// arbitrary tool name. Keep in sync with the sender.send calls in tools.ts.
+export const bridgeToolName = z.enum([
+  'get_metadata',
+  'get_document',
+  'get_selection',
+  'get_node',
+  'list_frames',
+  'list_screens',
+  'get_node_details',
+  'get_design_context',
+  'get_screenshot',
+  'export_unity',
+  'export_project_unity',
+  'create_canonical',
+  'create_shell',
+]);
+
+// Follower → Leader /rpc envelope. The leader is loopback-bound, but any local
+// process can still reach it, so its shape is validated (not trusted via a bare
+// cast) before being proxied to the plugin: the tool must be allow-listed and
+// node ids must be well-formed Figma ids. Unknown keys are stripped.
+export const rpcRequestSchema = z.object({
+  tool: bridgeToolName,
+  nodeIds: z.array(figmaNodeId).optional(),
+  params: z.record(z.unknown()).optional(),
+});

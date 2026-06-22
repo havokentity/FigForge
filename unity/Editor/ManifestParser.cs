@@ -21,6 +21,13 @@ namespace FigForge
         // instead (LogError + abort, the importer's standard fatal-error surface).
         static readonly string[] SupportedManifestVersions = { "1.0", "2.0" };
 
+        // project.json bundle versions this importer understands — counterpart:
+        // server/src/tools.ts stamps project.version (currently "2.0"). Same
+        // contract as SupportedManifestVersions above: an unknown (or missing)
+        // version means the bundle producer and this importer are from different
+        // generations, so fail loudly instead of degrading field-by-field.
+        static readonly string[] SupportedProjectVersions = { "2.0" };
+
         public static Manifest Load(string manifestPath)
         {
             if (!File.Exists(manifestPath))
@@ -93,6 +100,16 @@ namespace FigForge
                 if (p == null || p.screens == null) return null;
                 if (p.schema != "figforge/project")
                     Debug.LogWarning($"[FigForge] unexpected project schema '{p.schema}'.");
+                if (System.Array.IndexOf(SupportedProjectVersions, p.version) < 0)
+                {
+                    Debug.LogError(
+                        $"[FigForge] project version '{(string.IsNullOrEmpty(p.version) ? "(missing)" : p.version)}' " +
+                        $"is not supported by this importer (supported: {string.Join(", ", SupportedProjectVersions)}) — import aborted.\n" +
+                        "One side is stale: if the project bundle is NEWER, update the FigForge Unity importer; " +
+                        "if it is OLDER (or has no version), re-export with a current FigForge plugin.\n" +
+                        projectJsonPath);
+                    return null;
+                }
                 return p;
             }
             catch (System.Exception e)

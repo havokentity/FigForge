@@ -68,10 +68,12 @@ namespace FigForge
             set => autoDetectForeignChanges = value;
         }
 
-#if UNITY_EDITOR
-        // TEMPORARY diagnostic hooks (FigForgeBlurDebugDump): observe captures/blits
+#if FIGFORGE_DEBUG
+        // Internal diagnostic hooks (FigForgeBlurDebugDump): observe captures/blits
         // from INSIDE a live rebuild — the only place organic-dispatch sequencing
-        // bugs are visible. No-ops unless armed by the editor tooling.
+        // bugs are visible. No-ops unless armed by the editor tooling. Gated behind
+        // FIGFORGE_DEBUG so they're stripped from client deliverables (see
+        // FigForgeBlurDebugDump for how to enable).
         internal static System.Action<string, RenderTexture> DebugRebuildSink;
         internal static System.Action<string> DebugRebuildLog;
         string _debugDirtySource;
@@ -162,7 +164,7 @@ namespace FigForge
 
         public void MarkDirty()
         {
-#if UNITY_EDITOR
+#if FIGFORGE_DEBUG
             if (DebugTraceMarkDirty && !_dirty)
                 Debug.Log("[FigForge] MarkDirty (frame " + Time.frameCount + ", inRebuild=" + _inRebuild + ")\n"
                           + StackTraceUtility.ExtractStackTrace());
@@ -170,7 +172,7 @@ namespace FigForge
             _dirty = true;
         }
 
-#if UNITY_EDITOR
+#if FIGFORGE_DEBUG
         internal static bool DebugTraceMarkDirty;
 #endif
 
@@ -251,12 +253,12 @@ namespace FigForge
             if (cam == null) return;
 
             SortOrderedLayers();
-#if UNITY_EDITOR
+#if FIGFORGE_DEBUG
             if (DebugRebuildLog != null) _debugDirtySource = _dirty ? "explicit" : "";
 #endif
             if (LayoutChanged(cam))
             {
-#if UNITY_EDITOR
+#if FIGFORGE_DEBUG
                 if (DebugRebuildLog != null) _debugDirtySource += "+layout";
 #endif
                 MarkDirty();
@@ -341,7 +343,7 @@ namespace FigForge
                     if (target == null) { complete = false; continue; }
 
                     CullAtOrAbove(layer);
-#if UNITY_EDITOR
+#if FIGFORGE_DEBUG
                     DebugRebuildLog?.Invoke("layer=" + ((Component)layer).name
                         + " dirty=" + _debugDirtySource
                         + " culled=" + _culled.Count
@@ -382,7 +384,7 @@ namespace FigForge
                     var blurTex = PrepareBackdropBlur(layer, capture, target, backdropRect);
                     Graphics.Blit(surface, target, _compositeMaterial, 0);
                     if (blurTex != null) RenderTexture.ReleaseTemporary(blurTex);
-#if UNITY_EDITOR
+#if FIGFORGE_DEBUG
                     if (DebugRebuildSink != null)
                     {
                         var n = ((Component)layer).name;
@@ -735,7 +737,7 @@ namespace FigForge
             }
             if (hash == _foreignHash) return;
             _foreignHash = hash;
-#if UNITY_EDITOR
+#if FIGFORGE_DEBUG
             if (DebugRebuildLog != null) _debugDirtySource += "+foreign";
 #endif
             MarkDirty();

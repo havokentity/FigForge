@@ -24,7 +24,9 @@ git push origin vX.Y.Z          # this is what triggers the release
 | **CI** | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push to `main`, any PR, manual | typecheck + build the plugin and server |
 | **Release** | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | push tag `v*`, or manual `workflow_dispatch` with a `tag` input | build → package 3 artifacts → publish the GitHub Release |
 
-Both run on `ubuntu-latest`, Node 20, installing with `npm ci`. The Release job
+Both run on `ubuntu-latest`, Node 22 (≥ 22.6 — the server's `npm test` runs the
+`.ts` test files directly via Node's native type stripping), installing with
+`npm ci`. The Release job
 rebuilds from source, so `dist/` staying gitignored is fine — nothing committed is
 trusted into the artifacts.
 

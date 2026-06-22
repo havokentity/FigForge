@@ -782,16 +782,18 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
 }
 
 /** Figma prototype "Navigate to" reaction → nav data (no behaviour). */
-function navFor(node: SceneNode): NavLink | undefined {
+async function navFor(node: SceneNode): Promise<NavLink | undefined> {
   const reactions = (node as unknown as { reactions?: any[] }).reactions;
   if (!Array.isArray(reactions)) return undefined;
   for (const r of reactions) {
     const actions = Array.isArray(r.actions) ? r.actions : r.action ? [r.action] : [];
     for (const a of actions) {
       if (a && a.type === 'NODE' && a.destinationId && (!a.navigation || a.navigation === 'NAVIGATE')) {
-        const dest = figma.getNodeById(a.destinationId);
+        const dest = await figma.getNodeByIdAsync(a.destinationId);
         if (dest) {
-          const trig = r.trigger && r.trigger.type === 'ON_CLICK' ? 'click' : 'click';
+          // Navigation is click-only by design; no downstream consumer
+          // distinguishes Figma trigger types, so the trigger is always 'click'.
+          const trig = 'click';
           return { target: sanitize(dest.name), trigger: trig };
         }
       }
@@ -1081,7 +1083,7 @@ export async function exportDesign(
   // exclusion must mean exclusion, not "excluded unless a merge bakes you in".
   const excludedNodes: SceneNode[] = [];
   for (const id of excludedIds) {
-    const n = figma.getNodeById(id) as SceneNode | null;
+    const n = (await figma.getNodeByIdAsync(id)) as SceneNode | null;
     if (n && isDescendant(n, root)) excludedNodes.push(n);
   }
 
@@ -2864,7 +2866,7 @@ export async function exportDesign(
         appendVariantDiagnostic(variants, `severity from variant ${toastSeverityFromVariant(variants)}`);
       }
     }
-    const nav = navFor(node);
+    const nav = await navFor(node);
 
     const element: ManifestElement = {
       id: node.id,

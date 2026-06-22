@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
 
 import { resolveAndValidateOutputPath, executeExportUnity, validateManifest } from '../dist/tools.js';
 // Imported from src (not dist) deliberately: the regex is the thing under
@@ -75,6 +75,34 @@ describe('resolveAndValidateOutputPath', () => {
   it('rejects sibling dirs that merely share the root as a name prefix', () => {
     // /tmp/figforge-workspace-evil must NOT pass as inside /tmp/figforge-workspace.
     assert.throws(() => resolveAndValidateOutputPath('../figforge-workspace-evil', root), /Refusing to write outside/);
+  });
+
+  it('rejects a symlinked component that redirects outside the workspace', async () => {
+    // workspace/link -> /outside ; writing to "link/file" must not escape.
+    const base = await mkdtemp(path.join(os.tmpdir(), 'figforge-symlink-'));
+    try {
+      const ws = path.join(base, 'workspace');
+      const outside = path.join(base, 'outside');
+      await mkdir(ws);
+      await mkdir(outside);
+      await symlink(outside, path.join(ws, 'link'), 'dir');
+      assert.throws(() => resolveAndValidateOutputPath('link/file', ws), /Refusing to write outside/);
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a symlink that stays inside the workspace', async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), 'figforge-symlink-'));
+    try {
+      const ws = path.join(base, 'workspace');
+      await mkdir(path.join(ws, 'real'), { recursive: true });
+      await symlink(path.join(ws, 'real'), path.join(ws, 'link'), 'dir');
+      // Resolves to ws/real/file, still inside the workspace -> allowed.
+      assert.doesNotThrow(() => resolveAndValidateOutputPath('link/file', ws));
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });
 

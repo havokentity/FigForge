@@ -5,6 +5,7 @@
 // when the Figma checkmark is a rich subtree, so `checkmark` can be null.
 // =============================================================================
 
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -62,15 +63,24 @@ namespace FigForge
         protected override void OnEnable()
         {
             base.OnEnable();
+            RefreshGraphicObjectCache();
             RefreshStateVisuals();
+        }
+
+        // Reusable buffer for the sibling graphic-object reveals, refilled (non-allocating)
+        // in OnEnable so dynamically added FigForgeToggleGraphicObjects are still picked up.
+        readonly List<FigForgeToggleGraphicObject> _reveals = new List<FigForgeToggleGraphicObject>();
+
+        void RefreshGraphicObjectCache()
+        {
+            GetComponents(_reveals);
         }
 
         public void RefreshStateVisuals()
         {
-            var reveals = GetComponents<FigForgeToggleGraphicObject>();
-            for (int i = 0; i < reveals.Length; i++)
-                if (reveals[i] != null)
-                    reveals[i].Apply();
+            for (int i = 0; i < _reveals.Count; i++)
+                if (_reveals[i] != null)
+                    _reveals[i].Apply();
         }
 
         // --- Behaviour hooks (shared, lazily allocated; see FigForgePointerEvents).

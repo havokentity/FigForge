@@ -44,8 +44,12 @@ namespace FigForge
 
             EditorGUI.LabelField(labelRect, label);
             bool fillEnabled = !disabled.boolValue;
+            EditorGUI.showMixedValue = disabled.hasMultipleDifferentValues;
+            EditorGUI.BeginChangeCheck();
             fillEnabled = EditorGUI.Toggle(toggleRect, fillEnabled);
-            disabled.boolValue = !fillEnabled;
+            if (EditorGUI.EndChangeCheck())
+                disabled.boolValue = !fillEnabled;
+            EditorGUI.showMixedValue = false;
 
             using (new EditorGUI.DisabledScope(!fillEnabled))
             {
@@ -55,11 +59,21 @@ namespace FigForge
                 {
                     if (gradient.gradientValue == null)
                         gradient.gradientValue = DefaultGradient(color.colorValue);
-                    gradient.gradientValue = EditorGUI.GradientField(swatchRect, gradient.gradientValue);
+                    EditorGUI.showMixedValue = gradient.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    var nextGradient = EditorGUI.GradientField(swatchRect, gradient.gradientValue);
+                    if (EditorGUI.EndChangeCheck())
+                        gradient.gradientValue = nextGradient;
+                    EditorGUI.showMixedValue = false;
                 }
                 else
                 {
-                    color.colorValue = EditorGUI.ColorField(swatchRect, GUIContent.none, color.colorValue, false, true, false);
+                    EditorGUI.showMixedValue = color.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    var nextColor = EditorGUI.ColorField(swatchRect, GUIContent.none, color.colorValue, false, true, false);
+                    if (EditorGUI.EndChangeCheck())
+                        color.colorValue = nextColor;
+                    EditorGUI.showMixedValue = false;
                 }
                 EditorGUIUtility.labelWidth = oldLabelWidth;
             }
@@ -67,6 +81,7 @@ namespace FigForge
             int mode = ModeIndex(kind, gradientKind);
             using (new EditorGUI.DisabledScope(!fillEnabled))
             {
+                EditorGUI.showMixedValue = kind.hasMultipleDifferentValues || gradientKind.hasMultipleDifferentValues;
                 EditorGUI.BeginChangeCheck();
                 mode = EditorGUI.Popup(popupRect, mode, ModeLabels);
                 if (EditorGUI.EndChangeCheck())
@@ -75,6 +90,7 @@ namespace FigForge
                     if (mode > 0 && gradient.gradientValue == null)
                         gradient.gradientValue = DefaultGradient(color.colorValue);
                 }
+                EditorGUI.showMixedValue = false;
             }
 
             EditorGUI.EndProperty();

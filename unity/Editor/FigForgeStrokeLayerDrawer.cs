@@ -52,8 +52,10 @@ namespace FigForge
                 row.width - EditorGUIUtility.labelWidth, row.height);
 
             EditorGUI.LabelField(labelRect, label);
+            EditorGUI.showMixedValue = enabled.hasMultipleDifferentValues;
             EditorGUI.BeginChangeCheck();
             bool nextEnabled = EditorGUI.Toggle(toggleRect, enabled.boolValue);
+            EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
             {
                 enabled.boolValue = nextEnabled;
@@ -69,11 +71,27 @@ namespace FigForge
                 var alignRect = new Rect(styleRect.xMax + Gap, controlRect.y, alignWidth, controlRect.height);
                 var weightRect = new Rect(alignRect.xMax + Gap, controlRect.y, weightWidth, controlRect.height);
 
-                style.enumValueIndex = EditorGUI.Popup(styleRect, Mathf.Clamp(style.enumValueIndex, 0, 1), StyleLabels);
+                EditorGUI.showMixedValue = style.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                int nextStyle = EditorGUI.Popup(styleRect, Mathf.Clamp(style.enumValueIndex, 0, 1), StyleLabels);
+                if (EditorGUI.EndChangeCheck())
+                    style.enumValueIndex = nextStyle;
+                EditorGUI.showMixedValue = false;
+
                 int alignMode = AlignMode(align.enumValueIndex);
+                EditorGUI.showMixedValue = align.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
                 alignMode = EditorGUI.Popup(alignRect, alignMode, AlignLabels);
-                align.enumValueIndex = AlignEnumValue(alignMode);
-                weight.floatValue = Mathf.Max(0f, EditorGUI.FloatField(weightRect, weight.floatValue));
+                if (EditorGUI.EndChangeCheck())
+                    align.enumValueIndex = AlignEnumValue(alignMode);
+                EditorGUI.showMixedValue = false;
+
+                EditorGUI.showMixedValue = weight.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                float nextWeight = Mathf.Max(0f, EditorGUI.FloatField(weightRect, weight.floatValue));
+                if (EditorGUI.EndChangeCheck())
+                    weight.floatValue = nextWeight;
+                EditorGUI.showMixedValue = false;
 
                 var paintRect = new Rect(position.x, row.yMax + Gap, position.width, EditorGUIUtility.singleLineHeight);
                 EditorGUI.PropertyField(paintRect, paint, new GUIContent("Paint"), false);
@@ -86,9 +104,20 @@ namespace FigForge
                         Mathf.Min(DashFieldWidth, Mathf.Max(48f, position.xMax - dashRect.xMax - Gap)), dashRect.height);
                     var dashLabel = new Rect(position.x, dashRect.y, EditorGUIUtility.labelWidth - ToggleWidth, dashRect.height);
                     EditorGUI.LabelField(dashLabel, "Dash");
-                    dash.floatValue = Mathf.Max(0f, EditorGUI.FloatField(dashRect, dash.floatValue));
+                    EditorGUI.showMixedValue = dash.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    float nextDash = Mathf.Max(0f, EditorGUI.FloatField(dashRect, dash.floatValue));
+                    if (EditorGUI.EndChangeCheck())
+                        dash.floatValue = nextDash;
+                    EditorGUI.showMixedValue = false;
+
                     EditorGUI.LabelField(new Rect(gapRect.x, gapRect.y, 28f, gapRect.height), "Gap");
-                    gap.floatValue = Mathf.Max(0f, EditorGUI.FloatField(new Rect(gapRect.x + 30f, gapRect.y, Mathf.Max(28f, gapRect.width - 30f), gapRect.height), gap.floatValue));
+                    EditorGUI.showMixedValue = gap.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    float nextGap = Mathf.Max(0f, EditorGUI.FloatField(new Rect(gapRect.x + 30f, gapRect.y, Mathf.Max(28f, gapRect.width - 30f), gapRect.height), gap.floatValue));
+                    if (EditorGUI.EndChangeCheck())
+                        gap.floatValue = nextGap;
+                    EditorGUI.showMixedValue = false;
                 }
             }
 

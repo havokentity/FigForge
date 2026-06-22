@@ -101,6 +101,11 @@ namespace FigForge
             ClearRows();
             for (int i = 0; i < _rows.Count; i++)
                 CreateRow(i, _rows[i]);
+            // Re-apply the stored selection to the freshly-built rows: without this
+            // SelectedIndex keeps its old value but no row is highlighted. Clamp first —
+            // a shrunk table may no longer contain the old index, in which case clear it.
+            if (_selected >= _rows.Count) _selected = -1;
+            ApplySelectionVisual(_selected);
         }
 
         // Rows size themselves via LayoutElement preferredHeight, which a layout group
@@ -140,20 +145,31 @@ namespace FigForge
         // onSelectionChanged only when the selection actually moves.
         public void Select(int index)
         {
+            // Reject out-of-range indices: only -1 (clear) plus 0..rowCount-1 are valid.
+            // An out-of-range value would set a phantom selection and fire the event for
+            // a row that doesn't exist.
+            int count = content != null ? content.childCount : 0;
+            if (index < -1 || index >= count) return;
+
             bool changed = _selected != index;
             _selected = index;
-            if (content != null)
-            {
-                for (int i = 0; i < content.childCount; i++)
-                {
-                    var r = content.GetChild(i).GetComponent<FigForgeTableRow>();
-                    if (r != null) r.SetSelected(r.index == index);
-                }
-            }
+            ApplySelectionVisual(index);
             if (changed) onSelectionChanged.Invoke(index);
         }
 
         public int SelectedIndex => _selected;
+
+        // Highlight the row whose index matches `index`, clear the rest. Visual only —
+        // callers fire onSelectionChanged themselves when the selection actually moves.
+        void ApplySelectionVisual(int index)
+        {
+            if (content == null) return;
+            for (int i = 0; i < content.childCount; i++)
+            {
+                var r = content.GetChild(i).GetComponent<FigForgeTableRow>();
+                if (r != null) r.SetSelected(r.index == index);
+            }
+        }
 
         void CreateRow(int index, List<string> cells)
         {
@@ -238,10 +254,16 @@ namespace FigForge
                     shadowBlur = itemStyle.shadowBlur,
                     shadowSpread = itemStyle.shadowSpread,
                 });
+                // AddComponent fires Awake/OnEnable -> Apply() synchronously, while the state
+                // colours are still default white — that would overwrite itemStyle.fill with
+                // white at rest. Disable first so Apply() doesn't run on add, set the colours,
+                // then re-enable so OnEnable -> Apply() paints the correct normal fill.
                 var states = row.AddComponent<FigForgeButtonStateColors>();
+                states.enabled = false;
                 states.normal = itemStyle.fill;
                 states.highlighted = hasItemRollover ? FigForgeFill.Solid(itemRollover) : itemStyle.fill;
                 states.pressed = hasItemRollover ? FigForgeFill.Solid(itemRollover) : itemStyle.fill;
+                states.enabled = true;
                 rowBg = rr;
             }
             else

@@ -114,22 +114,41 @@ namespace FigForge
         static int _escapeFrame = -1;
 
         /// <summary>The top (most-recently-opened, still-open) modal, or null. Prunes any
-        /// destroyed entries (e.g. stale statics when "domain reload on play" is off).</summary>
+        /// destroyed entries (e.g. stale statics when "domain reload on play" is off) and any
+        /// modal whose GameObject was deactivated out from under it — e.g. its parent frame was
+        /// SetActive(false) by navigation, so Close()/OnDestroy never fired and it would otherwise
+        /// stay a phantom "Top".</summary>
         public static FigForgeModal Top
         {
             get
             {
                 for (int i = _stack.Count - 1; i >= 0; i--)
                 {
-                    if (_stack[i] != null) return _stack[i];
+                    var m = _stack[i];
+                    if (m != null && m.gameObject.activeInHierarchy) return m;
                     _stack.RemoveAt(i);
                 }
                 return null;
             }
         }
 
+        // Drop destroyed or deactivated entries so OpenCount/Top/CloseTop agree on what's
+        // actually live and visible. (A modal hidden via a parent SetActive(false) never runs
+        // Close(), so it lingers in _stack until pruned here.)
+        static void Prune()
+        {
+            for (int i = _stack.Count - 1; i >= 0; i--)
+            {
+                var m = _stack[i];
+                if (m == null || !m.gameObject.activeInHierarchy) _stack.RemoveAt(i);
+            }
+        }
+
         /// <summary>How many modals are currently open.</summary>
-        public static int OpenCount => _stack.Count;
+        public static int OpenCount
+        {
+            get { Prune(); return _stack.Count; }
+        }
 
         /// <summary>Close just the top modal (LIFO). Returns true if one was closed.</summary>
         public static bool CloseTop()

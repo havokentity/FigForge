@@ -18,7 +18,7 @@ export const MANIFEST_VERSION = '2.0';
 // Canonical-control capture generation this plugin emits — counterpart:
 // unity/Editor/HierarchyBuilder.cs `CanonicalSchema`. Keep the two numbers in
 // lockstep; the importer warns (but continues) when they differ.
-export const CANONICAL_SCHEMA = 60;
+export const CANONICAL_SCHEMA = 63;
 
 // ---------------------------------------------------------------------------
 // Geometry primitives
@@ -383,24 +383,6 @@ export interface AssetBounds {
   exportScale: number;
 }
 
-export interface AutoLayout {
-  mode: 'horizontal' | 'vertical';
-  paddingTop: number;
-  paddingRight: number;
-  paddingBottom: number;
-  paddingLeft: number;
-  spacing: number;
-  alignH: string;
-  alignV: string;
-}
-
-export interface NineSlice {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-}
-
 export interface ManifestElement {
   id: string;
   name: string; // sanitized, used for filenames / GameObject names
@@ -416,13 +398,11 @@ export interface ManifestElement {
   asset?: string | null; // PNG filename when rasterized
   vector?: VectorDrawing; // procedural vector mesh (preferred over `asset` when present)
   assetBounds?: AssetBounds;
-  nineSlice?: NineSlice;
   canonical?: CanonicalRef;
   nav?: NavLink;
   interactive: boolean;
   clipsContent: boolean;
   merged: boolean;
-  autoLayout?: AutoLayout;
   children: string[];
 }
 

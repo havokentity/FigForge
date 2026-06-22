@@ -346,13 +346,6 @@ namespace FigForge
 
     public class NineSlice { public int left, right, top, bottom; }
 
-    public class AutoLayout
-    {
-        public string mode;              // horizontal|vertical
-        public float paddingTop, paddingRight, paddingBottom, paddingLeft, spacing;
-        public string alignH, alignV;
-    }
-
     public class ElementData
     {
         public string id;
@@ -369,13 +362,11 @@ namespace FigForge
         public string asset;
         public VectorDrawing vector;      // procedural vector mesh (preferred over `asset` when present)
         public AssetBounds assetBounds;
-        public NineSlice nineSlice;
         public CanonicalRef canonical;
         public NavLink nav;
         public bool interactive;
         public bool clipsContent;
         public bool merged;
-        public AutoLayout autoLayout;
         public List<string> children = new List<string>();
     }
 

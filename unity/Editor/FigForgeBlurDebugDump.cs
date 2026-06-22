@@ -2,6 +2,14 @@
 // name contains "frame" so the white-silhouette artifact can be localized:
 // cached (post-layer-blur) premultiplied surface, unpremultiplied view,
 // premult-invariant overshoot map, and the compositor's blended target.
+//
+// Internal debug tooling — NOT shipped enabled in client deliverables. The ~9
+// destructive scene/disk [MenuItem] entries below (and the runtime hooks they
+// drive in FigForgePageCompositor) compile only when the FIGFORGE_DEBUG
+// scripting define is set. To use them internally, add FIGFORGE_DEBUG to
+// Project Settings ▸ Player ▸ Scripting Define Symbols and the menu reappears
+// under FigForge/Debug.
+#if FIGFORGE_DEBUG
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -401,3 +409,4 @@ namespace FigForge
         }
     }
 }
+#endif // FIGFORGE_DEBUG

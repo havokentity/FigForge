@@ -5,7 +5,11 @@
   "ui": "dist/ui.html",
   "editorType": ["figma"],
   "networkAccess": {
-    "allowedDomains": ["*"],
-    "reasoning": "WebSocket connection to the local FigForge MCP bridge server (ws://127.0.0.1:1994)."
+    "allowedDomains": [
+      "ws://127.0.0.1:1994",
+      "http://127.0.0.1:1995",
+      "https://cdnjs.cloudflare.com"
+    ],
+    "reasoning": "WebSocket to the local FigForge MCP bridge (ws://127.0.0.1:1994); HTTP POST to the local Unity FigForge live-import server (http://127.0.0.1:1995, the importer default); and JSZip from cdnjs for client-side bundle packaging. Figma matches the exact port (no port wildcards), so if you change the Unity live-import port from 1995, add that origin here too."
   }
 }

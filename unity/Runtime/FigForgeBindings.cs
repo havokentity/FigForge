@@ -43,10 +43,17 @@ namespace FigForge
                 label.text = labelText;
                 label.gameObject.SetActive(!string.IsNullOrEmpty(labelText));
             }
-            if (icon != null && iconSprite != null)
+            if (icon != null)
             {
-                icon.sprite = iconSprite;
-                icon.enabled = true;
+                if (iconSprite != null)
+                {
+                    icon.sprite = iconSprite;
+                    icon.enabled = true;
+                }
+                else
+                {
+                    icon.enabled = false;
+                }
             }
 
             var input = control as TMP_InputField;

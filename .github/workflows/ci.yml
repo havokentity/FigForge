@@ -13,7 +13,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 22 is required so `npm test` in server/ can run the .ts test
+          # files directly via `node --test test/*.test.ts` (native TypeScript
+          # type stripping landed in Node 22.6).
+          node-version: 22
+
+      - name: Contract — canonical schema in lockstep
+        run: node scripts/check-canonical-schema.mjs
 
       - name: Plugin — typecheck + build
         run: |
@@ -28,3 +34,15 @@ jobs:
           npm ci
           npm run typecheck
           npm run build
+
+      - name: Server — test
+        run: |
+          cd server
+          npm test
+
+# NOTE: Unity package compilation is intentionally NOT gated in CI yet.
+# The `unity/` directory is UPM *package source* — there is no Unity project
+# (no ProjectSettings/ or Assets/) for game-ci/unity-test-runner to open, and
+# a real compile job would also require a UNITY_LICENSE secret that is
+# unavailable on fork PRs. Adding it now would either hard-fail or block the
+# pipeline, so it is deferred. See the CI concern noted in the rollout.

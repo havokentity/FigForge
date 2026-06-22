@@ -45,8 +45,10 @@ namespace FigForge
             var controlRect = new Rect(line.x + EditorGUIUtility.labelWidth, line.y,
                 line.width - EditorGUIUtility.labelWidth, line.height);
             EditorGUI.LabelField(labelRect, label);
+            EditorGUI.showMixedValue = enabled.hasMultipleDifferentValues;
             EditorGUI.BeginChangeCheck();
             bool nextEnabled = EditorGUI.Toggle(toggleRect, enabled.boolValue);
+            EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
             {
                 enabled.boolValue = nextEnabled;
@@ -75,13 +77,35 @@ namespace FigForge
                 var weightRect = new Rect(alignRect.xMax + Gap, controlRect.y, weightWidth, controlRect.height);
                 float oldLabelWidth = EditorGUIUtility.labelWidth;
                 EditorGUIUtility.labelWidth = 0f;
-                color.colorValue = EditorGUI.ColorField(colorRect, GUIContent.none, color.colorValue, false, true, false);
+                EditorGUI.showMixedValue = color.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                var nextColor = EditorGUI.ColorField(colorRect, GUIContent.none, color.colorValue, false, true, false);
+                if (EditorGUI.EndChangeCheck())
+                    color.colorValue = nextColor;
+                EditorGUI.showMixedValue = false;
                 EditorGUIUtility.labelWidth = oldLabelWidth;
-                style.enumValueIndex = EditorGUI.Popup(styleRect, Mathf.Clamp(style.enumValueIndex, 0, 1), StyleLabels);
+
+                EditorGUI.showMixedValue = style.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                int nextStyle = EditorGUI.Popup(styleRect, Mathf.Clamp(style.enumValueIndex, 0, 1), StyleLabels);
+                if (EditorGUI.EndChangeCheck())
+                    style.enumValueIndex = nextStyle;
+                EditorGUI.showMixedValue = false;
+
                 int alignMode = AlignMode(align.enumValueIndex);
+                EditorGUI.showMixedValue = align.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
                 alignMode = EditorGUI.Popup(alignRect, alignMode, AlignLabels);
-                align.enumValueIndex = AlignEnumValue(alignMode);
-                weight.floatValue = Mathf.Max(0f, EditorGUI.FloatField(weightRect, weight.floatValue));
+                if (EditorGUI.EndChangeCheck())
+                    align.enumValueIndex = AlignEnumValue(alignMode);
+                EditorGUI.showMixedValue = false;
+
+                EditorGUI.showMixedValue = weight.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                float nextWeight = Mathf.Max(0f, EditorGUI.FloatField(weightRect, weight.floatValue));
+                if (EditorGUI.EndChangeCheck())
+                    weight.floatValue = nextWeight;
+                EditorGUI.showMixedValue = false;
             }
 
             EditorGUI.EndProperty();

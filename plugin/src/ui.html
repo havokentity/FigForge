@@ -85,6 +85,14 @@
   .mcp:hover { color: var(--text); background: var(--bg-hover); }
   .mcp.connected { border-color: var(--ok); color: var(--text); }
   .mcp.connecting { border-color: var(--warn); }
+  .bridge-token {
+    box-sizing: border-box; width: 84px; min-height: 26px;
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 4px 8px; font-size: 10px;
+    color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .bridge-token::placeholder { color: var(--text-secondary); }
+  .bridge-token:focus { outline: none; border-color: var(--ok); }
   .icon-btn {
     border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-secondary);
     width: 26px; height: 26px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
@@ -97,6 +105,7 @@
   body.minimized #sizeSeg,
   body.minimized #version,
   body.minimized #mcpLabel,
+  body.minimized .bridge-token,
   body.minimized .title { display: none; }
   body.minimized header { border-bottom: none; }
 
@@ -410,6 +419,8 @@
         <span class="dot" id="mcpDot"></span>
         <span id="mcpLabel">Connect MCP</span>
       </div>
+      <input type="text" id="bridgeToken" class="bridge-token" placeholder="token" autocomplete="off" spellcheck="false"
+             title="Optional bridge token. Only needed when the bridge server runs with FIGFORGE_BRIDGE_TOKEN set; leave blank for the default zero-config bridge." />
       <button class="icon-btn" id="minBtn" title="Minimize">—</button>
     </div>
   </header>

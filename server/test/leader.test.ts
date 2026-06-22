@@ -9,6 +9,7 @@ import http from 'node:http';
 import { PassThrough } from 'node:stream';
 
 import { readRpcBody, RpcBodyTooLargeError } from '../dist/leader.js';
+import { rpcRequestSchema } from '../src/schema.ts';
 
 function requestStream(headers: http.IncomingHttpHeaders = {}): http.IncomingMessage {
   const req = new PassThrough() as http.IncomingMessage;
@@ -48,5 +49,47 @@ describe('readRpcBody', () => {
       body,
       (error) => error instanceof RpcBodyTooLargeError && error.message === 'RPC body exceeds 10 bytes.',
     );
+  });
+});
+
+describe('rpcRequestSchema', () => {
+  it('accepts an allow-listed tool with well-formed node ids and params', () => {
+    const r = rpcRequestSchema.safeParse({
+      tool: 'get_node',
+      nodeIds: ['123:456', 'I123:4;567:8'],
+      params: { nodeId: '123:456' },
+    });
+    assert.equal(r.success, true);
+  });
+
+  it('accepts a bare tool with no nodeIds or params', () => {
+    assert.equal(rpcRequestSchema.safeParse({ tool: 'get_metadata' }).success, true);
+  });
+
+  it('strips unknown envelope keys rather than failing', () => {
+    const r = rpcRequestSchema.safeParse({ tool: 'get_document', requestId: 'x', extra: 1 });
+    assert.equal(r.success, true);
+    if (r.success) assert.deepEqual(Object.keys(r.data), ['tool']);
+  });
+
+  it('rejects a tool name that is not allow-listed', () => {
+    assert.equal(rpcRequestSchema.safeParse({ tool: 'rm_rf', params: {} }).success, false);
+    // a real MCP tool that is NOT a bridge message type must also be rejected
+    assert.equal(rpcRequestSchema.safeParse({ tool: 'save_screenshots' }).success, false);
+  });
+
+  it('rejects a missing or non-string tool', () => {
+    assert.equal(rpcRequestSchema.safeParse({}).success, false);
+    assert.equal(rpcRequestSchema.safeParse({ tool: 42 }).success, false);
+  });
+
+  it('rejects malformed node ids and non-array nodeIds', () => {
+    assert.equal(rpcRequestSchema.safeParse({ tool: 'get_node', nodeIds: ['123-456'] }).success, false);
+    assert.equal(rpcRequestSchema.safeParse({ tool: 'get_node', nodeIds: '123:456' }).success, false);
+  });
+
+  it('rejects a non-object body', () => {
+    assert.equal(rpcRequestSchema.safeParse('get_metadata').success, false);
+    assert.equal(rpcRequestSchema.safeParse(null).success, false);
   });
 });

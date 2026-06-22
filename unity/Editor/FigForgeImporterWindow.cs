@@ -1199,9 +1199,22 @@ namespace FigForge
             var baseDir = Path.GetDirectoryName(projectPath).Replace('\\', '/');
 
             var loaded = new List<LoadedScreen>();
+            // baseDir is trusted (the folder we were pointed at); ps.manifest comes from
+            // project.json and is untrusted. Resolve to a full path and require it to stay
+            // under baseDir so a crafted "../../.." value can't read an arbitrary file.
+            var baseDirFull = Path.GetFullPath(baseDir);
             foreach (var ps in proj.screens)
             {
                 var mp = $"{baseDir}/{ps.manifest}".Replace('\\', '/');
+                var mpFull = Path.GetFullPath(mp);
+                var fence = baseDirFull.EndsWith(Path.DirectorySeparatorChar.ToString())
+                    ? baseDirFull : baseDirFull + Path.DirectorySeparatorChar;
+                if (!mpFull.Equals(baseDirFull, System.StringComparison.Ordinal) &&
+                    !mpFull.StartsWith(fence, System.StringComparison.Ordinal))
+                {
+                    Log($"skip '{ps.name}': manifest path escapes bundle folder — rejected ({ps.manifest})", MessageType.Warning);
+                    continue;
+                }
                 var m = ManifestParser.Load(mp);
                 if (m == null) { Log($"skip '{ps.name}': manifest missing or rejected — see Console ({mp})", MessageType.Warning); continue; }
                 loaded.Add(new LoadedScreen

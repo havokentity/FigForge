@@ -31,9 +31,10 @@ namespace FigForge
 
         /// <summary>
         /// Convert a Figma display name to a valid C# identifier, preserving case.
-        /// Characters C# cannot use are removed; intentional underscores are preserved;
-        /// a leading digit gets a '_' prefix; a reserved keyword gets an '@' prefix.
-        /// Empty/garbage falls back to "_".
+        /// Characters C# cannot use are removed; any Unicode letter or digit is kept
+        /// (so CJK / accented layer names survive instead of collapsing to "_");
+        /// intentional underscores are preserved; a leading digit gets a '_' prefix;
+        /// a reserved keyword gets an '@' prefix. Empty/garbage falls back to "_".
         /// </summary>
         public static string ToIdentifier(string raw)
         {
@@ -42,7 +43,9 @@ namespace FigForge
             var sb = new StringBuilder(raw.Length);
             foreach (char c in raw)
             {
-                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+                // Roslyn accepts Unicode identifiers, so keep any letter or digit
+                // (categories Lu/Ll/Lt/Lm/Lo, Nd) — not just ASCII a-z/A-Z/0-9.
+                bool ok = char.IsLetterOrDigit(c) || c == '_';
                 if (ok)
                 {
                     sb.Append(c);
@@ -51,7 +54,8 @@ namespace FigForge
 
             string s = sb.ToString();
             if (s.Length == 0) return "_";
-            if (s[0] >= '0' && s[0] <= '9') s = "_" + s;
+            // A C# identifier may not start with a digit (ASCII or Unicode Nd).
+            if (char.IsDigit(s[0])) s = "_" + s;
             if (Keywords.Contains(s)) s = "@" + s;
             return s;
         }
@@ -79,14 +83,69 @@ namespace FigForge
             return raw.Substring(i + 3).TrimStart();
         }
 
+        // ---------------------------------------------------------------------
+        // Reserved accessor names — the inherited (public + protected) members of
+        // the runtime base classes a generated accessor identifier must NOT shadow.
+        // A frame class is `partial class <Frame> : FigForgeFrame` and a group class
+        // is `: FigForgeFrameElement`; an accessor named like an inherited member
+        // would emit CS0108 (and shadowing the nav `Show()` breaks user call sites).
+        // HAND-MAINTAINED: keep these in sync with FigForgeFrame.cs / FigForgeFrameElement.cs
+        // (and the Unity base members a layer could plausibly be named after). Seed the
+        // dedupe scope with these so a colliding accessor gets suffixed (_2) instead.
+        // Stored in @-stripped (Key) form — none are C# keywords so none carry an '@'.
+        // ---------------------------------------------------------------------
+
+        // FigForgeFrame's inherited surface (frame accessors live on this base).
+        public static readonly IReadOnlyCollection<string> ReservedFrameMembers = new[]
+        {
+            // FigForgeFrame public/protected members
+            "isShell", "usesShell", "shellKey", "generatedType",
+            "isVisible", "IsBound", "ScreenKey",
+            "Show", "Guard", "OnShow", "OnHide", "OnBind",
+            "__WireFrame", "__Get", "__GetList",
+            // Common inherited Unity (Component/Behaviour/MonoBehaviour/Object) members
+            // a Figma layer could realistically be named after.
+            "transform", "gameObject", "enabled", "tag", "name", "hideFlags",
+        };
+
+        // FigForgeFrameElement's inherited surface (group/element accessors live on this base).
+        public static readonly IReadOnlyCollection<string> ReservedElementMembers = new[]
+        {
+            // FigForgeFrameElement public/protected members
+            "generatedType",
+            "FigmaType", "FigmaTypeKey", "RectTransform", "GameObject", "isVisible",
+            "SetVisible", "GetVisible", "ConfigureType",
+            "__WireGroup", "__Get", "__GetList",
+            // Common inherited Unity members (see note above).
+            "transform", "gameObject", "enabled", "tag", "name", "hideFlags",
+        };
+
+        // Union of both base surfaces. A single dedupe pass in the codegen produces
+        // identifiers for frame accessors, group scopes, AND group-child accessors,
+        // so it seeds with the union to dodge a collision on whichever base it lands on.
+        public static readonly IReadOnlyCollection<string> ReservedAccessorNames = BuildReservedUnion();
+
+        static IReadOnlyCollection<string> BuildReservedUnion()
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var n in ReservedFrameMembers) set.Add(n);
+            foreach (var n in ReservedElementMembers) set.Add(n);
+            return set;
+        }
+
         /// <summary>
         /// Resolve a list of identifiers within one scope (a frame). The first occurrence
         /// keeps its name; later collisions get _2, _3, ... in the given (document) order.
         /// `onCollision(original, renamed)` fires per renamed entry for a console warning.
+        /// `reserved` pre-seeds the taken set (inherited base members) so an accessor named
+        /// like one is suffixed instead of shadowing it; reserved names never trigger
+        /// `onCollision` for an unused entry — only an actual identifier collision does.
         /// </summary>
-        public static List<string> Dedupe(IList<string> ids, Action<string, string> onCollision = null)
+        public static List<string> Dedupe(IList<string> ids, Action<string, string> onCollision = null,
+            IReadOnlyCollection<string> reserved = null)
         {
             var taken = new HashSet<string>(StringComparer.Ordinal);
+            if (reserved != null) foreach (var r in reserved) taken.Add(r);
             var result = new List<string>(ids.Count);
             foreach (var id in ids)
             {

@@ -4,6 +4,7 @@
 // =============================================================================
 
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PluginSender, RpcResponse, ToolResult } from './types.js';
@@ -31,11 +32,38 @@ function unwrap(r: RpcResponse): ToolResult {
   return r.error ? fail(r.error) : ok(r.data);
 }
 
-/** Resolve `outDir` against the bridge cwd and refuse paths that escape it. */
+/** Canonicalize `p` by realpath-ing its deepest EXISTING ancestor (resolving
+ * any symlinks along the way) and re-appending the non-existing tail. A plain
+ * realpathSync would throw on a not-yet-created output dir, so we walk up until
+ * a real dir is found, canonicalize that, then rejoin the remainder. */
+function canonicalizeExisting(p: string): string {
+  let existing = p;
+  const tail: string[] = [];
+  // Walk up until realpathSync resolves (the deepest ancestor that exists).
+  for (;;) {
+    try {
+      const real = realpathSync(existing);
+      return tail.length ? path.join(real, ...tail) : real;
+    } catch {
+      const parent = path.dirname(existing);
+      // Reached the filesystem root without finding an existing ancestor:
+      // nothing to canonicalize, fall back to the lexically resolved path.
+      if (parent === existing) return p;
+      tail.unshift(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
+/** Resolve `outDir` against the bridge cwd and refuse paths that escape it.
+ * Symlinks are resolved before the containment check so a symlinked component
+ * inside the workspace cannot redirect a write outside it. */
 export function resolveAndValidateOutputPath(outDir: string, workspaceRoot: string): string {
   const resolved = path.resolve(workspaceRoot, outDir);
   const root = path.resolve(workspaceRoot);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+  const realResolved = canonicalizeExisting(resolved);
+  const realRoot = canonicalizeExisting(root);
+  if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
     throw new Error(`Refusing to write outside the bridge working directory: ${outDir}`);
   }
   return resolved;

@@ -47,7 +47,14 @@ namespace FigForge
         // The active manager, or — when none is set (edit mode) — the one in the open
         // scene, so the generated `Frames` accessors resolve outside play mode too.
         internal static FrameManager Resolve()
-            => Active != null ? Active : FindFirstObjectByType<FrameManager>();
+        {
+            if (Active != null) return Active;
+#if UNITY_2023_1_OR_NEWER
+            return Object.FindFirstObjectByType<FrameManager>();
+#else
+            return Object.FindObjectOfType<FrameManager>();
+#endif
+        }
 
         // Resolve a registered frame by GameObject name. Matching also accepts the
         // sanitized Figma key used by generated accessors and prototype navigation.
@@ -195,8 +202,11 @@ namespace FigForge
                 RefreshCompositors(target.gameObject);
             }
             FillParent(target.GetComponent<RectTransform>());
-            target.SetVisible(true);
+            // Assign Current BEFORE SetVisible(true): SetVisible fires OnShow(), and if a
+            // handler navigates again re-entrantly, that inner call must win. Setting Current
+            // first means the inner navigation's result isn't clobbered when we unwind here.
             Current = target;
+            target.SetVisible(true);
             if (shell != null) shell.SetActive(target.usesShell && activeShell == null);
             return true;
         }
@@ -261,6 +271,12 @@ namespace FigForge
         static NavDecision SafeInvoke(NavGuard guard, NavContext ctx)
         {
             if (guard == null) return NavDecision.Allow();
+            // A guard bound to a destroyed MonoBehaviour (e.g. a scene-collected
+            // FigForgeNavGuard whose object was torn down) would throw in Evaluate and
+            // fail-closed to Block, permanently locking the screen. Skip it (Allow)
+            // using Unity's null-equality, which reports destroyed objects as null.
+            if (guard.Target is UnityEngine.Object owner && owner == null)
+                return NavDecision.Allow();
             try { return guard(ctx); }
             catch (System.Exception e)
             {
@@ -285,7 +301,11 @@ namespace FigForge
         // Start — mirrors how FigForgeNavBinder wires inactive nav links.
         void RegisterSceneGuards()
         {
-            var comps = FindObjectsByType<FigForgeNavGuard>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#if UNITY_2023_1_OR_NEWER
+            var comps = Object.FindObjectsByType<FigForgeNavGuard>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+            var comps = Object.FindObjectsOfType<FigForgeNavGuard>(true);
+#endif
             for (int i = 0; i < comps.Length; i++)
             {
                 var c = comps[i];

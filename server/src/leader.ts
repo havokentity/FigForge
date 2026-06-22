@@ -9,10 +9,22 @@
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { Bridge } from './bridge.js';
-import type { PluginSender, RpcRequest, RpcResponse } from './types.js';
+import { rpcRequestSchema } from './schema.js';
+import type { PluginSender, RpcResponse } from './types.js';
 import { BRIDGE_PORT, VERSION } from './version.js';
 
 export const RPC_MAX_BODY_BYTES = 1_048_576;
+
+// Generous cap for large exports; well under the ws default of 100 MiB so a
+// runaway/hostile frame can't exhaust memory but a legitimate export fits.
+export const WS_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+
+/** Loopback addresses the dev bridge accepts upgrades from. */
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  return address !== undefined && LOOPBACK_ADDRESSES.has(address);
+}
 
 export class RpcBodyTooLargeError extends Error {
   constructor(limitBytes = RPC_MAX_BODY_BYTES) {
@@ -78,15 +90,52 @@ export class Leader implements PluginSender {
   readonly bridge = new Bridge();
 
   constructor() {
-    this.wss = new WebSocketServer({ noServer: true });
+    this.wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
     this.server = http.createServer((req, res) => this.onRequest(req, res));
     this.server.on('upgrade', (req, socket, head) => {
-      if (req.url === '/ws') {
+      if (req.url !== undefined && this.isAllowedWsUpgrade(req)) {
         this.wss.handleUpgrade(req, socket, head, (ws) => this.bridge.attach(ws));
       } else {
         socket.destroy();
       }
     });
+  }
+
+  /**
+   * Gate /ws upgrades. The server is already loopback-bound, so this is
+   * defense in depth and must NOT reject the real plugin:
+   *   - the path must be /ws (ignoring any query string);
+   *   - the peer must be loopback;
+   *   - if FIGFORGE_BRIDGE_TOKEN is set, the client must present a matching
+   *     token via ?token= or a Sec-WebSocket-Protocol value. When the env var
+   *     is unset, no token is required (preserves the zero-config flow).
+   */
+  private isAllowedWsUpgrade(req: http.IncomingMessage): boolean {
+    // req.url on an upgrade is the request-target (path + optional query),
+    // never absolute, but parse defensively against a fixed loopback base.
+    let pathname: string;
+    let token: string | null;
+    try {
+      const url = new URL(req.url ?? '', 'http://127.0.0.1');
+      pathname = url.pathname;
+      token = url.searchParams.get('token');
+    } catch {
+      return false;
+    }
+    if (pathname !== '/ws') return false;
+    if (!isLoopbackAddress(req.socket.remoteAddress ?? undefined)) return false;
+
+    const expectedToken = process.env.FIGFORGE_BRIDGE_TOKEN;
+    if (expectedToken) {
+      const protocolToken = req.headers['sec-websocket-protocol'];
+      const presented =
+        token ??
+        (typeof protocolToken === 'string'
+          ? protocolToken.split(',').map((s) => s.trim()).find((s) => s.length > 0) ?? null
+          : null);
+      if (presented !== expectedToken) return false;
+    }
+    return true;
   }
 
   /** Resolves once bound, rejects with EADDRINUSE if another leader exists. */
@@ -122,7 +171,13 @@ export class Leader implements PluginSender {
     let result: RpcResponse;
     try {
       const body = await readRpcBody(req);
-      const rpc = JSON.parse(body) as RpcRequest;
+      const parsed = rpcRequestSchema.safeParse(JSON.parse(body));
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        const where = issue?.path.length ? issue.path.join('.') : 'request';
+        throw new Error(`Invalid RPC request (${where}): ${issue?.message ?? 'bad shape'}`);
+      }
+      const rpc = parsed.data;
       result = await this.bridge.send(rpc.tool, rpc.nodeIds, rpc.params);
     } catch (e) {
       if (e instanceof RpcBodyTooLargeError) {

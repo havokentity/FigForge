@@ -35,19 +35,23 @@ namespace FigForge
 
             EnsureFolder(targetFolder);
 
-            // 9-slice border per asset filename. Explicit nineSlice wins; otherwise
-            // we auto-detect a border from the PNG's alpha for slice CANDIDATES —
-            // rounded/bordered panels (style.cornerRadius>0) and canonical button
-            // state sprites — so they scale without smearing their corners. Icons /
-            // plain fills aren't candidates, so they stay Simple.
+            // 9-slice border per asset filename, auto-detected from the PNG's alpha
+            // for slice CANDIDATES — rounded/bordered panels (style.cornerRadius>0)
+            // and canonical button state sprites — so they scale without smearing
+            // their corners. Icons / plain fills aren't candidates, so they stay Simple.
+            // Keyed by the BARE file name. Manifest filenames are untrusted, so —
+            // like ZipImporter / FigForgeLiveImport — we flatten with
+            // Path.GetFileName everywhere a filename builds a path or dictionary
+            // key, neutralising any "../" path-traversal (zip-slip) that would
+            // otherwise let File.Copy escape targetFolder.
             var borders = new Dictionary<string, NineSlice>();
             var candidates = new HashSet<string>();
             foreach (var e in manifest.elements)
             {
                 if (!string.IsNullOrEmpty(e.asset))
                 {
-                    if (e.nineSlice != null && !borders.ContainsKey(e.asset)) borders[e.asset] = e.nineSlice;
-                    else if (e.style != null && e.style.cornerRadius > 0f) candidates.Add(e.asset);
+                    var asset = Path.GetFileName(e.asset);
+                    if (e.style != null && e.style.cornerRadius > 0f) candidates.Add(asset);
                 }
                 if (e.canonical != null && e.canonical.states != null)
                 {
@@ -68,9 +72,10 @@ namespace FigForge
             {
                 foreach (var asset in manifest.assets)
                 {
-                    var src = Path.Combine(sourceDir, asset.file);
-                    if (!File.Exists(src)) { Debug.LogWarning($"[FigForge] missing PNG: {asset.file}"); continue; }
-                    var dst = $"{targetFolder}/{asset.file}";
+                    var file = Path.GetFileName(asset.file); // bare name — zip-slip defense
+                    var src = Path.Combine(sourceDir, file);
+                    if (!File.Exists(src)) { Debug.LogWarning($"[FigForge] missing PNG: {file}"); continue; }
+                    var dst = $"{targetFolder}/{file}";
                     File.Copy(src, dst, true);
                 }
             }
@@ -88,7 +93,8 @@ namespace FigForge
             {
                 foreach (var asset in manifest.assets)
                 {
-                    var dst = $"{targetFolder}/{asset.file}";
+                    var file = Path.GetFileName(asset.file); // bare name — zip-slip defense
+                    var dst = $"{targetFolder}/{file}";
                     var importer = AssetImporter.GetAtPath(dst) as TextureImporter;
                     if (importer == null) continue;
 
@@ -100,7 +106,7 @@ namespace FigForge
                     importer.textureCompression = settings.compression;
                     importer.maxTextureSize = settings.autoMaxSize ? AutoMax(dst) : settings.maxSize;
 
-                    if (borders.TryGetValue(asset.file, out var b))
+                    if (borders.TryGetValue(file, out var b))
                         importer.spriteBorder = new Vector4(b.left, b.bottom, b.right, b.top);
 
                     importer.SaveAndReimport();
@@ -110,8 +116,9 @@ namespace FigForge
 
             foreach (var asset in manifest.assets)
             {
-                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>($"{targetFolder}/{asset.file}");
-                if (sprite != null) result[asset.file] = sprite;
+                var file = Path.GetFileName(asset.file); // bare name — zip-slip defense
+                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>($"{targetFolder}/{file}");
+                if (sprite != null) result[file] = sprite;
             }
 
             return result;
@@ -119,7 +126,8 @@ namespace FigForge
 
         static void AddState(HashSet<string> set, string file)
         {
-            if (!string.IsNullOrEmpty(file)) set.Add(file);
+            // Flatten to the bare file name (zip-slip defense, see Import).
+            if (!string.IsNullOrEmpty(file)) set.Add(Path.GetFileName(file));
         }
 
         // Detect a 9-slice border from a PNG's alpha: the corner inset on each side

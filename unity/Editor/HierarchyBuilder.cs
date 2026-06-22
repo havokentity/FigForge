@@ -74,13 +74,34 @@ namespace FigForge
             {
                 if (roots.Count == 1)
                 {
-                    pageRoot = BuildElement(roots[0], index, parent, ctx);
+                    var root0 = roots[0];
+                    try
+                    {
+                        pageRoot = BuildElement(root0, index, parent, ctx);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ctx.log($"top-level element '{root0?.name}' (id '{root0?.id}') threw while building — skipping it; {ex.GetType().Name}: {ex.Message}");
+                        pageRoot = null;
+                    }
                 }
                 else
                 {
                     pageRoot = NewRect(ScreenObjectName(manifest), parent);
                     Stretch(pageRoot.GetComponent<RectTransform>());
-                    foreach (var r in roots) BuildElement(r, index, pageRoot.transform, ctx);
+                    // Isolate each top-level element: one throwing element must not
+                    // abort the whole screen — log it and build the rest.
+                    foreach (var r in roots)
+                    {
+                        try
+                        {
+                            BuildElement(r, index, pageRoot.transform, ctx);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            ctx.log($"top-level element '{r?.name}' (id '{r?.id}') threw while building — skipping it; {ex.GetType().Name}: {ex.Message}");
+                        }
+                    }
                 }
             }
             finally { FigForgePageCompositor.SuppressAutoCreate = false; }
@@ -249,8 +270,20 @@ namespace FigForge
             }
         }
 
-        static GameObject BuildElement(ElementData e, Dictionary<string, ElementData> index, Transform parent, BuildContext ctx)
+        // Defensive cap on hierarchy recursion. Real Figma trees are shallow (a few
+        // dozen deep at most); a manifest that cycles or self-references a child id
+        // would recurse forever and StackOverflowException is NOT catchable, so it
+        // takes down the whole Unity process mid-import. Bail well before that.
+        const int MaxBuildDepth = 512;
+
+        static GameObject BuildElement(ElementData e, Dictionary<string, ElementData> index, Transform parent, BuildContext ctx, int depth = 0)
         {
+            if (depth > MaxBuildDepth)
+            {
+                ctx.log($"element '{e?.name}' (id '{e?.id}') exceeded max build depth {MaxBuildDepth} — skipping (cyclic or malformed manifest?)");
+                return null;
+            }
+
             // ---- Canonical element: instantiate a prefab (generated once from the
             // Figma component, or a hand-made one from the CanonicalLibrary) ------
             if (e.canonical != null)
@@ -416,7 +449,7 @@ namespace FigForge
                     foreach (var childId in e.children)
                         if (index.TryGetValue(childId, out var extra))
                         {
-                            var extraGo = BuildElement(extra, index, inst.transform, ctx);
+                            var extraGo = BuildElement(extra, index, inst.transform, ctx, depth + 1);
                             DisableRaycastTargets(extraGo);
                             // exportAsync BAKES the control's rotation AND mirror into a
                             // rasterized extra's PNG (the state layers dodge this — captured
@@ -466,14 +499,13 @@ namespace FigForge
             }
 
             if (e.clipsContent && ShouldClip(go, e, index)) ApplyClip(go);
-            if (e.autoLayout != null) ApplyAutoLayout(go, e.autoLayout, ctx.scaleFactor);
             AttachNav(go, e, ctx);
 
             // children
             if (e.children != null)
                 foreach (var childId in e.children)
                     if (index.TryGetValue(childId, out var child))
-                        BuildElement(child, index, go.transform, ctx);
+                        BuildElement(child, index, go.transform, ctx, depth + 1);
 
             return go;
         }
@@ -1064,19 +1096,6 @@ namespace FigForge
             if (h == "center") return top ? TextAlignmentOptions.Top : bottom ? TextAlignmentOptions.Bottom : TextAlignmentOptions.Center;
             if (h == "right") return top ? TextAlignmentOptions.TopRight : bottom ? TextAlignmentOptions.BottomRight : TextAlignmentOptions.Right;
             return top ? TextAlignmentOptions.TopLeft : bottom ? TextAlignmentOptions.BottomLeft : TextAlignmentOptions.Left;
-        }
-
-        static void ApplyAutoLayout(GameObject go, AutoLayout al, float sf)
-        {
-            HorizontalOrVerticalLayoutGroup g = al.mode == "vertical"
-                ? go.AddComponent<VerticalLayoutGroup>()
-                : (HorizontalOrVerticalLayoutGroup)go.AddComponent<HorizontalLayoutGroup>();
-            g.spacing = al.spacing * sf;
-            g.padding = new RectOffset(
-                Mathf.RoundToInt(al.paddingLeft * sf), Mathf.RoundToInt(al.paddingRight * sf),
-                Mathf.RoundToInt(al.paddingTop * sf), Mathf.RoundToInt(al.paddingBottom * sf));
-            g.childControlWidth = false; g.childControlHeight = false;
-            g.childForceExpandWidth = false; g.childForceExpandHeight = false;
         }
 
         // opacityBaked: the graphic is a Figma-exported PNG whose alpha already
@@ -2824,9 +2843,17 @@ namespace FigForge
             // (the AutoHide + tolerance logic in FigForgeScrollRect.LateUpdate only
             // runs in play mode).
             public float ViewportHeight(ElementData e, float sf)
-                => hasMaskPart
-                    ? (e.canonical.parts["Mask"][3] - e.canonical.parts["Mask"][1]) * e.rect.h * sf
-                    : e.rect.h * sf - headerH - 2f * maskInset;
+            {
+                // e.rect may be absent on malformed elements — fall back to the
+                // laid-out viewport's own height (matches the guarded rect usage
+                // elsewhere in this file).
+                float rectH = e.rect != null
+                    ? e.rect.h * sf
+                    : (viewport != null ? viewport.rect.height : 0f);
+                return hasMaskPart
+                    ? (e.canonical.parts["Mask"][3] - e.canonical.parts["Mask"][1]) * rectH
+                    : rectH - headerH - 2f * maskInset;
+            }
         }
 
         static ScrollShell BuildScrollShell(ElementData e, Transform parent, BuildContext ctx, string kindLabel)
@@ -2889,9 +2916,15 @@ namespace FigForge
                 // row 1 reads as a grey band under the header. Snap the clip's top
                 // edge to the header bottom when the gap is that small — a
                 // deliberately deeper designer mask stays untouched.
-                float maskTopGap = (1f - c.parts["Mask"][3]) * e.rect.h * sf - headerH;
-                if (headerH > 0f && maskTopGap > 0.01f && maskTopGap <= 4f * sf)
-                    vrt.offsetMax = new Vector2(vrt.offsetMax.x, maskTopGap);
+                // e.rect may be absent on malformed elements — without a height the
+                // top-gap snap (an optional cosmetic refinement) can't be computed,
+                // so skip it and leave the anchored Mask box as-is.
+                if (e.rect != null)
+                {
+                    float maskTopGap = (1f - c.parts["Mask"][3]) * e.rect.h * sf - headerH;
+                    if (headerH > 0f && maskTopGap > 0.01f && maskTopGap <= 4f * sf)
+                        vrt.offsetMax = new Vector2(vrt.offsetMax.x, maskTopGap);
+                }
             }
             else
             {

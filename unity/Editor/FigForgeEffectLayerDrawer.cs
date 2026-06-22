@@ -49,8 +49,10 @@ namespace FigForge
                 Mathf.Max(32f, controlRect.xMax - kindRect.xMax - Gap), controlRect.height);
 
             EditorGUI.LabelField(labelRect, label);
+            EditorGUI.showMixedValue = enabled.hasMultipleDifferentValues;
             EditorGUI.BeginChangeCheck();
             bool nextEnabled = EditorGUI.Toggle(toggleRect, enabled.boolValue);
+            EditorGUI.showMixedValue = false;
             if (EditorGUI.EndChangeCheck())
             {
                 enabled.boolValue = nextEnabled;
@@ -59,17 +61,27 @@ namespace FigForge
 
             using (new EditorGUI.DisabledScope(!enabled.boolValue))
             {
+                EditorGUI.showMixedValue = kind.hasMultipleDifferentValues;
                 EditorGUI.BeginChangeCheck();
-                kind.enumValueIndex = EditorGUI.Popup(kindRect, Mathf.Clamp(kind.enumValueIndex, 0, KindLabels.Length - 1), KindLabels);
+                int nextKind = EditorGUI.Popup(kindRect, Mathf.Clamp(kind.enumValueIndex, 0, KindLabels.Length - 1), KindLabels);
                 if (EditorGUI.EndChangeCheck())
+                {
+                    kind.enumValueIndex = nextKind;
                     SeedVisibleEffect(kind, color, offset, blur, endBlur);
+                }
+                EditorGUI.showMixedValue = false;
 
                 var row2 = new Rect(position.x, row.yMax + Gap, position.width, row.height);
                 var row3 = new Rect(position.x, row2.yMax + Gap, position.width, row.height);
                 if ((FigForgeEffectKind)kind.enumValueIndex == FigForgeEffectKind.LayerBlur)
                 {
                     var modeRect = new Rect(colorRect.x, colorRect.y, colorRect.width, colorRect.height);
-                    blurMode.enumValueIndex = EditorGUI.Popup(modeRect, Mathf.Clamp(blurMode.enumValueIndex, 0, 1), BlurModeLabels);
+                    EditorGUI.showMixedValue = blurMode.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    int nextBlurMode = EditorGUI.Popup(modeRect, Mathf.Clamp(blurMode.enumValueIndex, 0, 1), BlurModeLabels);
+                    if (EditorGUI.EndChangeCheck())
+                        blurMode.enumValueIndex = nextBlurMode;
+                    EditorGUI.showMixedValue = false;
                     if ((FigForgeLayerBlurMode)blurMode.enumValueIndex == FigForgeLayerBlurMode.Progressive)
                     {
                         EditorGUI.PropertyField(row2, blur, new GUIContent("Start"));
@@ -84,7 +96,12 @@ namespace FigForge
                 {
                     float oldLabelWidth = EditorGUIUtility.labelWidth;
                     EditorGUIUtility.labelWidth = 0f;
-                    color.colorValue = EditorGUI.ColorField(colorRect, GUIContent.none, color.colorValue, false, true, true);
+                    EditorGUI.showMixedValue = color.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    var nextColor = EditorGUI.ColorField(colorRect, GUIContent.none, color.colorValue, false, true, true);
+                    if (EditorGUI.EndChangeCheck())
+                        color.colorValue = nextColor;
+                    EditorGUI.showMixedValue = false;
                     EditorGUIUtility.labelWidth = oldLabelWidth;
 
                     EditorGUI.PropertyField(row2, offset, new GUIContent("Offset"));

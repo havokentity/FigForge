@@ -1600,12 +1600,34 @@ namespace FigForge
         const int Res = 256;
         const int Rows = 8;
         const int StrokeRowOffset = 4;
-        static readonly Dictionary<string, Texture2D> _mem = new Dictionary<string, Texture2D>();
+        // HideAndDontSave Texture2Ds accumulate one per distinct fill/stroke stack and
+        // are never scene-collected, so cap residency by a byte budget and evict the
+        // least-recently-used entry (mirrors FigForgeCompositorCache.Trim). Each entry
+        // is Res*Rows*4 = 8KB, so this bounds the cache to a few thousand distinct stacks.
+        const long MaxBytes = 16L * 1024L * 1024L;
+        static readonly Dictionary<string, Entry> _mem = new Dictionary<string, Entry>();
+        static long _bytes;
+        static int _clock;
+
+#if UNITY_EDITOR
+        // Statics reset on domain reload but the HideAndDontSave textures survive it —
+        // without this hook every reload strands the whole cache on the GPU until the
+        // editor closes (matches FigForgeCompositorCache).
+        static FigForgePaintTextureCache()
+        {
+            UnityEditor.AssemblyReloadEvents.beforeAssemblyReload += Clear;
+        }
+#endif
 
         public static Texture2D Get(List<FigForgeFill> fills, List<FigForgeStrokeLayer> strokes)
         {
             string key = Key(fills, strokes);
-            if (_mem.TryGetValue(key, out var cached) && cached != null) return cached;
+            if (_mem.TryGetValue(key, out var cached) && cached.texture != null)
+            {
+                cached.lastUsed = ++_clock;
+                _mem[key] = cached;
+                return cached.texture;
+            }
 
             var tex = new Texture2D(Res, Rows, TextureFormat.RGBA32, false, true)
             {
@@ -1643,8 +1665,55 @@ namespace FigForge
             }
             tex.SetPixels(px);
             tex.Apply(false, true);
-            _mem[key] = tex;
+            _mem[key] = new Entry { texture = tex, bytes = (long)Res * Rows * 4L, lastUsed = ++_clock };
+            _bytes += (long)Res * Rows * 4L;
+            Trim();
             return tex;
+        }
+
+        static void Trim()
+        {
+            while (_bytes > MaxBytes && _mem.Count > 1)
+            {
+                string oldestKey = null;
+                Entry oldest = default;
+                foreach (var kv in _mem)
+                {
+                    if (oldestKey == null || kv.Value.lastUsed < oldest.lastUsed)
+                    {
+                        oldestKey = kv.Key;
+                        oldest = kv.Value;
+                    }
+                }
+                if (oldestKey == null) break;
+                _mem.Remove(oldestKey);
+                _bytes -= oldest.bytes;
+                DestroyTexture(oldest.texture);
+            }
+        }
+
+        public static void Clear()
+        {
+            foreach (var kv in _mem)
+                DestroyTexture(kv.Value.texture);
+            _mem.Clear();
+            _bytes = 0;
+        }
+
+        // HideAndDontSave textures are never scene-collected, so evicting one needs an
+        // explicit Destroy (matches FigForgeCompositorCache.ReleaseRT).
+        static void DestroyTexture(Texture2D tex)
+        {
+            if (tex == null) return;
+            if (Application.isPlaying) Object.Destroy(tex);
+            else Object.DestroyImmediate(tex);
+        }
+
+        struct Entry
+        {
+            public Texture2D texture;
+            public long bytes;
+            public int lastUsed;
         }
 
         static int VisibleFillIndex(List<FigForgeFill> fills, int visibleIndex)

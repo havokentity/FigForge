@@ -13,7 +13,7 @@
 
 ![Unity](https://img.shields.io/badge/Unity-2022.3%2B-000?style=for-the-badge&logo=unity)
 ![Figma](https://img.shields.io/badge/Figma-plugin-F24E1E?style=for-the-badge&logo=figma&logoColor=white)
-![Node](https://img.shields.io/badge/Node-%E2%89%A5%2020-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
+![Node](https://img.shields.io/badge/Node-%E2%89%A5%2022.6-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-compatible-8B5CF6?style=for-the-badge)
 
 **[Use it](#-if-you-just-want-to-use-it)** · **[How it works](#-what-happens-to-a-frame)** · **[Install](#-setting-it-up-properly)** · **[Canonical UI](#-the-canonical-trick)** · **[AI bridge](#-handing-the-wheel-to-an-agent)** · **[Troubleshoot](#-when-it-fights-you)**
@@ -289,6 +289,6 @@ Releases are cut from `vX.Y.Z` tags by CI → [`docs/releasing.md`](docs/releasi
 
 <br/>
 
-**Needs** &nbsp; Unity 2022.3+ (tested through 6000.x) · Node ≥ 20 · TextMeshPro · Newtonsoft JSON &nbsp;&nbsp;•&nbsp;&nbsp; **MIT** licensed
+**Needs** &nbsp; Unity 2022.3+ (tested through 6000.x) · Node ≥ 22.6 · TextMeshPro · Newtonsoft JSON &nbsp;&nbsp;•&nbsp;&nbsp; **MIT** licensed
 
 </div>

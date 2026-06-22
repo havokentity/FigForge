@@ -4,6 +4,9 @@
   "description": "FigForge MCP bridge — exposes Figma design data + Unity export to AI agents over MCP",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
   "bin": {
     "figforge-bridge": "dist/index.js"
   },

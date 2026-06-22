@@ -42,6 +42,7 @@ interface UiPrefs {
   componentsPage?: boolean;
   unityPort?: string;
   unityToken?: string;
+  bridgeToken?: string;
   fontFaceDilate?: string;
   windowPreset?: string;
   mcpDesired?: boolean;
@@ -737,7 +738,22 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
   // rendered as decimal text, and no 10× number[] heap copy beforehand. Unity's
   // FigForgeLiveImport.LiveAsset reads `b64` first and still accepts the legacy
   // `data` array from a 1.0-era plugin.
-  const wireScreens = screens.map((s) => ({
+  // Conservative scalability guard: the whole project is base64-encoded into one
+  // in-memory JSON body and POSTed in a single fetch — there is no streaming yet.
+  // Estimate the encoded payload (base64 ≈ 1.33× the raw bytes) and warn the user
+  // before a very large send that may exhaust memory or be refused by Unity.
+  // NOTE: this is only a heads-up; a real fix is per-screen/per-asset streaming.
+  const APPROX_BODY_LIMIT = 200 * 1024 * 1024; // ~200 MB encoded
+  let rawBytes = 0;
+  for (const s of screens) for (const a of s.assets) rawBytes += a.data.length;
+  const approxBodyBytes = Math.ceil(rawBytes * 4 / 3);
+  if (approxBodyBytes > APPROX_BODY_LIMIT) {
+    setStatus(
+      `This project is very large (~${Math.round(approxBodyBytes / (1024 * 1024))} MB encoded) — the single-request send may run out of memory or be refused by Unity. Sending anyway; if it fails, export fewer screens at a time.`,
+      true,
+    );
+  }
+  let wireScreens: Array<{ name: string; manifest: string; section?: string; role?: string; assets: Array<{ name: string; b64: string }> }> | null = screens.map((s) => ({
     name: s.name,
     manifest: s.manifest,
     section: s.section,
@@ -745,13 +761,18 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
     assets: s.assets.map((a) => ({ name: a.name, b64: bytesToBase64(a.data) })),
   }));
   try {
+    const body = JSON.stringify({ project, screens: wireScreens });
+    // Drop the large base64 wire copy before awaiting the fetch — the request
+    // already holds its own reference to `body`, so this lets the encoded screens
+    // be reclaimed instead of pinning two full copies for the whole round-trip.
+    wireScreens = null;
     const res = await fetch(url, {
       method: 'POST',
       // charset is explicit so Unity's HttpListener decodes the body as UTF-8 —
       // without it, ContentEncoding falls back to a legacy default that mangles
       // every non-ASCII char (e.g. "→") into '?'.
       headers: { 'Content-Type': 'application/json;charset=utf-8', 'X-FigForge-Token': unityToken() },
-      body: JSON.stringify({ project, screens: wireScreens }),
+      body,
     });
     if (res.ok) setStatus(`Sent ${screens.length} screen(s) → Unity. Building in the FigForge importer.`);
     else if (res.status === 401)
@@ -894,6 +915,14 @@ function setProgress(pct: number) { ($('#progress > div') as HTMLElement).style.
 // While "on" it auto-reconnects, so it goes green as soon as the server is up.
 // ---------------------------------------------------------------------------
 const BRIDGE_URL = 'ws://127.0.0.1:1994/ws';
+// When the bridge server runs with FIGFORGE_BRIDGE_TOKEN set, it rejects
+// unauthenticated /ws upgrades. The browser WebSocket API can't set request
+// headers, but the server accepts the token via the ?token= query param too,
+// so present it that way. No token configured → the bare URL (zero-config).
+function bridgeUrl(): string {
+  const token = readPrefs().bridgeToken?.trim();
+  return token ? `${BRIDGE_URL}?token=${encodeURIComponent(token)}` : BRIDGE_URL;
+}
 let socket: WebSocket | null = null;
 let wantConnected = false;
 let reconnectTimer: number | null = null;
@@ -924,7 +953,7 @@ function connectMcp() {
   if (socket) return;
   setMcp('connecting');
   try {
-    socket = new WebSocket(BRIDGE_URL);
+    socket = new WebSocket(bridgeUrl());
     socket.onopen = () => { bridgeLog('connected'); setMcp('connected'); };
     socket.onclose = () => {
       socket = null;
@@ -933,7 +962,19 @@ function connectMcp() {
     };
     socket.onerror = () => bridgeLog('socket error');
     socket.onmessage = (ev) => {
-      try { post({ type: 'mcp-request', payload: withCurrentExportSettings(JSON.parse(ev.data)) }); }
+      try {
+        const parsed = JSON.parse(ev.data);
+        // Inbound allow-list: these bridge messages flow straight into
+        // document-mutating handlers in main, so only forward `type`s the bridge
+        // is actually allowed to send. Mirrors the `bridgeToolName` z.enum in
+        // server/src/schema.ts (the plugin can't import server code). A hostile
+        // local process on the bridge port can't drive an arbitrary handler.
+        if (!parsed || typeof parsed.type !== 'string' || !BRIDGE_COMMAND_TYPES.has(parsed.type)) {
+          bridgeLog('ignored message with unknown type: ' + String(parsed?.type));
+          return;
+        }
+        post({ type: 'mcp-request', payload: withCurrentExportSettings(parsed) });
+      }
       catch { bridgeLog('bad message from server'); }
     };
   } catch (e) {
@@ -941,6 +982,25 @@ function connectMcp() {
     if (wantConnected) scheduleReconnect();
   }
 }
+
+// Allow-listed inbound bridge command types. MUST stay in sync with the
+// `bridgeToolName` z.enum in server/src/schema.ts — the plugin can't import
+// server code, so the set is duplicated here verbatim.
+const BRIDGE_COMMAND_TYPES = new Set<string>([
+  'get_metadata',
+  'get_document',
+  'get_selection',
+  'get_node',
+  'list_frames',
+  'list_screens',
+  'get_node_details',
+  'get_design_context',
+  'get_screenshot',
+  'export_unity',
+  'export_project_unity',
+  'create_canonical',
+  'create_shell',
+]);
 
 function withCurrentExportSettings(payload: { type?: string; params?: Record<string, unknown> }) {
   if (payload.type !== 'export_unity' && payload.type !== 'export_project_unity') return payload;
@@ -976,6 +1036,24 @@ $('#mcpCtl').addEventListener('click', () => {
     connectMcp();
   }
 });
+
+// Optional bridge token (only needed when the server sets FIGFORGE_BRIDGE_TOKEN).
+// Saved as it's typed; a committed change (blur/Enter) reconnects so the new
+// credential is presented on the next upgrade.
+const bridgeTokenEl = document.getElementById('bridgeToken') as HTMLInputElement | null;
+if (bridgeTokenEl) {
+  const saved = readPrefs().bridgeToken;
+  if (saved) bridgeTokenEl.value = saved;
+  bridgeTokenEl.addEventListener('input', () => savePrefs({ bridgeToken: bridgeTokenEl.value.trim() }));
+  bridgeTokenEl.addEventListener('change', () => {
+    savePrefs({ bridgeToken: bridgeTokenEl.value.trim() });
+    if (!wantConnected) return;
+    if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (socket) { socket.close(); socket = null; }
+    connectMcp();
+  });
+}
+
 setMcp('off');
 if (readPrefs().mcpDesired) {
   wantConnected = true;

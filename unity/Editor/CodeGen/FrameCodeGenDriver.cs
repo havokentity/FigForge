@@ -54,8 +54,14 @@ namespace FigForge
                 rawIds.Add(IdentifierUtil.ToIdentifier(
                     IdentifierUtil.StripSerializeMarker(!string.IsNullOrEmpty(e.displayName) ? e.displayName : e.name)));
             }
+            // Seed the dedupe scope with the inherited base-class members (FigForgeFrame +
+            // FigForgeFrameElement) so an accessor named like one (Show, ScreenKey, isVisible,
+            // …) is suffixed instead of shadowing it (CS0108). The pass produces identifiers
+            // for frame accessors, group scopes, AND group-child accessors, so it reserves the
+            // union of both bases.
             var ids = IdentifierUtil.Dedupe(rawIds, (orig, renamed) =>
-                Debug.LogWarning($"[FigForge] frame '{className}': duplicate accessor name '{orig}' → '{renamed}'."));
+                Debug.LogWarning($"[FigForge] frame '{className}': accessor name '{orig}' collides with a base member or sibling → '{renamed}'."),
+                IdentifierUtil.ReservedAccessorNames);
 
             var index = new Dictionary<string, ElementData>();
             foreach (var e in m.elements)
@@ -161,6 +167,9 @@ namespace FigForge
             var taken = new HashSet<string>(System.StringComparer.Ordinal);
             foreach (var m in members) taken.Add(m.Key);
             taken.Add("__ScreenKey");
+            // Also reserve inherited base-class members so a collection accessor (and its
+            // "_<Name>" backing field) named like one doesn't shadow it (CS0108).
+            foreach (var r in IdentifierUtil.ReservedAccessorNames) taken.Add(r);
 
             // Bucket candidate leaves by (scope parent, csharpType, stem), first-seen order.
             var order = new List<(string scope, string type, string stem)>();
@@ -231,7 +240,12 @@ namespace FigForge
 
                 changed |= WriteGroupFiles(f); // one component per group, in Frames/<Frame>.g/
 
-                changed |= WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f));
+                // A section shares `partial class Frames` with every frame's `<Frame> <Frame>`
+                // member; reserve this frame's section against ALL frame class names (gathered
+                // from sibling Frames.<class>.g.cs filenames + this frame) so a section that equals
+                // a frame's class name is renamed instead of emitting a duplicate member (CS0102).
+                var frameClassNames = SiblingFrameClassNames(f.className);
+                changed |= WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f, frameClassNames));
                 changed |= WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
             }
 
@@ -239,7 +253,12 @@ namespace FigForge
             string dialogsCs = GenRoot + "/Dialogs." + f.className + ".g.cs";
             if (f.isOverlay && FrameCodeGen.HasDialogs(f))
             {
-                changed |= WriteIfChanged(dialogsCs, FrameCodeGen.EmitDialogsForFrame(f));
+                // Every per-overlay file feeds the SAME `partial class Dialogs`; two overlays whose
+                // modals sanitize to one identifier would emit duplicate members across files
+                // (CS0102, invisible to WriteIfChanged). Reserve against the dialog identifiers
+                // other overlays already own so this file suffixes its colliding accessors.
+                var reservedDialogIds = SiblingDialogIdentifiers(dialogsCs);
+                changed |= WriteIfChanged(dialogsCs, FrameCodeGen.EmitDialogsForFrame(f, reservedDialogIds));
                 changed |= WriteIfChanged(GenRoot + "/Dialogs.Core.g.cs", FrameCodeGen.EmitDialogsCore());
             }
             else if (File.Exists(dialogsCs))
@@ -304,6 +323,58 @@ namespace FigForge
             if (File.Exists(path) && File.ReadAllText(path) == content) return false;
             File.WriteAllText(path, content);
             return true;
+        }
+
+        // ---- cross-frame identifier reservation (CS0102 guards) -----------------------
+        // Frames are generated one at a time, each writing its own `Frames.<class>.g.cs` /
+        // `Dialogs.<class>.g.cs` into a SHARED partial class. A duplicate member emitted by a
+        // sibling file is a cross-file CS0102 that WriteIfChanged can't catch (it only diffs the
+        // one file). These helpers read what siblings already own so the current file can dodge it.
+
+        // Every frame's class name, harvested from the sibling `Frames.<class>.g.cs` filenames
+        // (the filename is the authoritative, body-free source) plus the frame being written.
+        static HashSet<string> SiblingFrameClassNames(string selfClassName)
+        {
+            var names = new HashSet<string>(System.StringComparer.Ordinal);
+            if (!string.IsNullOrEmpty(selfClassName)) names.Add(selfClassName);
+            if (!Directory.Exists(GenRoot)) return names;
+            const string prefix = "Frames.";
+            const string suffix = ".g.cs";
+            foreach (var file in Directory.GetFiles(GenRoot, "Frames.*.g.cs"))
+            {
+                string name = Path.GetFileName(file);
+                if (name == "Frames.Core.g.cs") continue;          // the fixed core, not a frame
+                if (name.Length <= prefix.Length + suffix.Length) continue;
+                names.Add(name.Substring(prefix.Length, name.Length - prefix.Length - suffix.Length));
+            }
+            return names;
+        }
+
+        // The dialog accessor identifiers owned by OTHER overlay files — parsed from the stable
+        // `public static FigForgeModal <id> =>` lines this generator emits. `selfPath` (the file
+        // about to be rewritten) is skipped so a frame never reserves against its own prior output.
+        static HashSet<string> SiblingDialogIdentifiers(string selfPath)
+        {
+            var ids = new HashSet<string>(System.StringComparer.Ordinal);
+            if (!Directory.Exists(GenRoot)) return ids;
+            string self = Path.GetFullPath(selfPath);
+            const string marker = "public static FigForgeModal ";
+            foreach (var file in Directory.GetFiles(GenRoot, "Dialogs.*.g.cs"))
+            {
+                if (Path.GetFileName(file) == "Dialogs.Core.g.cs") continue;
+                if (Path.GetFullPath(file) == self) continue;       // don't reserve against ourselves
+                foreach (var line in File.ReadAllLines(file))
+                {
+                    int at = line.IndexOf(marker, System.StringComparison.Ordinal);
+                    if (at < 0) continue;
+                    int start = at + marker.Length;
+                    int end = start;
+                    while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_' || line[end] == '@'))
+                        end++;
+                    if (end > start) ids.Add(line.Substring(start, end - start));
+                }
+            }
+            return ids;
         }
     }
 }

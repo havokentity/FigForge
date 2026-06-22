@@ -69,7 +69,6 @@ Each `elements[]` entry:
 | `asset` / `assetBounds` | PNG filename + pixel size |
 | `canonical` | `{kind, ref, instanceName, label}` |
 | `interactive`, `clipsContent`, `merged` | flags |
-| `autoLayout` | mode/padding/spacing (applied as layout group) |
 | `children[]` | child element ids |
 
 `diagnostics` is an asset/font report with a `summary` and `issues[]`. It flags
