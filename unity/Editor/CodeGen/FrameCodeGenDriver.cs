@@ -84,6 +84,7 @@ namespace FigForge
                 });
             }
             AssignScopeTypeNames(className, members);
+            DetectCollections(className, members);
 
             return new FrameModel
             {
@@ -144,6 +145,59 @@ namespace FigForge
                 m.groupTypeName = typeName;
                 m.csharpType = typeName; // the group ref is typed as its generated component
                 members[i] = m;
+            }
+        }
+
+        // Repeated same-typed leaf siblings whose identifiers share a stem + trailing index —
+        // "Item"/"Item_2"/"Item_3" (four Figma layers all named "Item", deduped) or "Slot0"/
+        // "Slot1" (designer-numbered) — collapse into ONE ordered IReadOnlyList<T> accessor named
+        // after the pluralised stem. Per-element members survive (registered + wired individually);
+        // only their single accessors are suppressed. Auto, naming-convention based, scope-aware:
+        // members only group with siblings sharing the same scope parent and C# type.
+        static void DetectCollections(string className, List<FrameMember> members)
+        {
+            // Names already taken by individual members or the frame's reserved key — a collection
+            // accessor (and its "_<Name>" backing field) must dodge them.
+            var taken = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (var m in members) taken.Add(m.Key);
+            taken.Add("__ScreenKey");
+
+            // Bucket candidate leaves by (scope parent, csharpType, stem), first-seen order.
+            var order = new List<(string scope, string type, string stem)>();
+            var groups = new Dictionary<(string, string, string), List<int>>();
+            for (int i = 0; i < members.Count; i++)
+            {
+                var m = members[i];
+                if (m.isGroup) continue;                                   // scopes never collect
+                string stem = IdentifierUtil.CollectionStem(m.Key);
+                if (string.IsNullOrEmpty(stem)) continue;                  // pure-digit name → no stem
+                var key = (m.scopeParentId ?? "", m.csharpType ?? "", stem);
+                if (!groups.TryGetValue(key, out var list)) { list = new List<int>(); groups[key] = list; order.Add(key); }
+                list.Add(i);
+            }
+
+            foreach (var key in order)
+            {
+                var idxs = groups[key];
+                if (idxs.Count < 2) continue;                              // a lone Slot0 stays a single member
+
+                string accessor = IdentifierUtil.Pluralize(key.stem);
+                if (!taken.Add(accessor))
+                {
+                    Debug.LogWarning($"[FigForge] frame '{className}': collection '{accessor}' (from '{key.stem}*') " +
+                        "collides with an existing accessor — left as individual members.");
+                    continue;
+                }
+
+                idxs.Sort((a, b) => IdentifierUtil.CollectionIndex(members[a].Key)
+                                        .CompareTo(IdentifierUtil.CollectionIndex(members[b].Key)));
+                foreach (int i in idxs)
+                {
+                    var m = members[i];
+                    m.collectionName = accessor;
+                    m.collectionIndex = IdentifierUtil.CollectionIndex(m.Key);
+                    members[i] = m;
+                }
             }
         }
 

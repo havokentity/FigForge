@@ -33,6 +33,13 @@ namespace FigForge
         public bool isGroup;
         public string groupTypeName;
 
+        // Collection membership: when several same-typed leaf siblings share a stem +
+        // trailing index ("Item"/"Item_2"/…), they collapse into one IReadOnlyList<T>
+        // accessor. collectionName is that accessor (pluralised stem); the element is
+        // still registered + wired individually, only its single accessor is suppressed.
+        public string collectionName;
+        public int collectionIndex;
+
         /// <summary>Registry key + serialized-field stem. The property keeps any `@` escape,
         /// but the string key and backing field drop it: `@class` → key "class", field "_class".</summary>
         public string Key => (identifier ?? "").TrimStart('@');
@@ -152,14 +159,26 @@ namespace FigForge
         static void EmitAccessorsAndFields(StringBuilder sb, List<FrameMember> members)
         {
             if (members.Count == 0) return;
+            var collections = Collections(members);
             sb.AppendLine();
             sb.AppendLine("        // ──────── Accessors ────────");
             foreach (var m in members)
-                sb.AppendLine("        public " + m.csharpType + " " + m.identifier + " => __Get(ref " + m.FieldName + ", \"" + Escape(m.Key) + "\");");
+                if (string.IsNullOrEmpty(m.collectionName))
+                    sb.AppendLine("        public " + m.csharpType + " " + m.identifier + " => __Get(ref " + m.FieldName + ", \"" + Escape(m.Key) + "\");");
+            foreach (var c in collections)
+            {
+                string t = c[0].csharpType;
+                string keys = string.Join(", ", c.ConvertAll(m => "\"" + Escape(m.Key) + "\""));
+                sb.AppendLine("        public System.Collections.Generic.IReadOnlyList<" + t + "> " + c[0].collectionName
+                            + " => __GetList(ref _" + c[0].collectionName + ", " + keys + ");");
+            }
             sb.AppendLine();
             sb.AppendLine("        // ──────── Element references (serialized; auto-wired on import) ────────");
             foreach (var m in members)
-                sb.AppendLine("        [SerializeField] " + m.csharpType + " " + m.FieldName + ";");
+                if (string.IsNullOrEmpty(m.collectionName))
+                    sb.AppendLine("        [SerializeField] " + m.csharpType + " " + m.FieldName + ";");
+            foreach (var c in collections)
+                sb.AppendLine("        [SerializeField] " + c[0].csharpType + "[] _" + c[0].collectionName + ";");
         }
 
         static void EmitWireBody(StringBuilder sb, List<FrameMember> members)
@@ -167,8 +186,42 @@ namespace FigForge
             sb.AppendLine("        {");
             sb.AppendLine("            if (reg == null) return;");
             foreach (var m in members)
-                sb.AppendLine("            " + m.FieldName + " = reg.Get<" + m.csharpType + ">(\"" + m.Key + "\");");
+                if (string.IsNullOrEmpty(m.collectionName))
+                    sb.AppendLine("            " + m.FieldName + " = reg.Get<" + m.csharpType + ">(\"" + m.Key + "\");");
+            foreach (var c in Collections(members))
+            {
+                string t = c[0].csharpType;
+                string inits = string.Join(", ", c.ConvertAll(m => "reg.Get<" + t + ">(\"" + m.Key + "\")"));
+                sb.AppendLine("            _" + c[0].collectionName + " = new " + t + "[] { " + inits + " };");
+            }
             sb.AppendLine("        }");
+        }
+
+        // Group a scope's collection members (collectionName set) into ordered lists, in
+        // first-seen order so generated output is stable; each list is sorted by element index.
+        static List<List<FrameMember>> Collections(List<FrameMember> members)
+        {
+            var order = new List<string>();
+            var map = new Dictionary<string, List<FrameMember>>(StringComparer.Ordinal);
+            foreach (var m in members)
+            {
+                if (string.IsNullOrEmpty(m.collectionName)) continue;
+                if (!map.TryGetValue(m.collectionName, out var list))
+                {
+                    list = new List<FrameMember>();
+                    map[m.collectionName] = list;
+                    order.Add(m.collectionName);
+                }
+                list.Add(m);
+            }
+            var result = new List<List<FrameMember>>(order.Count);
+            foreach (var name in order)
+            {
+                var list = map[name];
+                list.Sort((a, b) => a.collectionIndex.CompareTo(b.collectionIndex));
+                result.Add(list);
+            }
+            return result;
         }
 
         // Frame-level members (no scope parent) → emitted on the frame. The rest belong to a

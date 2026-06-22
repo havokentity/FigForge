@@ -67,6 +67,21 @@ namespace FigForge
             return field;
         }
 
+        // Lazy, null-safe resolve for a generated collection accessor: returns the wired array,
+        // filling any null slot (or a fresh array) from the registry by the element's key.
+        protected internal System.Collections.Generic.IReadOnlyList<T> __GetList<T>(ref T[] field, params string[] names) where T : Component
+        {
+            if (field == null || field.Length != names.Length) field = new T[names.Length];
+            FigForgeScreen reg = null;
+            for (int i = 0; i < names.Length; i++)
+            {
+                if (field[i] != null) continue;
+                if (reg == null) reg = GetComponent<FigForgeScreen>();
+                if (reg != null) field[i] = reg.Get<T>(names[i]);
+            }
+            return field;
+        }
+
         internal void BindOnce()
         {
             if (_bound) return;

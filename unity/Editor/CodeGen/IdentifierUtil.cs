@@ -99,5 +99,60 @@ namespace FigForge
             }
             return result;
         }
+
+        // ---------------------------------------------------------------------
+        // Collection detection helpers. Repeated same-typed siblings whose
+        // identifiers share a stem + trailing index — "Item"/"Item_2"/"Item_3"
+        // (from duplicate Figma names, deduped above) or "Slot0"/"Slot1"
+        // (designer-numbered) — collapse into one ordered list accessor.
+        // ---------------------------------------------------------------------
+
+        /// <summary>The stem of an identifier for collection grouping: the name with a trailing
+        /// run of digits removed (and a single trailing '_' dropped if it remains), e.g.
+        /// "Slot12"→"Slot", "Item_2"→"Item". A name with no trailing digit IS its own stem
+        /// ("Item"→"Item") so a deduped bare lead groups with its "_2"/"_3" siblings. Returns ""
+        /// for a pure-digit name (no stem to share).</summary>
+        public static string CollectionStem(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return "";
+            int cut = id.Length;
+            while (cut > 0 && id[cut - 1] >= '0' && id[cut - 1] <= '9') cut--;
+            if (cut == id.Length) return id;            // no trailing digit → the name is its own stem
+            string stem = id.Substring(0, cut);
+            if (stem.EndsWith("_", StringComparison.Ordinal)) stem = stem.Substring(0, stem.Length - 1);
+            return stem;
+        }
+
+        /// <summary>Parsed trailing-digit index of an identifier, for ordering within a collection.
+        /// A name with no trailing digit (a deduped bare lead like "Item") returns -1 so it sorts
+        /// first, ahead of "Item_2". Overlong digit runs are clamped defensively.</summary>
+        public static int CollectionIndex(string id)
+        {
+            if (string.IsNullOrEmpty(id) || id[id.Length - 1] < '0' || id[id.Length - 1] > '9') return -1;
+            int cut = id.Length;
+            while (cut > 0 && id[cut - 1] >= '0' && id[cut - 1] <= '9') cut--;
+            string digits = id.Substring(cut);
+            if (digits.Length > 9) digits = digits.Substring(digits.Length - 9);
+            return int.Parse(digits);
+        }
+
+        /// <summary>The collection accessor name: the stem, naively pluralised. "Slot"→"Slots",
+        /// "Entry"→"Entries", "Box"→"Boxes". A stem ending in '_' keeps it: "Slot_"→"Slot_s".</summary>
+        public static string Pluralize(string stem)
+        {
+            if (string.IsNullOrEmpty(stem)) return stem;
+            char last = stem[stem.Length - 1];
+            if (stem.Length >= 2 && (last == 'y' || last == 'Y'))
+            {
+                char prev = stem[stem.Length - 2];
+                bool prevVowel = "aeiouAEIOU".IndexOf(prev) >= 0;
+                if (!prevVowel) return stem.Substring(0, stem.Length - 1) + (char.IsUpper(last) ? "IES" : "ies");
+            }
+            if (last == 's' || last == 'x' || last == 'z' ||
+                stem.EndsWith("ch", StringComparison.OrdinalIgnoreCase) ||
+                stem.EndsWith("sh", StringComparison.OrdinalIgnoreCase))
+                return stem + (char.IsUpper(last) ? "ES" : "es");
+            return stem + "s";
+        }
     }
 }
