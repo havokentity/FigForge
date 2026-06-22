@@ -724,7 +724,7 @@ $('#exportFrameUnityBtn').addEventListener('click', () => {
 function unityImportUrl(): string {
   const raw = ($('#unityPort') as HTMLInputElement)?.value;
   const port = Math.min(65535, Math.max(1024, parseInt(raw, 10) || 1995));
-  return `http://127.0.0.1:${port}/import`;
+  return `http://localhost:${port}/import`;
 }
 
 function unityToken(): string {
@@ -914,7 +914,7 @@ function setProgress(pct: number) { ($('#progress > div') as HTMLElement).style.
 // start/stop toggle in the header; the dot shows the live connection state.
 // While "on" it auto-reconnects, so it goes green as soon as the server is up.
 // ---------------------------------------------------------------------------
-const BRIDGE_URL = 'ws://127.0.0.1:1994/ws';
+const BRIDGE_URL = 'ws://localhost:1994/ws';
 // When the bridge server runs with FIGFORGE_BRIDGE_TOKEN set, it rejects
 // unauthenticated /ws upgrades. The browser WebSocket API can't set request
 // headers, but the server accepts the token via the ?token= query param too,

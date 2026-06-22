@@ -102,6 +102,7 @@ namespace FigForge
             {
                 var l = new HttpListener();
                 l.Prefixes.Add($"http://127.0.0.1:{Port}/");
+                l.Prefixes.Add($"http://localhost:{Port}/");
                 l.Start();
                 _listener = l;
                 Status = $"listening on {Url}";
@@ -306,7 +307,11 @@ namespace FigForge
             string projectJsonAsset = $"{destAssets}/project.json";
             Status = $"building {projName} ({index.screens.Length} screen(s))…";
             var w = EditorWindow.GetWindow<FigForgeImporterWindow>(false, "FigForge", true);
-            w.LiveBuildPage(projectJsonAsset);
+            if (!w.LiveBuildPage(projectJsonAsset))
+            {
+                Status = $"import failed: {projName} build rejected";
+                throw new Exception($"bundle written, but importer rejected {projectJsonAsset}");
+            }
             Status = $"imported {projName} ✓ ({DateTime.Now:HH:mm:ss})";
             Debug.Log($"[FigForge] live import: built '{projName}' from Figma → {destAssets}");
         }
@@ -331,7 +336,7 @@ namespace FigForge
         [Serializable] class ProjIndex
         {
             public string schema = "figforge/project";
-            public string version = "1.0";
+            public string version = "2.0";
             public string generator = "FigForge";
             public string name;
             public string exportedAt;

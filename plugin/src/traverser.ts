@@ -50,6 +50,14 @@ export interface CanonicalTagData {
   slots?: number;
 }
 
+export async function mainComponentOf(node: InstanceNode): Promise<ComponentNode | null> {
+  try {
+    return await node.getMainComponentAsync();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The numeric payload stored in a node's FigForge canonical tag. Deliberately NOT
  * folded into detectCanonical: a toggle's tag carries a stale creation-time 'off'
@@ -80,9 +88,9 @@ export function canonicalTagData(node: SceneNode): CanonicalTagData {
  *   2. a node carrying the tag itself,
  *   3. the `Btn_<instance>_<ref>` name convention (fallback).
  */
-export function detectCanonical(node: SceneNode): CanonicalRef | null {
+export async function detectCanonical(node: SceneNode): Promise<CanonicalRef | null> {
   if (node.type === 'INSTANCE') {
-    const mc = (node as InstanceNode).mainComponent;
+    const mc = await mainComponentOf(node as InstanceNode);
     const tag = mc ? parseTag(mc.getSharedPluginData(PLUGIN_DATA_NS, PLUGIN_DATA_KEY)) : null;
     if (tag) return { kind: tag.kind, ref: resolveRef(tag.ref, mc), instanceName: sanitize(node.name) };
   }
@@ -221,21 +229,21 @@ const PASSTHROUGH_TYPES = new Set([...CONTAINER_TYPES, 'SECTION']);
  * single sprite — dissolving them would scatter the glyph). The export root is
  * filtered separately by the exporter (no parent to promote into).
  */
-export function canPassthrough(node: SceneNode): boolean {
+export async function canPassthrough(node: SceneNode): Promise<boolean> {
   if (!PASSTHROUGH_TYPES.has(node.type) || !hasChildren(node)) return false;
   if (!node.children.some(isVisible)) return false;
-  if (detectCanonical(node)) return false;
+  if (await detectCanonical(node)) return false;
   if (isIconContainer(node)) return false;
   return true;
 }
 
 /** Build the UI layer tree for a selected root node. */
-export function buildTree(root: SceneNode, excluded: Set<string>): TreeNode {
-  function walk(node: SceneNode, depth: number): TreeNode {
-    const canonical = detectCanonical(node);
+export async function buildTree(root: SceneNode, excluded: Set<string>): Promise<TreeNode> {
+  async function walk(node: SceneNode, depth: number): Promise<TreeNode> {
+    const canonical = await detectCanonical(node);
     const childNodes: TreeNode[] =
       hasChildren(node) && !isIconContainer(node)
-        ? node.children.map((c) => walk(c, depth + 1))
+        ? await Promise.all(node.children.map((c) => walk(c, depth + 1)))
         : [];
     return {
       id: node.id,
@@ -246,7 +254,7 @@ export function buildTree(root: SceneNode, excluded: Set<string>): TreeNode {
       visible: isVisible(node) && !excluded.has(node.id),
       canExportPng: node.type === 'TEXT' || isExportable(node),
       canMerge: canMerge(node),
-      canPassthrough: depth > 0 && canPassthrough(node),
+      canPassthrough: depth > 0 && await canPassthrough(node),
       passthroughByName: isPassthroughName(node.name),
       canonicalRef: canonical ? canonical.ref : undefined,
       children: childNodes,

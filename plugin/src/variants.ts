@@ -240,10 +240,10 @@ function variantEntriesFromObject(
   return out;
 }
 
-export function extractVariantProps(node: SceneNode): CanonicalVariantProps | undefined {
+export async function extractVariantProps(node: SceneNode): Promise<CanonicalVariantProps | undefined> {
   const entries: VariantInput[] = [];
   const inst = node.type === 'INSTANCE' ? node as InstanceNode : undefined;
-  const main = inst?.mainComponent ?? (node.type === 'COMPONENT' ? node as ComponentNode : null);
+  const main = inst ? await mainComponentOf(inst) : (node.type === 'COMPONENT' ? node as ComponentNode : null);
   const set = main?.parent?.type === 'COMPONENT_SET' ? main.parent as ComponentSetNode : null;
   const definitions = set?.componentPropertyDefinitions ?? main?.componentPropertyDefinitions;
 
@@ -266,4 +266,12 @@ export function extractVariantProps(node: SceneNode): CanonicalVariantProps | un
 
 export function variantValueOriginal(variants: CanonicalVariantProps | undefined, axis: string): string | undefined {
   return variants?.original?.[axis];
+}
+
+async function mainComponentOf(node: InstanceNode): Promise<ComponentNode | null> {
+  try {
+    return await node.getMainComponentAsync();
+  } catch {
+    return null;
+  }
 }

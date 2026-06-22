@@ -52,6 +52,7 @@ import {
   isEmptyPaint,
   isExportable,
   isIconContainer,
+  mainComponentOf,
 } from './traverser';
 import { mapTransform, rootTransform } from './mapper';
 import { buildVectorDrawing } from './vector';
@@ -718,9 +719,9 @@ function canonicalValue(node: SceneNode, kind: CanonicalKind, variants?: Canonic
   return undefined;
 }
 
-function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef | undefined {
+async function buildCanonical(ref: CanonicalRef | null, node: SceneNode): Promise<CanonicalRef | undefined> {
   if (!ref) return undefined;
-  const variantProps = extractVariantProps(node);
+  const variantProps = await extractVariantProps(node);
   const textLabel = firstTextLabel(node);
   const c: CanonicalRef = {
     kind: ref.kind,
@@ -769,7 +770,7 @@ function buildCanonical(ref: CanonicalRef | null, node: SceneNode): CanonicalRef
   }
   // The canonical COMPONENT's label font — the generated prefab/definition uses
   // this, so the prefab mirrors the component (not whatever an instance overrode).
-  const comp = node.type === 'INSTANCE' ? (node as InstanceNode).mainComponent : null;
+  const comp = node.type === 'INSTANCE' ? await mainComponentOf(node as InstanceNode) : null;
   const defNode = comp ? firstTextNode(comp) : (node.type === 'COMPONENT' ? labelNode : undefined);
   if (defNode && defNode.fontName !== figma.mixed) {
     const fn = defNode.fontName as FontName;
@@ -970,12 +971,12 @@ export async function exportDesign(
   // containers (which flatten to a single sprite). Marked via the per-element
   // toggle (unwrapIds) or the '~' / 'unwrap' / 'passthrough' name convention.
   const PASSTHROUGH_TYPES = new Set<string>(['FRAME', 'GROUP', 'COMPONENT', 'INSTANCE', 'COMPONENT_SET', 'SECTION']);
-  function isUnwrap(node: SceneNode): boolean {
+  async function isUnwrap(node: SceneNode): Promise<boolean> {
     if (node.id === root.id) return false;
     if (!PASSTHROUGH_TYPES.has(node.type) || !('children' in node)) return false;
     const kids = (node as ChildrenMixin).children as SceneNode[];
     if (!kids.some((c) => (c as unknown as { visible?: boolean }).visible !== false)) return false;
-    if (detectCanonical(node)) return false;        // canonical controls own their build path
+    if (await detectCanonical(node)) return false;  // canonical controls own their build path
     if (isExportable(node)) return false;           // icon container / bakeable leaf — keep its bake
     if (mergedIds.has(node.id) || forcedPngIds.has(node.id)) return false; // merge/raster win
     if (options.autoMerge && (node as unknown as { locked?: boolean }).locked === true) return false;
@@ -985,22 +986,22 @@ export async function exportDesign(
   // Direct children of `container` with every pass-through child replaced by ITS
   // (recursively resolved) children, so chains of nested unwrap frames dissolve in
   // one pass. Hidden/excluded nodes drop out here (plan would skip them anyway).
-  function effectiveChildren(container: SceneNode): SceneNode[] {
+  async function effectiveChildren(container: SceneNode): Promise<SceneNode[]> {
     if (!('children' in container)) return [];
     const out: SceneNode[] = [];
     for (const c of (container as ChildrenMixin).children as SceneNode[]) {
       if ((c as unknown as { visible?: boolean }).visible === false || excludedIds.has(c.id)) continue;
-      if (isUnwrap(c)) out.push(...effectiveChildren(c));
+      if (await isUnwrap(c)) out.push(...await effectiveChildren(c));
       else out.push(c);
     }
     return out;
   }
 
-  function plan(node: SceneNode, parentId: string | null, insideMerge: boolean, layoutParent: SceneNode | null) {
+  async function plan(node: SceneNode, parentId: string | null, insideMerge: boolean, layoutParent: SceneNode | null): Promise<void> {
     if ((node as unknown as { visible?: boolean }).visible === false) return;
     if (excludedIds.has(node.id)) return;
 
-    const canonicalRef = detectCanonical(node);
+    const canonicalRef = await detectCanonical(node);
     const isMergeRoot =
       !insideMerge &&
       (mergedIds.has(node.id) ||
@@ -1047,7 +1048,7 @@ export async function exportDesign(
           // Pass-through children dissolve here: each marked descendant is replaced
           // by its own children, so this node parents the promoted grandchildren
           // directly (and their transforms recompute against it — see below).
-          ? effectiveChildren(node)
+          ? await effectiveChildren(node)
           : [];
 
     const p: Plan = { node, parentId, merged: isMergeRoot, canonicalRef, exportable, bakeSelf, children, layoutParent };
@@ -1057,9 +1058,9 @@ export async function exportDesign(
     // Every child plans against THIS node as its effective layout parent — for a
     // promoted grandchild that's the nearest surviving ancestor, not its (skipped)
     // Figma parent.
-    for (const c of children) plan(c, node.id, isMergeRoot, node);
+    for (const c of children) await plan(c, node.id, isMergeRoot, node);
   }
-  plan(root, null, false, null);
+  await plan(root, null, false, null);
 
   for (const p of plans) {
     diagnoseUnsupportedPaints(p.node);
@@ -1182,9 +1183,9 @@ export async function exportDesign(
     const out: CanonicalStates = {};
     for (const [key, layerName] of STATE_LAYERS) {
       const variantLayer =
-        key === 'normal' ? componentSetStateSource(master, 'normal')
-          : key === 'highlighted' ? componentSetStateSource(master, 'hover')
-            : key === 'pressed' ? componentSetStateSource(master, 'pressed')
+        key === 'normal' ? await componentSetStateSource(master, 'normal')
+          : key === 'highlighted' ? await componentSetStateSource(master, 'hover')
+            : key === 'pressed' ? await componentSetStateSource(master, 'pressed')
               : undefined;
       const layer = kids.find((c) => c.name.toLowerCase() === layerName) ?? variantLayer;
       if (!layer || !('exportAsync' in layer)) continue;
@@ -1565,21 +1566,21 @@ export async function exportDesign(
     return true;
   }
 
-  function componentSetStateSource(master: SceneNode, state: string): SceneNode | undefined {
+  async function componentSetStateSource(master: SceneNode, state: string): Promise<SceneNode | undefined> {
     const comp = master.type === 'COMPONENT' ? master as ComponentNode : undefined;
     const set = comp?.parent?.type === 'COMPONENT_SET' ? comp.parent as ComponentSetNode : undefined;
     if (!set) return undefined;
-    const base = extractVariantProps(master);
+    const base = await extractVariantProps(master);
     for (const child of set.children as SceneNode[]) {
       if (child.type !== 'COMPONENT') continue;
-      const variants = extractVariantProps(child);
+      const variants = await extractVariantProps(child);
       if (variants?.state === state && compatibleVariant(base, variants)) return child;
     }
     return undefined;
   }
 
-  function stateSource(master: SceneNode, layerName: string, state: string): SceneNode | undefined {
-    return childByName(master, layerName) ?? componentSetStateSource(master, state);
+  async function stateSource(master: SceneNode, layerName: string, state: string): Promise<SceneNode | undefined> {
+    return childByName(master, layerName) ?? await componentSetStateSource(master, state);
   }
 
   async function iconAssetOf(master: SceneNode): Promise<string | undefined> {
@@ -1608,7 +1609,7 @@ export async function exportDesign(
   async function captureButtonShape(master: SceneNode, silent = false) {
     if (!('children' in master)) return null;
     const kids = (master as ChildrenMixin).children as SceneNode[];
-    const reg = stateSource(master, 'Regular', 'normal') ?? master;
+    const reg = await stateSource(master, 'Regular', 'normal') ?? master;
     if (!reg) { if (!silent) shapeDiag.push(`'${master.name}': no layer named 'regular' or State=Default variant`); return null; }
     const rawRootShape = shapeOf(master);
     const shape = stripRootShadowFromState(await stateShape(reg), rawRootShape);
@@ -1616,19 +1617,19 @@ export async function exportDesign(
     const rootShape = rootShadowShape(rawRootShape, shape);
     const stateColors: { normal?: RGBA; highlighted?: RGBA; pressed?: RGBA } = { normal: shape.fill };
     const stateShapes: CanonicalStateShapes = { normal: shape };
-    const ro = stateSource(master, 'Rollover', 'hover');
+    const ro = await stateSource(master, 'Rollover', 'hover');
     const roShape = stripRootShadowFromState(ro ? await stateShape(ro) : null, rootShape);
     const rc = roShape?.fill ?? (ro ? stateSolid(ro) : null);
     if (roShape) stateShapes.highlighted = roShape;
     if (rc) stateColors.highlighted = rc;
-    const pr = stateSource(master, 'Pressed', 'pressed');
+    const pr = await stateSource(master, 'Pressed', 'pressed');
     const prShape = stripRootShadowFromState(pr ? await stateShape(pr) : null, rootShape);
     const pc = prShape?.fill ?? (pr ? stateSolid(pr) : null);
     if (prShape) stateShapes.pressed = prShape;
     if (pc) stateColors.pressed = pc;
-    const selected = componentSetStateSource(master, 'selected');
-    const disabled = componentSetStateSource(master, 'disabled');
-    const focused = componentSetStateSource(master, 'focused');
+    const selected = await componentSetStateSource(master, 'selected');
+    const disabled = await componentSetStateSource(master, 'disabled');
+    const focused = await componentSetStateSource(master, 'focused');
     const selectedShape = stripRootShadowFromState(selected ? await stateShape(selected) : null, rootShape);
     const disabledShape = stripRootShadowFromState(disabled ? await stateShape(disabled) : null, rootShape);
     const focusedShape = stripRootShadowFromState(focused ? await stateShape(focused) : null, rootShape);
@@ -1713,11 +1714,11 @@ export async function exportDesign(
 
     type Sub = { node: SceneNode; parentId: string | null; exportable: boolean; children: SceneNode[] };
     const subs: Sub[] = [];
-    const walk = (node: SceneNode, parentId: string | null) => {
+    const walk = async (node: SceneNode, parentId: string | null): Promise<void> => {
       if ((node as unknown as { visible?: boolean }).visible === false) return;
       if (excludedIds.has(node.id)) return;
       // A part is plain visuals; never recurse into a nested canonical control.
-      const isCanon = node.id !== rootNode.id && !!detectCanonical(node);
+      const isCanon = node.id !== rootNode.id && !!(await detectCanonical(node));
       const keepStructural = !!structuralIds && structuralIds.has(node.id);
       const exportable = !isCanon && !keepStructural && (forcedPngIds.has(node.id) || isExportable(node));
       // Same raster-leaf rule as plan(): an exportable vector / icon-only
@@ -1729,9 +1730,9 @@ export async function exportDesign(
             (c) => (c as unknown as { visible?: boolean }).visible !== false)
         : [];
       subs.push({ node, parentId, exportable, children });
-      for (const c of children) walk(c, node.id);
+      for (const c of children) await walk(c, node.id);
     };
-    walk(rootNode, null);
+    await walk(rootNode, null);
 
     // Rasterize exportable nodes (hide exportable descendants to isolate each PNG).
     const assetBySub = new Map<string, { file: string; w: number; h: number }>();
@@ -2046,7 +2047,7 @@ export async function exportDesign(
     const options = optionNodes.map((c) => textOf(c)).filter((t): t is string => !!t);
     const optionInst = optionNodes.find((c) => c.name.toLowerCase() === 'option' && c.type === 'INSTANCE') as InstanceNode | undefined;
     const optionMaster =
-      (optionInst && optionInst.mainComponent ? optionInst.mainComponent as SceneNode : null)
+      (optionInst ? await mainComponentOf(optionInst) as SceneNode | null : null)
       ?? childByName(master, 'DropdownOption')
       ?? optionNodes.find((c) => c.name.toLowerCase() === 'dropdownoption');
     const optionSource = (optionInst as SceneNode | undefined) ?? optionMaster;
@@ -2109,7 +2110,7 @@ export async function exportDesign(
     if (!itemNode) return null;
     // Capture the ROW from its master (generic Title/Subtitle), not a placed instance.
     const itemMaster = itemNode.type === 'INSTANCE'
-      ? (((itemNode as InstanceNode).mainComponent as SceneNode | null) ?? itemNode)
+      ? ((await mainComponentOf(itemNode as InstanceNode) as SceneNode | null) ?? itemNode)
       : itemNode;
     const reg = childByName(itemMaster, 'Regular') ?? itemMaster;
     const itemShape = await shapeOfWithAsset(reg) ?? undefined;
@@ -2219,7 +2220,7 @@ export async function exportDesign(
     if (!rowNode) return null;
     // Capture the ROW from its master (generic cells), not a placed instance.
     const rowMaster = rowNode.type === 'INSTANCE'
-      ? (((rowNode as InstanceNode).mainComponent as SceneNode | null) ?? rowNode)
+      ? ((await mainComponentOf(rowNode as InstanceNode) as SceneNode | null) ?? rowNode)
       : rowNode;
     const reg = childByName(rowMaster, 'Regular') ?? rowMaster;
     const itemShape = await shapeOfWithAsset(reg) ?? undefined;
@@ -2498,7 +2499,7 @@ export async function exportDesign(
     if (!p.canonicalRef || p.canonicalRef.kind !== 'button') continue;
     const master =
       p.node.type === 'INSTANCE'
-        ? ((p.node as InstanceNode).mainComponent as SceneNode | null)
+        ? (await mainComponentOf(p.node as InstanceNode) as SceneNode | null)
         : p.node;
     if (!master) continue;
     const states = await memoMasterCapture(`button-states|${master.id}`, () => exportStates(master));
@@ -2545,7 +2546,7 @@ export async function exportDesign(
   for (const p of plans) {
     const ref = p.canonicalRef;
     if (!ref || ref.kind === 'button') continue;
-    const master = p.node.type === 'INSTANCE' ? ((p.node as InstanceNode).mainComponent as SceneNode | null) : p.node;
+    const master = p.node.type === 'INSTANCE' ? (await mainComponentOf(p.node as InstanceNode) as SceneNode | null) : p.node;
     if (!master) continue;
     if (ref.kind === 'toggle' || ref.kind === 'radio') {
       const t = await memoMasterCapture(`${ref.kind}|${master.id}|${ref.value ?? ''}`, () => captureToggle(master, ref.value));
@@ -2759,7 +2760,7 @@ export async function exportDesign(
     }
     if (interactive(node.name) && !p.canonicalRef) components.push('Button');
 
-    const canonical = buildCanonical(p.canonicalRef, node);
+    const canonical = await buildCanonical(p.canonicalRef, node);
     if (canonical && stateByNode.has(node.id)) canonical.states = stateByNode.get(node.id);
     if (canonical && shapeByNode.has(node.id)) {
       const sh = shapeByNode.get(node.id);

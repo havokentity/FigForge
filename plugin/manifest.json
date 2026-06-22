@@ -3,13 +3,14 @@
   "api": "1.0.0",
   "main": "dist/main.js",
   "ui": "dist/ui.html",
+  "documentAccess": "dynamic-page",
   "editorType": ["figma"],
   "networkAccess": {
     "allowedDomains": [
-      "ws://127.0.0.1:1994",
-      "http://127.0.0.1:1995",
+      "ws://localhost:1994",
+      "http://localhost:1995",
       "https://cdnjs.cloudflare.com"
     ],
-    "reasoning": "WebSocket to the local FigForge MCP bridge (ws://127.0.0.1:1994); HTTP POST to the local Unity FigForge live-import server (http://127.0.0.1:1995, the importer default); and JSZip from cdnjs for client-side bundle packaging. Figma matches the exact port (no port wildcards), so if you change the Unity live-import port from 1995, add that origin here too."
+    "reasoning": "WebSocket to the local FigForge MCP bridge (ws://localhost:1994); HTTP POST to the local Unity FigForge live-import server (http://localhost:1995, the importer default); and JSZip from cdnjs for client-side bundle packaging. Figma matches the exact port (no port wildcards), so if you change the Unity live-import port from 1995, add that origin here too."
   }
 }

@@ -15,7 +15,7 @@ import {
   type ExportScale,
 } from './types';
 import { bytesToBase64 } from './base64';
-import { buildTree, canMerge, detectCanonical, isExportable } from './traverser';
+import { buildTree, canMerge, detectCanonical, isExportable, mainComponentOf } from './traverser';
 import { exportDesign } from './exporter';
 import { sanitize } from './naming';
 
@@ -42,13 +42,13 @@ function selectedRoot(): SceneNode | null {
   return ok ? node : null;
 }
 
-function pushSelection() {
+async function pushSelection() {
   const root = selectedRoot();
   if (!root) {
     figma.ui.postMessage({ type: 'no-selection' });
     return;
   }
-  const tree = buildTree(root, excluded);
+  const tree = await buildTree(root, excluded);
   const size = {
     w: (root as unknown as { width?: number }).width ?? 0,
     h: (root as unknown as { height?: number }).height ?? 0,
@@ -62,8 +62,8 @@ function pushSelection() {
   figma.ui.postMessage({ type: 'selection-info', name: root.name, elementCount: count, size, tree });
 }
 
-figma.on('selectionchange', pushSelection);
-pushSelection();
+figma.on('selectionchange', () => { void pushSelection(); });
+void pushSelection();
 
 // One export at a time. exportDesign isolates layers by MUTATING node.visible
 // around each exportAsync call; a second export started mid-run interleaves with
@@ -87,7 +87,7 @@ function clampDimension(value: unknown, min: number, max: number, fallback: numb
 figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
   switch (msg.type) {
     case 'reload':
-      pushSelection();
+      await pushSelection();
       break;
 
     case 'resize-ui': {
@@ -100,7 +100,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       const id = msg.nodeId as string;
       if (excluded.has(id)) excluded.delete(id);
       else excluded.add(id);
-      pushSelection();
+      await pushSelection();
       break;
     }
 
@@ -108,7 +108,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       const id = msg.nodeId as string;
       if (merged.has(id)) merged.delete(id);
       else merged.add(id);
-      pushSelection();
+      await pushSelection();
       break;
     }
 
@@ -116,7 +116,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       const id = msg.nodeId as string;
       if (forcedPng.has(id)) forcedPng.delete(id);
       else forcedPng.add(id);
-      pushSelection();
+      await pushSelection();
       break;
     }
 
@@ -124,7 +124,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       const id = msg.nodeId as string;
       if (passthrough.has(id)) passthrough.delete(id);
       else passthrough.add(id);
-      pushSelection();
+      await pushSelection();
       break;
     }
 
@@ -197,7 +197,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
         figma.ui.postMessage({ type: 'export-error', message: 'No top-level frames (or frames in sections) on this page.' });
         break;
       }
-      const detached = detachedCanonicalInstances(figma.currentPage, found.map((s) => s.node));
+      const detached = await detachedCanonicalInstances(figma.currentPage, found.map((s) => s.node));
       if (detached.length > 0) {
         const examples = detached.slice(0, 4).map((d) => `${d.kind}:${d.name}`).join(', ');
         const more = detached.length > 4 ? ` (+${detached.length - 4} more)` : '';
@@ -307,7 +307,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
       try {
         const frame = createScreenFrame((msg as { frameOpts?: Partial<FrameOptions> }).frameOpts);
         figma.ui.postMessage({ type: 'status', message: `Frame created: ${frame.name} ${Math.round(frame.width)}×${Math.round(frame.height)}.` });
-        pushSelection();
+        await pushSelection();
       } catch (e) {
         figma.ui.postMessage({ type: 'export-error', message: 'Create frame failed: ' + String((e as Error)?.message || e) });
       }
@@ -517,7 +517,7 @@ function pickLayout(node: BaseNode): Record<string, unknown> | undefined {
   return Object.keys(layout).length ? layout : undefined;
 }
 
-function summarize(node: BaseNode, depth: number): unknown {
+async function summarize(node: BaseNode, depth: number): Promise<unknown> {
   const base: Record<string, unknown> = {
     id: node.id,
     name: node.name,
@@ -569,7 +569,7 @@ function summarize(node: BaseNode, depth: number): unknown {
   if (node.type === 'TEXT') base.text = serializeText(node as TextNode);
   if ('visible' in node) {
     const scene = node as SceneNode;
-    const canonical = detectCanonical(scene);
+    const canonical = await detectCanonical(scene);
     if (canonical) base.canonical = canonical;
     base.export = {
       canExport: 'exportAsync' in scene,
@@ -582,7 +582,7 @@ function summarize(node: BaseNode, depth: number): unknown {
   }
 
   if (depth > 0 && 'children' in node) {
-    base.children = (node as ChildrenMixin).children.map((c) => summarize(c, depth - 1));
+    base.children = await Promise.all((node as ChildrenMixin).children.map((c) => summarize(c, depth - 1)));
   }
   return base;
 }
@@ -734,7 +734,7 @@ function isSceneNode(node: BaseNode): node is SceneNode {
   return node.type !== 'DOCUMENT' && node.type !== 'PAGE';
 }
 
-function nodeDetails(node: BaseNode): Record<string, unknown> {
+async function nodeDetails(node: BaseNode): Promise<Record<string, unknown>> {
   const base: Record<string, unknown> = {
     id: node.id,
     name: sanitize(node.name),
@@ -743,7 +743,7 @@ function nodeDetails(node: BaseNode): Record<string, unknown> {
     parentId: node.parent?.id || null,
   };
   if (isSceneNode(node)) {
-    const canonical = detectCanonical(node);
+    const canonical = await detectCanonical(node);
     base.bounds = { absolute: boundsOf(node), local: localBoundsOf(node) };
     base.rotation = (node as unknown as { rotation?: number }).rotation || 0;
     base.visible = isVisibleNode(node);
@@ -795,15 +795,15 @@ async function handleMcp(req: McpRequest) {
         };
         break;
       case 'get_document':
-        response.data = summarize(figma.currentPage, 2);
+        response.data = await summarize(figma.currentPage, 2);
         break;
       case 'get_selection':
-        response.data = figma.currentPage.selection.map((n) => summarize(n, 1));
+        response.data = await Promise.all(figma.currentPage.selection.map((n) => summarize(n, 1)));
         break;
       case 'get_node': {
         const id = (req.params?.nodeId as string) || req.nodeIds?.[0];
         const node = id ? figma.getNodeById(id) : null;
-        response.data = node ? summarize(node, 3) : null;
+        response.data = node ? await summarize(node, 3) : null;
         if (!node) response.error = `Node not found: ${id}`;
         break;
       }
@@ -822,13 +822,13 @@ async function handleMcp(req: McpRequest) {
       case 'get_node_details': {
         const id = (req.params?.nodeId as string) || req.nodeIds?.[0];
         const node = id ? figma.getNodeById(id) : null;
-        response.data = node ? nodeDetails(node) : null;
+        response.data = node ? await nodeDetails(node) : null;
         if (!node) response.error = `Node not found: ${id}`;
         break;
       }
       case 'get_design_context': {
         const depth = (req.params?.depth as number) ?? 2;
-        response.data = summarize(figma.currentPage, depth);
+        response.data = await summarize(figma.currentPage, depth);
         break;
       }
       case 'get_screenshot': {
@@ -1065,12 +1065,12 @@ function isInside(node: SceneNode, ancestor: SceneNode): boolean {
   return false;
 }
 
-function detachedCanonicalInstances(page: PageNode, screens: SceneNode[]): { name: string; kind: CanonicalKind }[] {
+async function detachedCanonicalInstances(page: PageNode, screens: SceneNode[]): Promise<{ name: string; kind: CanonicalKind }[]> {
   const out: { name: string; kind: CanonicalKind }[] = [];
   if (page.name === COMPONENTS_PAGE) return out;
   const nodes = page.findAll((n) => n.type === 'INSTANCE' && (n as SceneNode).visible !== false) as InstanceNode[];
   for (const node of nodes) {
-    const canonical = detectCanonical(node);
+    const canonical = await detectCanonical(node);
     if (!canonical) continue;
     if (screens.some((screen) => isInside(node, screen))) continue;
     out.push({ name: node.name, kind: canonical.kind });
@@ -1101,7 +1101,7 @@ function frameRole(node: SceneNode): string {
 
 async function createCanonicalButton(): Promise<ComponentNode> {
   const comp = await ensureCanonicalButtonMaster();
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -1160,7 +1160,7 @@ async function ensureCanonicalButtonMaster(): Promise<ComponentNode> {
 // Instances are NEVER placed on the FigForge Components page (where the masters live):
 // if that's the active page we switch to a real design page first — otherwise clicking
 // +Dropdown while viewing the components would drop the instance among the components.
-function placeInstance(comp: ComponentNode): InstanceNode {
+async function placeInstance(comp: ComponentNode): Promise<InstanceNode> {
   let target = figma.currentPage;
   if (target.name === COMPONENTS_PAGE) {
     target = (figma.root.children.find((p) => p.name !== COMPONENTS_PAGE) as PageNode | undefined)
@@ -1174,9 +1174,12 @@ function placeInstance(comp: ComponentNode): InstanceNode {
   const parent: BaseNode & ChildrenMixin = frame ?? target;
   const inst = comp.createInstance();
   parent.appendChild(inst);
-  const prior = parent.findAll(
-    (n) => n.type === 'INSTANCE' && (n as InstanceNode).mainComponent === comp
-  ).length - 1; // minus the one we just added
+  const instances = parent.findAll((n) => n.type === 'INSTANCE') as InstanceNode[];
+  let matching = 0;
+  for (const node of instances) {
+    if ((await mainComponentOf(node))?.id === comp.id) matching++;
+  }
+  const prior = Math.max(0, matching - 1); // minus the one we just added
   if (frame) {
     // frame-local coords: stack a small grid inset from the frame's top-left.
     inst.x = Math.round(24 + (prior % 4) * (inst.width + 20));
@@ -1522,7 +1525,7 @@ async function createShellScaffold(optsIn?: Partial<ShellOptions>): Promise<{ se
 
   figma.viewport.scrollAndZoomIntoView([section]);
   figma.currentPage.selection = [shell];
-  pushSelection();
+  await pushSelection();
   return { section, shell, screens };
 }
 
@@ -1587,7 +1590,7 @@ async function createToggleLike(kind: CanonicalKind, ref: string, circular: bool
     comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind, ref, value: 'off' }));
     parkMaster(comp);
   }
-  placeInstance(comp); // each click drops another instance on your page (so you can make many / group radios)
+  await placeInstance(comp); // each click drops another instance on your page (so you can make many / group radios)
   return comp;
 }
 
@@ -1596,7 +1599,7 @@ async function createToggleLike(kind: CanonicalKind, ref: string, circular: bool
 // remains the same as checkbox/radio.
 async function createSwitch(): Promise<ComponentNode> {
   const reuse = findMaster('Switch');
-  if (reuse) { placeInstance(reuse); return reuse; }
+  if (reuse) { await placeInstance(reuse); return reuse; }
 
   const W = 56, H = 32, PAD = 3, THUMB = 26;
   const comp = figma.createComponent();
@@ -1629,7 +1632,7 @@ async function createSwitch(): Promise<ComponentNode> {
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'switch', ref: 'Switch', value: 'off' }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -1639,7 +1642,7 @@ async function createInputField(): Promise<ComponentNode> {
   const reuse = findMaster('InputField');
   if (reuse) {
     await normalizeInputFieldMaster(reuse);
-    placeInstance(reuse);
+    await placeInstance(reuse);
     return reuse;
   }
 
@@ -1680,7 +1683,7 @@ async function createInputField(): Promise<ComponentNode> {
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'input', ref: 'InputField' }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -1891,7 +1894,7 @@ async function modalActionFrame(name: string, label: string, font: FontName, pri
 
 async function createToast(): Promise<ComponentNode> {
   const reuse = findMaster('Toast');
-  if (reuse) { placeInstance(reuse); return reuse; }
+  if (reuse) { await placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const W = 340, H = 92;
@@ -1933,7 +1936,7 @@ async function createToast(): Promise<ComponentNode> {
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'toast', ref: 'Toast' }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -1948,7 +1951,7 @@ async function createStepper(opts?: Partial<StepperOptions>): Promise<ComponentN
   const vertical = orientation === 'vertical';
   const ref = vertical ? 'Stepper Vertical' : 'Stepper';
   const reuse = findMaster(ref);
-  if (reuse) { placeInstance(reuse); return reuse; }
+  if (reuse) { await placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const R = 8;
@@ -2018,7 +2021,7 @@ async function createStepper(opts?: Partial<StepperOptions>): Promise<ComponentN
     minValue: 0, maxValue: 100, slots: 1,
   }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -2062,7 +2065,7 @@ function hideInstanceOptions(inst: InstanceNode): void {
 
 async function createDropdown(): Promise<ComponentNode> {
   const reuse = findMaster('Dropdown');
-  if (reuse) { hideInstanceOptions(placeInstance(reuse)); return reuse; }
+  if (reuse) { hideInstanceOptions(await placeInstance(reuse)); return reuse; }
 
   const font = await loadUiFont();
   const W = 220, H = 40, R = 8, ROW = 36;
@@ -2140,7 +2143,7 @@ async function createDropdown(): Promise<ComponentNode> {
 
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'dropdown', ref: 'Dropdown', value: 'Option 1' }));
   parkMaster(comp);
-  hideInstanceOptions(placeInstance(comp));
+  hideInstanceOptions(await placeInstance(comp));
   return comp;
 }
 
@@ -2190,7 +2193,7 @@ async function createSlider(optsIn?: Partial<SliderOptions>): Promise<ComponentN
   const opts = normalizeSliderOptions(optsIn);
   const name = sliderVariantName(opts);
   const reuse = findMaster(name);
-  if (reuse) { placeInstance(reuse); return reuse; }
+  if (reuse) { await placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const W = 240, LABEL_H = 20, ROW = 28, H = LABEL_H + ROW, TRACK = 6, THUMB = 18;
@@ -2283,7 +2286,7 @@ async function createSlider(optsIn?: Partial<SliderOptions>): Promise<ComponentN
     slots: opts.slots >= 2 ? opts.slots : undefined,
   }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -2349,7 +2352,7 @@ async function createProgress(optsIn?: Partial<ProgressOptions>): Promise<Compon
   const opts = normalizeProgressOptions(optsIn);
   const name = progressVariantName(opts);
   const reuse = findMaster(name);
-  if (reuse) { placeInstance(reuse); return reuse; }
+  if (reuse) { await placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const ratio = 0.5;
@@ -2484,7 +2487,7 @@ async function createProgress(optsIn?: Partial<ProgressOptions>): Promise<Compon
     indeterminate: opts.indeterminate || undefined,
   }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -2696,7 +2699,7 @@ async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentN
   const name = listVariantName(opts);
   const sbWidth = clampScrollbarWidth(opts.scrollbarWidth);
   const reuse = findMaster(name);
-  if (reuse) { ensureListScrollbar(reuse, sbWidth); ensureListRoundedClip(reuse); ensureListMask(reuse); placeInstance(reuse); return reuse; }
+  if (reuse) { ensureListScrollbar(reuse, sbWidth); ensureListRoundedClip(reuse); ensureListMask(reuse); await placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const titleFont = await loadBoldFont(font);
@@ -2754,7 +2757,7 @@ async function createList(opts: ListOptions = LIST_DEFAULTS): Promise<ComponentN
   ensureListMask(comp);
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'list', ref: name }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }
 
@@ -2964,7 +2967,7 @@ async function createTable(opts: TableOptions = TABLE_DEFAULTS): Promise<Compone
   const sbWidth = clampScrollbarWidth(opts.scrollbarWidth);
   const name = tableVariantName({ ...opts, rows, cols, scrollbarWidth: sbWidth });
   const reuse = findMaster(name);
-  if (reuse) { ensureListScrollbar(reuse, sbWidth); ensureListRoundedClip(reuse); ensureListMask(reuse); placeInstance(reuse); return reuse; }
+  if (reuse) { ensureListScrollbar(reuse, sbWidth); ensureListRoundedClip(reuse); ensureListMask(reuse); await placeInstance(reuse); return reuse; }
 
   const font = await loadUiFont();
   const titleFont = await loadBoldFont(font);
@@ -3018,6 +3021,6 @@ async function createTable(opts: TableOptions = TABLE_DEFAULTS): Promise<Compone
   ensureListMask(comp);
   comp.setSharedPluginData('figforge', 'canonical', JSON.stringify({ kind: 'table', ref: name }));
   parkMaster(comp);
-  placeInstance(comp);
+  await placeInstance(comp);
   return comp;
 }

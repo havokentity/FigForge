@@ -72,14 +72,21 @@ namespace FigForge
         readonly List<(string msg, MessageType kind)> _log = new List<(string, MessageType)>();
         bool _showCanvas = true, _showFonts = true, _showTextures, _showAtlas, _showCanonical = true, _showLive;
 
-        GUIStyle _h1;
+        WindowStyles _styles;
+
+        static readonly Color Background = new Color(0.055f, 0.065f, 0.075f);
+        static readonly Color Panel = new Color(0.105f, 0.115f, 0.125f);
+        static readonly Color PanelSoft = new Color(0.13f, 0.145f, 0.155f);
+        static readonly Color Border = new Color(0.24f, 0.27f, 0.28f);
+        static readonly Color Accent = new Color(0.17f, 0.86f, 0.33f);
+        static readonly Color AccentDim = new Color(0.1f, 0.44f, 0.22f);
 
         [MenuItem("Window/FigForge/Importer")]
         public static void Open()
         {
             var w = GetWindow<FigForgeImporterWindow>();
             w.titleContent = new GUIContent("FigForge");
-            w.minSize = new Vector2(360, 520);
+            w.minSize = new Vector2(760, 560);
             w.Show();
         }
 
@@ -221,6 +228,7 @@ namespace FigForge
         void OnGUI()
         {
             EnsureStyles();
+            EditorGUI.DrawRect(new Rect(0, 0, position.width, position.height), Background);
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
 
             Header();
@@ -246,61 +254,82 @@ namespace FigForge
         // of the loaded manifest, so it's available even without a manifest selected.
         void RefsBar()
         {
-            Divider();
-            EditorGUILayout.LabelField("Page references", EditorStyles.miniBoldLabel);
-            using (new EditorGUILayout.HorizontalScope())
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                if (GUILayout.Button("Validate Page Refs")) FigForgeRefTools.ValidateSceneRefs();
-                if (GUILayout.Button("Populate Page Refs")) FigForgeRefTools.PopulateSceneRefs();
+                EditorGUILayout.LabelField("Page references", _styles.sectionTitle);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("Validate Page Refs", _styles.button, GUILayout.Height(26))) FigForgeRefTools.ValidateSceneRefs();
+                    if (GUILayout.Button("Populate Page Refs", _styles.button, GUILayout.Height(26))) FigForgeRefTools.PopulateSceneRefs();
+                }
             }
         }
 
         void Header()
         {
-            EditorGUILayout.Space(4);
-            using (new EditorGUILayout.HorizontalScope())
+            using (new EditorGUILayout.VerticalScope(_styles.hero))
             {
-                GUILayout.Label("◆ FigForge", _h1);
-                GUILayout.Label($"v{PackageVersion()}", EditorStyles.miniLabel, GUILayout.Width(56));
-                GUILayout.FlexibleSpace();
-                if (GUILayout.Button("Rescan", EditorStyles.miniButton, GUILayout.Width(64)))
-                { RefreshManifests(); RefreshFonts(); }
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    using (new EditorGUILayout.VerticalScope())
+                    {
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            GUILayout.Label("FIGFORGE", _styles.heroTitle);
+                            GUILayout.Label("->", _styles.versionArrow, GUILayout.Width(18), GUILayout.Height(20));
+                            GUILayout.Label($"v{PackageVersion()}", _styles.versionPill, GUILayout.Width(60), GUILayout.Height(18));
+                            GUILayout.FlexibleSpace();
+                        }
+                        GUILayout.Label("Forge Figma frames into Unity UI, keep live import close, and rebuild pages without losing your scene work.", _styles.heroSubtitle);
+                    }
+
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("Rescan", _styles.primaryButton, GUILayout.Width(92), GUILayout.Height(30)))
+                    { RefreshManifests(); RefreshFonts(); }
+                }
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    SummaryCard("Page bundles", _projectPaths.Count.ToString(), "project.json", new Color(0.45f, 0.55f, 1f));
+                    SummaryCard("Manifests", _manifestPaths.Count.ToString(), "single screens", new Color(0.82f, 0.54f, 1f));
+                    SummaryCard("Elements", (_manifest?.elements.Count ?? 0).ToString(), _manifest?.screen?.name ?? "none loaded", Accent);
+                    SummaryCard("Sprites", (_manifest?.assets.Count ?? 0).ToString(), "texture assets", new Color(0.28f, 0.75f, 1f));
+                }
             }
-            EditorGUILayout.LabelField("Figma → Unity UI importer", EditorStyles.miniLabel);
-            Divider();
         }
 
         void LiveImportSection()
         {
-            _showLive = Foldout(_showLive, "Live import (Figma → Unity)");
-            if (!_showLive)
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                using (new EditorGUI.IndentLevelScope())
-                    LiveImportTokenRow(false);
-                Divider();
-                return;
-            }
-            using (new EditorGUI.IndentLevelScope())
-            {
-                bool en = EditorGUILayout.ToggleLeft("Run live import server", FigForgeLiveImport.Enabled);
-                if (en != FigForgeLiveImport.Enabled) FigForgeLiveImport.Enabled = en;
-
-                using (new EditorGUI.DisabledScope(!en))
+                _showLive = Foldout(_showLive, "Live import (Figma to Unity)");
+                if (!_showLive)
                 {
-                    int port = EditorGUILayout.DelayedIntField("Port", FigForgeLiveImport.Port);
-                    if (port != FigForgeLiveImport.Port) FigForgeLiveImport.Port = port;
-
-                    LiveImportTokenRow(true);
+                    using (new EditorGUI.IndentLevelScope())
+                        LiveImportTokenRow(false);
+                    return;
                 }
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    bool en = EditorGUILayout.ToggleLeft("Run live import server", FigForgeLiveImport.Enabled, _styles.toggle);
+                    if (en != FigForgeLiveImport.Enabled) FigForgeLiveImport.Enabled = en;
 
-                EditorGUILayout.LabelField(
-                    (FigForgeLiveImport.Listening ? "● " : "○ ") + FigForgeLiveImport.Status,
-                    EditorStyles.miniLabel);
-                EditorGUILayout.HelpBox(
-                    "Paste this token into the Figma plugin (Unity token field) once. Then hit “Send to Unity” to build the page here automatically — no zip, loopback only.",
-                    MessageType.None);
+                    using (new EditorGUI.DisabledScope(!en))
+                    {
+                        int port = EditorGUILayout.DelayedIntField("Port", FigForgeLiveImport.Port);
+                        if (port != FigForgeLiveImport.Port) FigForgeLiveImport.Port = port;
+
+                        LiveImportTokenRow(true);
+                    }
+
+                    EditorGUILayout.LabelField(
+                        (FigForgeLiveImport.Listening ? "Online  " : "Idle  ") + FigForgeLiveImport.Status,
+                        _styles.subtleLabel);
+                    EditorGUILayout.HelpBox(
+                        "Paste this token into the Figma plugin (Unity token field) once. Then hit Send to Unity to build the page here automatically. Loopback only.",
+                        MessageType.None);
+                }
             }
-            Divider();
         }
 
         void LiveImportTokenRow(bool allowRegenerate)
@@ -310,9 +339,9 @@ namespace FigForge
                 EditorGUILayout.PrefixLabel("Plugin token");
                 EditorGUILayout.SelectableLabel(FigForgeLiveImport.Token, EditorStyles.textField,
                     GUILayout.Height(EditorGUIUtility.singleLineHeight));
-                if (GUILayout.Button("Copy", EditorStyles.miniButton, GUILayout.Width(46)))
+                if (GUILayout.Button("Copy", _styles.miniButton, GUILayout.Width(46)))
                     EditorGUIUtility.systemCopyBuffer = FigForgeLiveImport.Token;
-                if (allowRegenerate && GUILayout.Button("New", EditorStyles.miniButton, GUILayout.Width(40)) &&
+                if (allowRegenerate && GUILayout.Button("New", _styles.miniButton, GUILayout.Width(40)) &&
                     EditorUtility.DisplayDialog("Regenerate live-import token?",
                         "The Figma plugin won't be able to import again until the new token is pasted into its Unity token field.",
                         "Regenerate", "Cancel"))
@@ -322,67 +351,99 @@ namespace FigForge
 
         /// <summary>Entry point used by the live-import HTTP receiver: discover
         /// the freshly-written bundle and build it with the window's settings.</summary>
-        public void LiveBuildPage(string projectJsonAssetPath)
+        public bool LiveBuildPage(string projectJsonAssetPath)
         {
             RefreshManifests();
             FocusFontsFoldout();
-            BuildPageProject(projectJsonAssetPath);
+            bool ok = BuildPageProject(projectJsonAssetPath);
             Repaint();
+            return ok;
         }
 
         string PackageVersion()
         {
             var info = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(FigForgeImporterWindow).Assembly);
-            return info != null ? info.version : "dev";
+            if (info != null && !string.IsNullOrEmpty(info.version)) return info.version;
+
+            var packageJson = FindPackageJsonPath();
+            if (!string.IsNullOrEmpty(packageJson))
+            {
+                try
+                {
+                    var meta = JsonConvert.DeserializeObject<PackageJsonMeta>(File.ReadAllText(packageJson));
+                    if (meta != null && !string.IsNullOrEmpty(meta.version)) return meta.version;
+                }
+                catch { /* version label is cosmetic; keep the importer usable */ }
+            }
+
+            return "dev";
         }
+
+        static string FindPackageJsonPath()
+        {
+            foreach (var guid in AssetDatabase.FindAssets("FigForge.Editor"))
+            {
+                var asmdefPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (Path.GetFileName(asmdefPath) != "FigForge.Editor.asmdef") continue;
+                var dir = Path.GetDirectoryName(asmdefPath);
+                if (string.IsNullOrEmpty(dir)) continue;
+                var candidate = Path.Combine(dir, "..", "package.json").Replace('\\', '/');
+                if (File.Exists(candidate)) return candidate;
+            }
+
+            const string packagePath = "Packages/com.figforge.unity-importer/package.json";
+            return File.Exists(packagePath) ? packagePath : null;
+        }
+
+        sealed class PackageJsonMeta { public string version; }
 
         void ManifestPicker()
         {
-            // Whole-page project bundles (project.json) → Forge Page.
-            if (_projectPaths.Count > 0)
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                _selectedProject = EditorGUILayout.Popup("Page bundle", _selectedProject,
-                    _projectPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / project.json").ToArray());
-                GUI.backgroundColor = new Color(0.49f, 0.36f, 1f);
-                if (GUILayout.Button($"Forge Page → {_backend} (all screens)", GUILayout.Height(26)))
-                    BuildPageProject(_projectPaths[_selectedProject]);
-                using (new EditorGUI.DisabledScope(_backend != UIBackend.uGUI))
+                EditorGUILayout.LabelField("Import source", _styles.sectionTitle);
+
+                // Whole-page project bundles (project.json) -> Forge Page.
+                if (_projectPaths.Count > 0)
                 {
-                    GUI.backgroundColor = new Color(0.9f, 0.16f, 0.12f);
-                    if (GUILayout.Button("Forge Page with Customizations → uGUI", GUILayout.Height(24)))
-                        BuildPageProject(_projectPaths[_selectedProject], includeUnityCustomizations: true);
+                    _selectedProject = EditorGUILayout.Popup("Page bundle", _selectedProject,
+                        _projectPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / project.json").ToArray());
+                    if (GUILayout.Button($"Forge Page to {_backend} (all screens)", _styles.primaryButton, GUILayout.Height(28)))
+                        BuildPageProject(_projectPaths[_selectedProject]);
+                    using (new EditorGUI.DisabledScope(_backend != UIBackend.uGUI))
+                    {
+                        if (GUILayout.Button("Forge Page with Customizations to uGUI", _styles.warningButton, GUILayout.Height(26)))
+                            BuildPageProject(_projectPaths[_selectedProject], includeUnityCustomizations: true);
+                    }
+                    EditorGUILayout.Space(5);
                 }
-                GUI.backgroundColor = Color.white;
-                Divider();
+
+                // Import straight from a FigForge export .zip - no manual unzip.
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("Import a .zip...", _styles.button, GUILayout.Height(26)))
+                        ImportZip();
+                    if (_manifestPaths.Count > 0 &&
+                        GUILayout.Button("Reveal folder", _styles.button, GUILayout.Width(110), GUILayout.Height(26)))
+                        EditorUtility.RevealInFinder(_manifestPaths[_selected]);
+                }
+
+                if (_manifestPaths.Count == 0)
+                {
+                    EditorGUILayout.HelpBox("Import a FigForge export .zip above, drop an extracted folder under Assets/, or use the MCP export_unity tool, then press Rescan.", MessageType.Info);
+                    return;
+                }
+
+                EditorGUI.BeginChangeCheck();
+                _selected = EditorGUILayout.Popup("Manifest", _selected,
+                    _manifestPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / manifest.json").ToArray());
+                if (EditorGUI.EndChangeCheck()) LoadSelected();
+
+                if (_manifest != null)
+                    EditorGUILayout.LabelField(
+                        $"{_manifest.screen?.name}  |  {_manifest.elements.Count} elements  |  {_manifest.assets.Count} sprites  |  scale {_manifest.screen?.exportScale}x",
+                        _styles.subtleLabel);
             }
-
-            // Import straight from a FigForge export .zip — no manual unzip.
-            using (new EditorGUILayout.HorizontalScope())
-            {
-                if (GUILayout.Button("Import a .zip…", GUILayout.Height(22)))
-                    ImportZip();
-                if (_manifestPaths.Count > 0 &&
-                    GUILayout.Button("Reveal folder", EditorStyles.miniButton, GUILayout.Width(96)))
-                    EditorUtility.RevealInFinder(_manifestPaths[_selected]);
-            }
-
-            if (_manifestPaths.Count == 0)
-            {
-                EditorGUILayout.HelpBox("Import a FigForge export .zip above, drop an extracted folder under Assets/, or use the MCP 'export_unity' tool — then press Rescan.", MessageType.Info);
-                Divider();
-                return;
-            }
-
-            EditorGUI.BeginChangeCheck();
-            _selected = EditorGUILayout.Popup("Manifest", _selected,
-                _manifestPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / manifest.json").ToArray());
-            if (EditorGUI.EndChangeCheck()) LoadSelected();
-
-            if (_manifest != null)
-                EditorGUILayout.LabelField(
-                    $"{_manifest.screen?.name}  ·  {_manifest.elements.Count} elements  ·  {_manifest.assets.Count} sprites  ·  scale {_manifest.screen?.exportScale}×",
-                    EditorStyles.miniLabel);
-            Divider();
         }
 
         void ImportZip()
@@ -402,138 +463,153 @@ namespace FigForge
 
         void CanvasSection()
         {
-            _showCanvas = Foldout(_showCanvas, "Backend & Output");
-            if (!_showCanvas) return;
-            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                _backend = (UIBackend)EditorGUILayout.EnumPopup("UI backend", _backend);
+                _showCanvas = Foldout(_showCanvas, "Backend & Output");
+                if (!_showCanvas) return;
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    _backend = (UIBackend)EditorGUILayout.EnumPopup("UI backend", _backend);
 
-                if (_backend == UIBackend.UIToolkit)
-                {
-                    _uitkOutFolder = EditorGUILayout.TextField("UXML/USS folder", _uitkOutFolder);
-                    _uitkCreateDoc = EditorGUILayout.ToggleLeft("Create UIDocument + PanelSettings in scene", _uitkCreateDoc);
-                    _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (one UIDocument toggles pages)", _connectedScene);
-                    EditorGUILayout.HelpBox("UI Toolkit emits a .uxml + .uss. Canonical layers become <Button> with a `fge-ref-<name>` USS class — style that class once in your own stylesheet.", MessageType.None);
-                }
-                else
-                {
-                    _output = (OutputMode)EditorGUILayout.EnumPopup("Output", _output);
-                    _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (FrameManager toggles pages)", _connectedScene);
-                    _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas (off = add to existing)", _newCanvas);
-                    if (!_newCanvas)
+                    if (_backend == UIBackend.UIToolkit)
                     {
-                        // Auto-fill the slot with the scene's first canvas when blank.
-                        if (_existingCanvas == null) _existingCanvas = FirstSceneCanvas();
-                        _existingCanvas = (Canvas)EditorGUILayout.ObjectField("Canvas", _existingCanvas, typeof(Canvas), true);
-                        if (_existingCanvas == null)
-                            EditorGUILayout.HelpBox("No Canvas in the scene yet — one will be created on Forge, then reused next time.", MessageType.None);
+                        _uitkOutFolder = EditorGUILayout.TextField("UXML/USS folder", _uitkOutFolder);
+                        _uitkCreateDoc = EditorGUILayout.ToggleLeft("Create UIDocument + PanelSettings in scene", _uitkCreateDoc, _styles.toggle);
+                        _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (one UIDocument toggles pages)", _connectedScene, _styles.toggle);
+                        EditorGUILayout.HelpBox("UI Toolkit emits a .uxml + .uss. Canonical layers become <Button> with a fge-ref-<name> USS class. Style that class once in your own stylesheet.", MessageType.None);
                     }
-                    _scalePreset = (ScalePreset)EditorGUILayout.EnumPopup("Reference height", _scalePreset);
-                    if (_scalePreset == ScalePreset.Custom)
-                        _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
-                    _disableRaycasts = EditorGUILayout.ToggleLeft("Disable raycast targets on non-interactive graphics", _disableRaycasts);
-                    _componentsOnlyAccessors = EditorGUILayout.ToggleLeft(new GUIContent("Accessors for components only (skip labels & images)", "On: only canonical controls (buttons, toggles, inputs, …) get C# accessors. Off: labels and images do too (legacy behavior).\nEither way, prefix a layer name with [s] to force-include that one element; the [s] is dropped from the GameObject and variable name."), _componentsOnlyAccessors);
-                    _includeGroupsInAccessors = EditorGUILayout.ToggleLeft("Generate C# accessors for Figma groups/frames", _includeGroupsInAccessors);
-                    int warmUpBatchSize = Mathf.Clamp(EditorGUILayout.DelayedIntField("Import warmup batch size", _warmUpBatchSize), 1, 8192);
-                    if (warmUpBatchSize != _warmUpBatchSize)
+                    else
                     {
-                        _warmUpBatchSize = warmUpBatchSize;
-                        EditorPrefs.SetInt(PrefWarmUpBatchSize, _warmUpBatchSize);
+                        _output = (OutputMode)EditorGUILayout.EnumPopup("Output", _output);
+                        _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (FrameManager toggles pages)", _connectedScene, _styles.toggle);
+                        _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas (off = add to existing)", _newCanvas, _styles.toggle);
+                        if (!_newCanvas)
+                        {
+                            // Auto-fill the slot with the scene's first canvas when blank.
+                            if (_existingCanvas == null) _existingCanvas = FirstSceneCanvas();
+                            _existingCanvas = (Canvas)EditorGUILayout.ObjectField("Canvas", _existingCanvas, typeof(Canvas), true);
+                            if (_existingCanvas == null)
+                                EditorGUILayout.HelpBox("No Canvas in the scene yet - one will be created on Forge, then reused next time.", MessageType.None);
+                        }
+                        _scalePreset = (ScalePreset)EditorGUILayout.EnumPopup("Reference height", _scalePreset);
+                        if (_scalePreset == ScalePreset.Custom)
+                            _customRefHeight = EditorGUILayout.FloatField("Custom height", _customRefHeight);
+                        _disableRaycasts = EditorGUILayout.ToggleLeft("Disable raycast targets on non-interactive graphics", _disableRaycasts, _styles.toggle);
+                        _componentsOnlyAccessors = EditorGUILayout.ToggleLeft(new GUIContent("Accessors for components only (skip labels & images)", "On: only canonical controls (buttons, toggles, inputs, ...) get C# accessors. Off: labels and images do too (legacy behavior).\nEither way, prefix a layer name with [s] to force-include that one element; the [s] is dropped from the GameObject and variable name."), _componentsOnlyAccessors, _styles.toggle);
+                        _includeGroupsInAccessors = EditorGUILayout.ToggleLeft("Generate C# accessors for Figma groups/frames", _includeGroupsInAccessors, _styles.toggle);
+                        int warmUpBatchSize = Mathf.Clamp(EditorGUILayout.DelayedIntField("Import warmup batch size", _warmUpBatchSize), 1, 8192);
+                        if (warmUpBatchSize != _warmUpBatchSize)
+                        {
+                            _warmUpBatchSize = warmUpBatchSize;
+                            EditorPrefs.SetInt(PrefWarmUpBatchSize, _warmUpBatchSize);
+                        }
+                        if (_output != OutputMode.Scene)
+                            _prefabFolder = EditorGUILayout.TextField("Prefab folder", _prefabFolder);
                     }
-                    if (_output != OutputMode.Scene)
-                        _prefabFolder = EditorGUILayout.TextField("Prefab folder", _prefabFolder);
                 }
             }
         }
 
         void FontSection()
         {
-            _showFonts = Foldout(_showFonts, $"Fonts ({_manifest.fonts.Count})");
-            if (!_showFonts) return;
-            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                if (_projectFonts.Count == 0)
-                    EditorGUILayout.HelpBox("No TMP_FontAsset found. Create font assets (Window ▸ TextMeshPro ▸ Font Asset Creator).", MessageType.Warning);
-                foreach (var f in _manifest.fonts)
-                    foreach (var s in f.styles)
-                    {
-                        var key = $"{f.family}|{s}";
-                        _fontMap.TryGetValue(key, out var cur);
-                        var next = (TMP_FontAsset)EditorGUILayout.ObjectField(key, cur, typeof(TMP_FontAsset), false);
-                        _fontMap[key] = next;
-                    }
+                _showFonts = Foldout(_showFonts, $"Fonts ({_manifest.fonts.Count})");
+                if (!_showFonts) return;
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    if (_projectFonts.Count == 0)
+                        EditorGUILayout.HelpBox("No TMP_FontAsset found. Create font assets (Window > TextMeshPro > Font Asset Creator).", MessageType.Warning);
+                    foreach (var f in _manifest.fonts)
+                        foreach (var s in f.styles)
+                        {
+                            var key = $"{f.family}|{s}";
+                            _fontMap.TryGetValue(key, out var cur);
+                            var next = (TMP_FontAsset)EditorGUILayout.ObjectField(key, cur, typeof(TMP_FontAsset), false);
+                            _fontMap[key] = next;
+                        }
+                }
             }
         }
 
         void CanonicalSection()
         {
             int refCount = _manifest.canonicalRefs?.Count ?? 0;
-            _showCanonical = Foldout(_showCanonical, $"Canonical elements ({refCount})");
-            if (!_showCanonical) return;
-            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                _canonicalLibrary = (CanonicalLibrary)EditorGUILayout.ObjectField("Library", _canonicalLibrary, typeof(CanonicalLibrary), false);
-                if (refCount > 0)
+                _showCanonical = Foldout(_showCanonical, $"Canonical elements ({refCount})");
+                if (!_showCanonical) return;
+                using (new EditorGUI.IndentLevelScope())
                 {
-                    EditorGUILayout.LabelField("Referenced by this design:", EditorStyles.miniBoldLabel);
-                    foreach (var r in _manifest.canonicalRefs)
+                    _canonicalLibrary = (CanonicalLibrary)EditorGUILayout.ObjectField("Library", _canonicalLibrary, typeof(CanonicalLibrary), false);
+                    if (refCount > 0)
                     {
-                        bool resolved = _canonicalLibrary != null && _canonicalLibrary.Resolve("button", r) != null;
-                        EditorGUILayout.LabelField($"   {(resolved ? "✓" : "✗")}  {r}", EditorStyles.miniLabel);
+                        EditorGUILayout.LabelField("Referenced by this design:", _styles.sectionTitle);
+                        foreach (var r in _manifest.canonicalRefs)
+                        {
+                            bool resolved = _canonicalLibrary != null && _canonicalLibrary.Resolve("button", r) != null;
+                            EditorGUILayout.LabelField($"   {(resolved ? "ok" : "missing")}  {r}", _styles.subtleLabel);
+                        }
+                        if (_canonicalLibrary == null)
+                            EditorGUILayout.HelpBox("Assign a Canonical Library (Create > FigForge > Canonical Library) to instantiate real button prefabs; otherwise placeholders are used.", MessageType.Info);
                     }
-                    if (_canonicalLibrary == null)
-                        EditorGUILayout.HelpBox("Assign a Canonical Library (Create ▸ FigForge ▸ Canonical Library) to instantiate real button prefabs; otherwise placeholders are used.", MessageType.Info);
+                    else EditorGUILayout.LabelField("No canonical references (name layers Btn_<instance>_<ref>).", _styles.subtleLabel);
                 }
-                else EditorGUILayout.LabelField("No canonical references (name layers Btn_<instance>_<ref>).", EditorStyles.miniLabel);
             }
         }
 
         void TextureSection()
         {
-            _showTextures = Foldout(_showTextures, "Textures");
-            if (!_showTextures) return;
-            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                _spriteFolder = EditorGUILayout.TextField("Sprite folder", _spriteFolder);
-                _tex.autoMaxSize = EditorGUILayout.ToggleLeft("Auto max size", _tex.autoMaxSize);
-                if (!_tex.autoMaxSize) _tex.maxSize = EditorGUILayout.IntField("Max size", _tex.maxSize);
-                _tex.compression = (TextureImporterCompression)EditorGUILayout.EnumPopup("Compression", _tex.compression);
+                _showTextures = Foldout(_showTextures, "Textures");
+                if (!_showTextures) return;
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    _spriteFolder = EditorGUILayout.TextField("Sprite folder", _spriteFolder);
+                    _tex.autoMaxSize = EditorGUILayout.ToggleLeft("Auto max size", _tex.autoMaxSize, _styles.toggle);
+                    if (!_tex.autoMaxSize) _tex.maxSize = EditorGUILayout.IntField("Max size", _tex.maxSize);
+                    _tex.compression = (TextureImporterCompression)EditorGUILayout.EnumPopup("Compression", _tex.compression);
+                }
             }
         }
 
         void AtlasSection()
         {
-            _showAtlas = Foldout(_showAtlas, "Sprite Atlas");
-            if (!_showAtlas) return;
-            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUILayout.VerticalScope(_styles.card))
             {
-                _atlas.create = EditorGUILayout.ToggleLeft("Create sprite atlas", _atlas.create);
-                if (_atlas.create)
+                _showAtlas = Foldout(_showAtlas, "Sprite Atlas");
+                if (!_showAtlas) return;
+                using (new EditorGUI.IndentLevelScope())
                 {
-                    _atlas.padding = EditorGUILayout.IntField("Padding", _atlas.padding);
-                    _atlas.allowRotation = EditorGUILayout.ToggleLeft("Allow rotation", _atlas.allowRotation);
-                    _atlas.includeInBuild = EditorGUILayout.ToggleLeft("Include in build", _atlas.includeInBuild);
+                    _atlas.create = EditorGUILayout.ToggleLeft("Create sprite atlas", _atlas.create, _styles.toggle);
+                    if (_atlas.create)
+                    {
+                        _atlas.padding = EditorGUILayout.IntField("Padding", _atlas.padding);
+                        _atlas.allowRotation = EditorGUILayout.ToggleLeft("Allow rotation", _atlas.allowRotation, _styles.toggle);
+                        _atlas.includeInBuild = EditorGUILayout.ToggleLeft("Include in build", _atlas.includeInBuild, _styles.toggle);
+                    }
                 }
             }
         }
 
         void BuildBar()
         {
-            Divider();
-            GUI.backgroundColor = new Color(0.49f, 0.36f, 1f);
-            if (GUILayout.Button($"Forge “{_manifest.screen?.name}”", GUILayout.Height(34)))
-                Build();
-            GUI.backgroundColor = Color.white;
+            using (new EditorGUILayout.VerticalScope(_styles.buildCard))
+                if (GUILayout.Button($"Forge \"{_manifest.screen?.name}\"", _styles.primaryButton, GUILayout.Height(34)))
+                    Build();
         }
 
         void LogSection()
         {
             if (_log.Count == 0) return;
-            Divider();
-            EditorGUILayout.LabelField("Forge log", EditorStyles.miniBoldLabel);
-            _logScroll = EditorGUILayout.BeginScrollView(_logScroll, GUILayout.Height(120));
-            foreach (var (msg, kind) in _log) EditorGUILayout.HelpBox(msg, kind);
-            EditorGUILayout.EndScrollView();
+            using (new EditorGUILayout.VerticalScope(_styles.card))
+            {
+                EditorGUILayout.LabelField("Forge log", _styles.sectionTitle);
+                _logScroll = EditorGUILayout.BeginScrollView(_logScroll, GUILayout.Height(120));
+                foreach (var (msg, kind) in _log) EditorGUILayout.HelpBox(msg, kind);
+                EditorGUILayout.EndScrollView();
+            }
         }
 
         // -----------------------------------------------------------------------
@@ -1189,13 +1265,13 @@ namespace FigForge
             SceneView.RepaintAll();
         }
 
-        void BuildPageProject(string projectPath, bool includeUnityCustomizations = false)
+        bool BuildPageProject(string projectPath, bool includeUnityCustomizations = false)
         {
             _log.Clear();
             FontAutoImporter.ClearCache();
             _editorColumns = EditorColumnsPref;
             var proj = ManifestParser.LoadProject(projectPath);
-            if (proj == null || proj.screens.Count == 0) { Log("project.json is empty or invalid", MessageType.Error); return; }
+            if (proj == null || proj.screens.Count == 0) { Log("project.json is empty or invalid", MessageType.Error); return false; }
             var baseDir = Path.GetDirectoryName(projectPath).Replace('\\', '/');
 
             var loaded = new List<LoadedScreen>();
@@ -1226,16 +1302,16 @@ namespace FigForge
                     manifestHash = ManifestHash(m, ps, _includeGroupsInAccessors, _componentsOnlyAccessors),
                 });
             }
-            if (loaded.Count == 0) { Log("no buildable screens in bundle", MessageType.Error); return; }
+            if (loaded.Count == 0) { Log("no buildable screens in bundle", MessageType.Error); return false; }
             _manifest = loaded[0].m; // for ResolveCanvas / PanelSettings / header
 
             try
             {
-                if (_backend == UIBackend.UIToolkit) { BuildPageUITK(proj, loaded); return; }
+                if (_backend == UIBackend.UIToolkit) { BuildPageUITK(proj, loaded); return true; }
 
                 var canvas = ResolveCanvas(out bool canvasCreated);
                 if (!canvasCreated && !ConfirmPageForge(loaded, ImportScope(canvas.transform), proj.name, includeUnityCustomizations))
-                { Log("Forge cancelled — manual controls preserved", MessageType.Info); return; }
+                { Log("Forge cancelled — manual controls preserved", MessageType.Info); return false; }
                 var mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
                 mgr.editorColumns = _editorColumns;
                 mgr.screens.Clear();
@@ -1375,8 +1451,9 @@ namespace FigForge
                 var shellSummary = shellCount > 0 ? " + " + shellCount + " shell(s)" : "";
                 var customizationSummary = includeUnityCustomizations ? " with Unity customizations" : "";
                 Log($"built page '{proj.name}'{customizationSummary} — {built} screen(s){shellSummary}, initial '{proj.initial}' ✓", MessageType.Info);
+                return true;
             }
-            catch (System.Exception e) { Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); }
+            catch (System.Exception e) { Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); return false; }
             finally { EditorUtility.ClearProgressBar(); AssetDatabase.SaveAssets(); }
         }
 
@@ -1729,17 +1806,221 @@ namespace FigForge
         void Log(string msg, MessageType kind) => _log.Add((msg, kind));
         static string SafeName(string s) => new string((s ?? "Screen").Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
 
+        void SummaryCard(string title, string value, string caption, Color color)
+        {
+            var rect = GUILayoutUtility.GetRect(120, 68, GUILayout.ExpandWidth(true), GUILayout.Height(68));
+            EditorGUI.DrawRect(rect, Panel);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 2), color);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), Border);
+
+            GUI.Label(new Rect(rect.x + 10, rect.y + 8, rect.width - 20, 16), title, _styles.metricLabel);
+            GUI.Label(new Rect(rect.x + 10, rect.y + 27, rect.width - 20, 22), value, _styles.metricValue);
+            GUI.Label(new Rect(rect.x + 10, rect.y + 50, rect.width - 20, 14), caption, _styles.metricCaption);
+        }
+
         void EnsureStyles()
         {
-            if (_h1 != null) return;
-            _h1 = new GUIStyle(EditorStyles.boldLabel) { fontSize = 15 };
+            _styles ??= new WindowStyles();
         }
-        bool Foldout(bool state, string label) => EditorGUILayout.Foldout(state, label, true, EditorStyles.foldoutHeader);
+        bool Foldout(bool state, string label) => EditorGUILayout.Foldout(state, label, true, _styles.foldout);
         void Divider()
         {
             var r = EditorGUILayout.GetControlRect(false, 1);
             EditorGUI.DrawRect(r, new Color(1, 1, 1, 0.1f));
             EditorGUILayout.Space(2);
+        }
+
+        sealed class WindowStyles
+        {
+            public readonly GUIStyle hero = new GUIStyle
+            {
+                padding = new RectOffset(16, 16, 14, 12),
+                margin = new RectOffset(8, 8, 8, 8),
+                normal = { background = MakeTexture(new Color(0.075f, 0.087f, 0.095f)) }
+            };
+
+            public readonly GUIStyle heroTitle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 18,
+                normal = { textColor = Color.white }
+            };
+
+            public readonly GUIStyle heroSubtitle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                normal = { textColor = new Color(0.68f, 0.74f, 0.76f) },
+                wordWrap = true
+            };
+
+            public readonly GUIStyle card = new GUIStyle
+            {
+                padding = new RectOffset(14, 14, 10, 12),
+                margin = new RectOffset(8, 8, 0, 8),
+                normal = { background = MakeTexture(Panel) }
+            };
+
+            public readonly GUIStyle buildCard = new GUIStyle
+            {
+                padding = new RectOffset(14, 14, 12, 12),
+                margin = new RectOffset(8, 8, 0, 8),
+                normal = { background = MakeTexture(new Color(0.075f, 0.087f, 0.095f)) }
+            };
+
+            public readonly GUIStyle foldout = new GUIStyle(EditorStyles.foldout)
+            {
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = Color.white },
+                onNormal = { textColor = Color.white },
+                focused = { textColor = Color.white },
+                onFocused = { textColor = Color.white }
+            };
+
+            public readonly GUIStyle sectionTitle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                normal = { textColor = new Color(0.88f, 0.93f, 0.94f) }
+            };
+
+            public readonly GUIStyle subtleLabel = new GUIStyle(EditorStyles.miniLabel)
+            {
+                normal = { textColor = new Color(0.55f, 0.62f, 0.64f) },
+                wordWrap = true
+            };
+
+            public readonly GUIStyle toggle = new GUIStyle(EditorStyles.label)
+            {
+                normal = { textColor = new Color(0.76f, 0.82f, 0.84f) },
+                onNormal = { textColor = Color.white }
+            };
+
+            public readonly GUIStyle button = new GUIStyle(EditorStyles.miniButton)
+            {
+                border = new RectOffset(7, 7, 7, 7),
+                padding = new RectOffset(10, 10, 4, 4),
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(0.82f, 0.9f, 0.9f), background = MakeButtonTexture(new Color(0.15f, 0.17f, 0.18f), new Color(0.12f, 0.14f, 0.15f), new Color(0.25f, 0.29f, 0.3f)) },
+                hover = { textColor = Color.white, background = MakeButtonTexture(new Color(0.23f, 0.27f, 0.28f), new Color(0.16f, 0.19f, 0.2f), new Color(0.34f, 0.39f, 0.4f)) },
+                active = { textColor = Color.white, background = MakeButtonTexture(new Color(0.1f, 0.12f, 0.13f), new Color(0.16f, 0.18f, 0.19f), new Color(0.19f, 0.23f, 0.24f)) }
+            };
+
+            public readonly GUIStyle primaryButton = new GUIStyle(EditorStyles.miniButton)
+            {
+                border = new RectOffset(7, 7, 7, 7),
+                padding = new RectOffset(12, 12, 4, 4),
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = Color.white, background = MakeButtonTexture(new Color(0.12f, 0.5f, 0.25f), AccentDim, new Color(0.2f, 0.72f, 0.36f)) },
+                hover = { textColor = Color.white, background = MakeButtonTexture(new Color(0.2f, 0.76f, 0.38f), new Color(0.1f, 0.5f, 0.24f), new Color(0.28f, 0.9f, 0.46f)) },
+                active = { textColor = Color.white, background = MakeButtonTexture(new Color(0.07f, 0.32f, 0.16f), new Color(0.12f, 0.5f, 0.25f), new Color(0.16f, 0.58f, 0.28f)) }
+            };
+
+            public readonly GUIStyle warningButton = new GUIStyle(EditorStyles.miniButton)
+            {
+                border = new RectOffset(7, 7, 7, 7),
+                padding = new RectOffset(12, 12, 4, 4),
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = Color.white, background = MakeButtonTexture(new Color(0.5f, 0.22f, 0.14f), new Color(0.32f, 0.13f, 0.08f), new Color(0.7f, 0.32f, 0.2f)) },
+                hover = { textColor = Color.white, background = MakeButtonTexture(new Color(0.74f, 0.31f, 0.2f), new Color(0.48f, 0.18f, 0.12f), new Color(0.94f, 0.43f, 0.27f)) },
+                active = { textColor = Color.white, background = MakeButtonTexture(new Color(0.25f, 0.1f, 0.07f), new Color(0.42f, 0.16f, 0.1f), new Color(0.55f, 0.22f, 0.14f)) }
+            };
+
+            public readonly GUIStyle miniButton = new GUIStyle(EditorStyles.miniButton)
+            {
+                border = new RectOffset(6, 6, 6, 6),
+                normal = { textColor = new Color(0.78f, 0.84f, 0.86f), background = MakeButtonTexture(new Color(0.15f, 0.17f, 0.18f), new Color(0.11f, 0.13f, 0.14f), new Color(0.24f, 0.27f, 0.28f), 6) },
+                hover = { textColor = Color.white, background = MakeButtonTexture(new Color(0.22f, 0.25f, 0.26f), new Color(0.15f, 0.18f, 0.19f), new Color(0.32f, 0.36f, 0.37f), 6) }
+            };
+
+            public readonly GUIStyle versionPill = new GUIStyle(EditorStyles.miniBoldLabel)
+            {
+                border = new RectOffset(7, 7, 7, 7),
+                alignment = TextAnchor.MiddleCenter,
+                padding = new RectOffset(7, 7, 1, 1),
+                normal =
+                {
+                    textColor = new Color(0.9f, 0.98f, 0.92f),
+                    background = MakeButtonTexture(new Color(0.13f, 0.3f, 0.19f), new Color(0.08f, 0.18f, 0.12f), new Color(0.22f, 0.72f, 0.36f), 7)
+                }
+            };
+
+            public readonly GUIStyle versionArrow = new GUIStyle(EditorStyles.boldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                padding = new RectOffset(0, 0, 5, 0),
+                normal = { textColor = Accent }
+            };
+
+            public readonly GUIStyle metricLabel = new GUIStyle(EditorStyles.miniLabel)
+            {
+                normal = { textColor = new Color(0.62f, 0.7f, 0.72f) },
+                clipping = TextClipping.Clip
+            };
+
+            public readonly GUIStyle metricValue = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 17,
+                normal = { textColor = Color.white },
+                clipping = TextClipping.Clip
+            };
+
+            public readonly GUIStyle metricCaption = new GUIStyle(EditorStyles.miniLabel)
+            {
+                normal = { textColor = new Color(0.45f, 0.52f, 0.54f) },
+                clipping = TextClipping.Clip
+            };
+
+            static Texture2D MakeTexture(Color color)
+            {
+                var texture = new Texture2D(1, 1)
+                {
+                    hideFlags = HideFlags.HideAndDontSave
+                };
+                texture.SetPixel(0, 0, color);
+                texture.Apply();
+                return texture;
+            }
+
+            static Texture2D MakeButtonTexture(Color top, Color bottom, Color border, int radius = 7)
+            {
+                const int size = 32;
+                var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+                {
+                    hideFlags = HideFlags.HideAndDontSave,
+                    wrapMode = TextureWrapMode.Clamp,
+                    filterMode = FilterMode.Bilinear
+                };
+
+                float innerRadius = Mathf.Max(0, radius - 1);
+                for (int y = 0; y < size; y++)
+                {
+                    float t = y / (float)(size - 1);
+                    Color fill = Color.Lerp(top, bottom, t);
+                    for (int x = 0; x < size; x++)
+                    {
+                        float d = RoundedRectDistance(x + 0.5f, y + 0.5f, size, size, radius);
+                        if (d > 1f)
+                        {
+                            texture.SetPixel(x, y, Color.clear);
+                            continue;
+                        }
+
+                        Color c = d > 0f || RoundedRectDistance(x + 0.5f, y + 0.5f, size, size, innerRadius) > 0f
+                            ? border
+                            : fill;
+                        c.a = Mathf.Clamp01(1f - Mathf.Max(0f, d));
+                        texture.SetPixel(x, y, c);
+                    }
+                }
+
+                texture.Apply();
+                return texture;
+            }
+
+            static float RoundedRectDistance(float x, float y, float width, float height, float radius)
+            {
+                float px = Mathf.Abs(x - width * 0.5f) - (width * 0.5f - radius);
+                float py = Mathf.Abs(y - height * 0.5f) - (height * 0.5f - radius);
+                float ax = Mathf.Max(px, 0f);
+                float ay = Mathf.Max(py, 0f);
+                return Mathf.Sqrt(ax * ax + ay * ay) + Mathf.Min(Mathf.Max(px, py), 0f) - radius;
+            }
         }
     }
 }
