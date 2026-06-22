@@ -1,6 +1,6 @@
 {
   "name": "figforge",
-  "version": "1.0.56",
+  "version": "1.0.57",
   "description": "FigForge — export Figma frames as Unity uGUI-ready manifests + PNG assets",
   "license": "MIT",
   "private": true,

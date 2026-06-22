@@ -370,14 +370,8 @@ namespace FigForge
                 // of them via ShapeShadows rather than reading one field.
                 if (ctx.vanilla)
                 {
-                    var normalState = e.canonical.stateShapes != null ? e.canonical.stateShapes.normal : null;
-                    CanonicalShape shadowShape = null;
-                    List<ShadowData> shadows = null;
-                    foreach (var s in new[] { e.canonical.rootShape, normalState, e.canonical.shape })
-                    {
-                        var found = ShapeShadows(s);
-                        if (found.Count > 0) { shadowShape = s; shadows = found; break; }
-                    }
+                    var shadowShape = FirstCanonicalShadowShape(e.canonical);
+                    var shadows = ShapeShadows(shadowShape);
                     if (shadowShape != null && shadows != null && shadows.Count > 0)
                     {
                         // Shadow the BACKGROUND graphic, not the whole control (toggle box, switch
@@ -1722,6 +1716,46 @@ namespace FigForge
             else if (sh.shadows != null && sh.shadows.Count > 0) shadows.AddRange(sh.shadows);
             else if (sh.shadow != null) shadows.Add(sh.shadow);
             return shadows;
+        }
+
+        static CanonicalShape FirstCanonicalShadowShape(CanonicalRef c)
+        {
+            if (c == null) return null;
+            var regular = c.instanceStateShapes != null && c.instanceStateShapes.normal != null
+                ? c.instanceStateShapes.normal
+                : c.stateShapes != null && c.stateShapes.normal != null
+                    ? c.stateShapes.normal
+                    : (c.instanceShape ?? c.shape);
+            foreach (var sh in CanonicalShadowCandidates(c, regular))
+                if (ShapeShadows(sh).Count > 0) return sh;
+            return null;
+        }
+
+        static IEnumerable<CanonicalShape> CanonicalShadowCandidates(CanonicalRef c, CanonicalShape regular)
+        {
+            if (c == null) yield break;
+            yield return RootShadowShape(c.instanceRootShape, regular);
+            yield return RootShadowShape(c.rootShape, regular);
+            if (c.instanceStateShapes != null)
+            {
+                yield return c.instanceStateShapes.normal;
+                yield return c.instanceStateShapes.highlighted;
+                yield return c.instanceStateShapes.pressed;
+                yield return c.instanceStateShapes.selected;
+                yield return c.instanceStateShapes.disabled;
+                yield return c.instanceStateShapes.focused;
+            }
+            if (c.stateShapes != null)
+            {
+                yield return c.stateShapes.normal;
+                yield return c.stateShapes.highlighted;
+                yield return c.stateShapes.pressed;
+                yield return c.stateShapes.selected;
+                yield return c.stateShapes.disabled;
+                yield return c.stateShapes.focused;
+            }
+            yield return c.instanceShape;
+            yield return c.shape;
         }
 
         static ShadowData FirstDropShadow(CanonicalShape sh)

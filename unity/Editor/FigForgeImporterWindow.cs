@@ -70,7 +70,7 @@ namespace FigForge
         // ---- ui state ----
         Vector2 _scroll, _logScroll;
         readonly List<(string msg, MessageType kind)> _log = new List<(string, MessageType)>();
-        bool _showCanvas = true, _showFonts = true, _showTextures, _showAtlas, _showCanonical = true, _showLive;
+        bool _showCanvas, _showFonts, _showTextures, _showAtlas, _showCanonical, _showLive;
 
         WindowStyles _styles;
 
@@ -113,6 +113,7 @@ namespace FigForge
 
         void OnEnable()
         {
+            wantsMouseMove = true;
             _warmUpBatchSize = WarmUpBatchSizePref;
             _editorColumns = EditorColumnsPref;
             RefreshManifests();
@@ -228,6 +229,7 @@ namespace FigForge
         void OnGUI()
         {
             EnsureStyles();
+            if (Event.current != null && Event.current.type == EventType.MouseMove) Repaint();
             EditorGUI.DrawRect(new Rect(0, 0, position.width, position.height), Background);
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
 
@@ -408,11 +410,14 @@ namespace FigForge
                 {
                     _selectedProject = EditorGUILayout.Popup("Page bundle", _selectedProject,
                         _projectPaths.Select(p => Path.GetFileName(Path.GetDirectoryName(p)) + " / project.json").ToArray());
-                    if (GUILayout.Button($"Forge Page to {_backend} (all screens)", _styles.primaryButton, GUILayout.Height(28)))
+                    if (ForgePageButton($"Forge Page to {_backend} (all screens)",
+                        _styles.pageForgeNormal, _styles.pageForgeHover, _styles.pageForgeActive, 38f))
                         BuildPageProject(_projectPaths[_selectedProject]);
+                    EditorGUILayout.Space(4);
                     using (new EditorGUI.DisabledScope(_backend != UIBackend.uGUI))
                     {
-                        if (GUILayout.Button("Forge Page with Customizations to uGUI", _styles.warningButton, GUILayout.Height(26)))
+                        if (ForgePageButton("Forge Page with Customizations to uGUI",
+                            _styles.customForgeNormal, _styles.customForgeHover, _styles.customForgeActive, 38f))
                             BuildPageProject(_projectPaths[_selectedProject], includeUnityCustomizations: true);
                     }
                     EditorGUILayout.Space(5);
@@ -1823,6 +1828,42 @@ namespace FigForge
             _styles ??= new WindowStyles();
         }
         bool Foldout(bool state, string label) => EditorGUILayout.Foldout(state, label, true, _styles.foldout);
+        bool ForgePageButton(string label, GUIStyle normal, GUIStyle hover, GUIStyle active, float height)
+        {
+            var rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none,
+                GUILayout.ExpandWidth(true), GUILayout.Height(height));
+            int id = GUIUtility.GetControlID("FigForgeForgePageButton".GetHashCode(), FocusType.Passive, rect);
+            bool enabled = GUI.enabled;
+            bool hot = enabled && rect.Contains(Event.current.mousePosition);
+            bool held = enabled && GUIUtility.hotControl == id && hot;
+            var style = enabled ? (held ? active : hot ? hover : normal) : _styles.forgeButtonDisabled;
+            if (Event.current.type == EventType.Repaint)
+            {
+                if (!held) GUI.Box(new Rect(rect.x, rect.y + 2f, rect.width, rect.height), GUIContent.none, _styles.forgeButtonShadow);
+                GUI.Box(rect, GUIContent.none, style);
+                var labelRect = held ? new Rect(rect.x, rect.y + 1f, rect.width, rect.height) : rect;
+                using (new EditorGUI.DisabledScope(!enabled))
+                    GUI.Label(labelRect, label, enabled ? _styles.forgeButtonLabel : _styles.forgeButtonDisabledLabel);
+            }
+
+            var e = Event.current;
+            if (!enabled || e == null) return false;
+            if (e.type == EventType.MouseDown && e.button == 0 && hot)
+            {
+                GUIUtility.hotControl = id;
+                Repaint();
+                e.Use();
+            }
+            else if (e.type == EventType.MouseUp && e.button == 0 && GUIUtility.hotControl == id)
+            {
+                GUIUtility.hotControl = 0;
+                Repaint();
+                e.Use();
+                return hot;
+            }
+            return false;
+        }
+
         void Divider()
         {
             var r = EditorGUILayout.GetControlRect(false, 1);
@@ -1921,6 +1962,31 @@ namespace FigForge
                 active = { textColor = Color.white, background = MakeButtonTexture(new Color(0.25f, 0.1f, 0.07f), new Color(0.42f, 0.16f, 0.1f), new Color(0.55f, 0.22f, 0.14f)) }
             };
 
+            public readonly GUIStyle forgeButtonLabel = new GUIStyle(EditorStyles.boldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 13,
+                clipping = TextClipping.Clip,
+                normal = { textColor = Color.white }
+            };
+
+            public readonly GUIStyle forgeButtonDisabledLabel = new GUIStyle(EditorStyles.boldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 13,
+                clipping = TextClipping.Clip,
+                normal = { textColor = new Color(1f, 1f, 1f, 0.48f) }
+            };
+
+            public readonly GUIStyle pageForgeNormal = ForgeButtonStyle(new Color(0.28f, 0.6f, 0.38f), new Color(0.18f, 0.24f, 0.21f), new Color(0.46f, 0.5f, 0.48f));
+            public readonly GUIStyle pageForgeHover = ForgeButtonStyle(new Color(0.36f, 0.72f, 0.48f), new Color(0.22f, 0.3f, 0.26f), new Color(0.56f, 0.62f, 0.58f));
+            public readonly GUIStyle pageForgeActive = ForgeButtonStyle(new Color(0.13f, 0.24f, 0.18f), new Color(0.27f, 0.46f, 0.33f), new Color(0.34f, 0.38f, 0.36f));
+            public readonly GUIStyle customForgeNormal = ForgeButtonStyle(new Color(0.46f, 0.43f, 0.68f), new Color(0.22f, 0.22f, 0.31f), new Color(0.48f, 0.49f, 0.56f));
+            public readonly GUIStyle customForgeHover = ForgeButtonStyle(new Color(0.56f, 0.52f, 0.82f), new Color(0.27f, 0.26f, 0.39f), new Color(0.58f, 0.58f, 0.68f));
+            public readonly GUIStyle customForgeActive = ForgeButtonStyle(new Color(0.18f, 0.17f, 0.28f), new Color(0.35f, 0.32f, 0.52f), new Color(0.36f, 0.36f, 0.43f));
+            public readonly GUIStyle forgeButtonDisabled = ForgeButtonStyle(new Color(0.25f, 0.26f, 0.27f), new Color(0.16f, 0.17f, 0.18f), new Color(0.38f, 0.4f, 0.41f));
+            public readonly GUIStyle forgeButtonShadow = ForgeButtonStyle(new Color(0f, 0f, 0f, 0.2f), new Color(0f, 0f, 0f, 0.28f), new Color(0f, 0f, 0f, 0f));
+
             public readonly GUIStyle miniButton = new GUIStyle(EditorStyles.miniButton)
             {
                 border = new RectOffset(6, 6, 6, 6),
@@ -1990,7 +2056,7 @@ namespace FigForge
                 float innerRadius = Mathf.Max(0, radius - 1);
                 for (int y = 0; y < size; y++)
                 {
-                    float t = y / (float)(size - 1);
+                    float t = 1f - y / (float)(size - 1);
                     Color fill = Color.Lerp(top, bottom, t);
                     for (int x = 0; x < size; x++)
                     {
@@ -2004,6 +2070,51 @@ namespace FigForge
                         Color c = d > 0f || RoundedRectDistance(x + 0.5f, y + 0.5f, size, size, innerRadius) > 0f
                             ? border
                             : fill;
+                        c.a = Mathf.Clamp01(1f - Mathf.Max(0f, d));
+                        texture.SetPixel(x, y, c);
+                    }
+                }
+
+                texture.Apply();
+                return texture;
+            }
+
+            static GUIStyle ForgeButtonStyle(Color top, Color bottom, Color border)
+            {
+                return new GUIStyle
+                {
+                    border = new RectOffset(8, 8, 8, 8),
+                    normal = { background = MakeForgeButtonTexture(top, bottom, border, 7) }
+                };
+            }
+
+            static Texture2D MakeForgeButtonTexture(Color top, Color bottom, Color bevel, int radius = 7)
+            {
+                const int size = 32;
+                var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+                {
+                    hideFlags = HideFlags.HideAndDontSave,
+                    wrapMode = TextureWrapMode.Clamp,
+                    filterMode = FilterMode.Bilinear
+                };
+
+                float innerRadius = Mathf.Max(0, radius - 1);
+                for (int y = 0; y < size; y++)
+                {
+                    float t = 1f - y / (float)(size - 1);
+                    Color fill = Color.Lerp(top, bottom, t);
+                    for (int x = 0; x < size; x++)
+                    {
+                        float d = RoundedRectDistance(x + 0.5f, y + 0.5f, size, size, radius);
+                        if (d > 1f)
+                        {
+                            texture.SetPixel(x, y, Color.clear);
+                            continue;
+                        }
+
+                        float innerD = RoundedRectDistance(x + 0.5f, y + 0.5f, size, size, innerRadius);
+                        float edge = Mathf.Clamp01(innerD + 1f);
+                        Color c = Color.Lerp(fill, bevel, edge * 0.28f);
                         c.a = Mathf.Clamp01(1f - Mathf.Max(0f, d));
                         texture.SetPixel(x, y, c);
                     }
