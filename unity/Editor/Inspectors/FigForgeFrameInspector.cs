@@ -93,7 +93,7 @@ namespace FigForge
             {
                 foreach (var f in cur.GetFields(flags))
                 {
-                    if (!typeof(Component).IsAssignableFrom(f.FieldType)) continue;
+                    if (!IsAccessorFieldType(f.FieldType)) continue;
                     if (!f.IsPublic && !f.IsDefined(typeof(SerializeField), false)) continue;
                     list.Add(f);
                 }
@@ -102,6 +102,12 @@ namespace FigForge
             FieldCache[t] = arr;
             return arr;
         }
+
+        // A field that backs an accessor: a single Component ref (leaf control or group), or a
+        // collection accessor's Component[] backing array (the generated IReadOnlyList<T>).
+        static bool IsAccessorFieldType(Type ft)
+            => typeof(Component).IsAssignableFrom(ft)
+            || (ft.IsArray && typeof(Component).IsAssignableFrom(ft.GetElementType()));
 
         public static void DrawSection(SerializedObject so, UnityEngine.Object target,
                                        Dictionary<int, bool> expanded, string title, string emptyHint)
@@ -138,16 +144,36 @@ namespace FigForge
                 var prop = so.FindProperty(f.Name);
                 if (prop == null) continue;
                 string label = AccessorKey(f.Name);
+
+                if (f.FieldType.IsArray)
+                {
+                    // Collection accessor (Component[] backing the generated IReadOnlyList<T>) —
+                    // a native expandable array: size + one object field per element.
+                    EditorGUILayout.PropertyField(prop, new GUIContent(label), true);
+                    continue;
+                }
+
                 var refObj = prop.objectReferenceValue;
                 bool isGroup = typeof(FigForgeFrameElement).IsAssignableFrom(f.FieldType);
 
                 if (isGroup && refObj is Component groupComp)
                 {
+                    // The group ref itself — drawn as a native object field, exactly like every
+                    // leaf control, so it's visible + reassignable (it used to render as a bare
+                    // foldout with no field row, which read as "the group isn't a serialized field").
+                    // A foldout arrow rides the same row to drill into the group's own children.
                     int id = refObj.GetInstanceID();
                     // Default collapsed: only an expanded group builds a child SerializedObject, so a
                     // big frame costs nothing until you drill in (this whole tree began as a perf fix).
                     bool stored = expanded.TryGetValue(id, out var e) && e;
-                    bool ne = EditorGUILayout.Foldout(stored, label, true);
+
+                    var row = EditorGUILayout.GetControlRect();
+                    // Foldout in a thin arrow-only rect (toggleOnLabelClick:false) so it claims just
+                    // the triangle; the PropertyField across the full row keeps the label + object
+                    // field fully interactive (picker, drag, ping).
+                    var arrow = new Rect(row.x, row.y, EditorGUIUtility.singleLineHeight, row.height);
+                    bool ne = EditorGUI.Foldout(arrow, stored, GUIContent.none, false);
+                    EditorGUI.PropertyField(row, prop, new GUIContent("   " + label));
                     if (ne != stored) expanded[id] = ne;
                     if (ne)
                     {
@@ -330,8 +356,22 @@ namespace FigForge
         {
             foreach (var f in FigForgeAccessorTree.AccessorFields(comp.GetType()))
             {
-                var val = f.GetValue(comp) as UnityEngine.Object; // UnityEngine.Object == null catches destroyed refs
                 string key = FigForgeAccessorTree.AccessorKey(f.Name);
+                if (f.FieldType.IsArray)
+                {
+                    // Collection: flag the accessor when the array is empty or any slot is null. The
+                    // per-element registry keys are baked into the generated wiring, not reflectable
+                    // here, so fixability is judged by registry presence (Populate rebuilds from keys).
+                    var arr = f.GetValue(comp) as Array;
+                    if (arr == null || arr.Length == 0)
+                        list.Add(new MissingRef { path = path + "." + key + " (empty)", fixable = reg != null });
+                    else
+                        for (int i = 0; i < arr.Length; i++)
+                            if (arr.GetValue(i) as UnityEngine.Object == null)
+                                list.Add(new MissingRef { path = path + "." + key + "[" + i + "]", fixable = reg != null });
+                    continue;
+                }
+                var val = f.GetValue(comp) as UnityEngine.Object; // UnityEngine.Object == null catches destroyed refs
                 if (val == null)
                     list.Add(new MissingRef { path = path + "." + key, fixable = reg != null && reg.Get(key) != null });
                 else if (typeof(FigForgeFrameElement).IsAssignableFrom(f.FieldType) && val is Component child)
