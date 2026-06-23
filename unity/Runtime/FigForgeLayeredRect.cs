@@ -424,8 +424,12 @@ namespace FigForge
         {
             get
             {
+                // base.materialForRendering reads `this.material` (our override), which
+                // already calls UpdateActiveMaterial on `active` — so don't upload to
+                // `active` a second time here (mirrors FigForgeImageBlend/TextBlend/
+                // VectorGraphic). Only the stencil-wrapped clone, when uGUI hands back a
+                // material distinct from `active`, still needs configuring.
                 var active = ActiveRenderMaterial();
-                UpdateActiveMaterial(active);
                 var renderMaterial = base.materialForRendering;
                 if (renderMaterial != null && renderMaterial != active)
                     UpdateActiveMaterial(renderMaterial);
