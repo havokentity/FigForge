@@ -192,7 +192,9 @@ namespace FigForge
                         Debug.LogWarning($"[FigForge] FrameManager: guard redirect target '{decision.RedirectKey ?? "<frame>"}' not found.");
                         return false;
                     }
-                    return ShowInternal(redirect, redirect.ScreenKey, true, redirectDepth + 1, null);
+                    // Forward the originating link so the redirected target's guards keep
+                    // the trigger/link provenance instead of seeing the default 'navigate'.
+                    return ShowInternal(redirect, redirect.ScreenKey, true, redirectDepth + 1, via);
                 }
             }
 

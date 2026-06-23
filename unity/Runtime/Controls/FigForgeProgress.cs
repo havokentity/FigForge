@@ -76,12 +76,12 @@ namespace FigForge
         public ProgressEvent onValueChanged = new ProgressEvent();
 
         /// <summary>Range start — `bar.minValue = 0`. Re-clamps the current value
-        /// (onValueChanged fires if it moves) and repaints the fill.</summary>
-        public float minValue { get => m_MinValue; set { m_MinValue = value; Set(m_Value); } }
+        /// (silently — a range change does not fire onValueChanged) and repaints the fill.</summary>
+        public float minValue { get => m_MinValue; set { m_MinValue = value; Set(m_Value, false); } }
 
         /// <summary>Range end — `bar.maxValue = 100`. Re-clamps the current value
-        /// (onValueChanged fires if it moves) and repaints the fill.</summary>
-        public float maxValue { get => m_MaxValue; set { m_MaxValue = value; Set(m_Value); } }
+        /// (silently — a range change does not fire onValueChanged) and repaints the fill.</summary>
+        public float maxValue { get => m_MaxValue; set { m_MaxValue = value; Set(m_Value, false); } }
 
         /// <summary>The current progress — `bar.value = 0.75f`. Clamped to
         /// [minValue..maxValue]; drives the fill width and the percentage read-out.</summary>

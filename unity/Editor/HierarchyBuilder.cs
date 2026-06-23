@@ -496,6 +496,13 @@ namespace FigForge
                                 }
                             }
                         }
+                        else if (!string.IsNullOrEmpty(childId))
+                        {
+                            // A declared extra child whose id isn't in the manifest index can't be
+                            // built and is silently dropped from the visual — surface it so the
+                            // missing decorative layer is debuggable.
+                            Debug.LogWarning($"[FigForge] '{e.name}': extra child id '{childId}' not found in manifest — layer dropped.");
+                        }
                 }
                 return inst;
             }

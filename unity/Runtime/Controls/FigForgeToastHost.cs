@@ -204,10 +204,14 @@ namespace FigForge
         public void ApplySeverity(ToastSeverity severity)
         {
             var color = SeverityColor(severity);
+            var baseBg = new Color(0.07f, 0.075f, 0.09f, 0.96f);
             if (accent != null) accent.color = color;
             if (background != null)
             {
-                background.color = new Color(0.07f, 0.075f, 0.09f, 0.96f);
+                // The accent strip carries the severity colour. With no accent graphic on
+                // the prefab, fall back to a subtle severity tint of the dark background so
+                // the severity is still conveyed (instead of every toast looking identical).
+                background.color = accent != null ? baseBg : Color.Lerp(baseBg, color, 0.12f);
             }
         }
 
@@ -342,7 +346,11 @@ namespace FigForge
 
         static FigForgeToastHost ResolveHost()
         {
+#if UNITY_2023_1_OR_NEWER
+            var existing = Object.FindFirstObjectByType<FigForgeToastHost>(FindObjectsInactive.Include);
+#else
             var existing = Object.FindObjectOfType<FigForgeToastHost>(true);
+#endif
             if (existing != null) return existing;
 
             EnsureEventSystem();
@@ -382,7 +390,11 @@ namespace FigForge
 
         static Canvas FindFigForgeCanvas()
         {
+#if UNITY_2023_1_OR_NEWER
+            var helper = Object.FindFirstObjectByType<FigForgeCanvasHelper>(FindObjectsInactive.Include);
+#else
             var helper = Object.FindObjectOfType<FigForgeCanvasHelper>(true);
+#endif
             if (helper == null) return null;
             var canvas = helper.GetComponentInParent<Canvas>();
             if (canvas == null) return null;
@@ -391,7 +403,11 @@ namespace FigForge
 
         static void EnsureEventSystem()
         {
+#if UNITY_2023_1_OR_NEWER
+            if (Object.FindFirstObjectByType<EventSystem>() != null) return;
+#else
             if (Object.FindObjectOfType<EventSystem>() != null) return;
+#endif
             // Scene-scoped: do NOT persist across scene loads, so each scene
             // manages its own EventSystem alongside its FigForge canvas.
             new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));

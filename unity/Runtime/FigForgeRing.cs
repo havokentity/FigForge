@@ -60,6 +60,26 @@ namespace FigForge
 
             var v = UIVertex.simpleVert;
             v.color = col;
+
+            // Pie wedge (thickness 1 → inner radius 0): a strip would emit overlapping
+            // zero-area triangles fanning out of the coincident centre verts. Emit a
+            // proper triangle fan from a single shared centre vertex instead.
+            if (m_Thickness >= 0.999f)
+            {
+                v.position = c;
+                vh.AddVert(v); // index 0: shared centre
+                for (int i = 0; i <= steps; i++)
+                {
+                    // Visual angle from 12 o'clock clockwise → UI space (y up).
+                    float a = (a0 + sweepDeg * i / steps) * Mathf.Deg2Rad;
+                    var dir = new Vector2(Mathf.Sin(a), Mathf.Cos(a));
+                    v.position = c + dir * outer;
+                    vh.AddVert(v);
+                    if (i > 0) vh.AddTriangle(0, i, i + 1);
+                }
+                return;
+            }
+
             for (int i = 0; i <= steps; i++)
             {
                 // Visual angle from 12 o'clock clockwise → UI space (y up).

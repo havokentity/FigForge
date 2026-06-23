@@ -66,16 +66,19 @@ namespace FigForge
             var manager = (FrameManager)target;
             int beforeColumns = manager != null ? manager.editorColumns : 5;
 
-            DrawDefaultInspector();
+            // Draw via SerializedProperty so we can clamp editorColumns BEFORE the edit is
+            // committed (ApplyModifiedProperties), rather than after DrawDefaultInspector has
+            // already written an out-of-range value back to the manager.
+            serializedObject.Update();
+            var columnsProp = serializedObject.FindProperty("editorColumns");
+            DrawPropertiesExcluding(serializedObject, "m_Script", "editorColumns");
+            if (columnsProp != null)
+                columnsProp.intValue = Mathf.Clamp(
+                    EditorGUILayout.IntField("Editor grid columns", columnsProp.intValue), 1, 50);
+            serializedObject.ApplyModifiedProperties();
 
             if (manager == null) return;
-            int afterColumns = Mathf.Clamp(manager.editorColumns, 1, 50);
-            if (afterColumns != manager.editorColumns)
-            {
-                Undo.RecordObject(manager, "FigForge Editor Columns");
-                manager.editorColumns = afterColumns;
-                EditorUtility.SetDirty(manager);
-            }
+            int afterColumns = manager.editorColumns;
 
             if (afterColumns != beforeColumns)
             {

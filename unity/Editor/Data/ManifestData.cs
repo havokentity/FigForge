@@ -94,7 +94,7 @@ namespace FigForge
 
     public class ShadowData
     {
-        public string kind;               // dropShadow|innerShadow|layerBlur
+        public string kind;               // dropShadow|innerShadow|layerBlur|backgroundBlur (TS Shadow.kind)
         public float[] color;            // rgba 0..1
         public float offsetX, offsetY;   // Figma px (+y down)
         public float blur;               // Figma effect radius
@@ -394,12 +394,14 @@ namespace FigForge
 
     public class AssetDiagnosticIssue
     {
-        public string category;          // missingFonts|unsupportedFills|rasterFallbacks|oversizedPngs|blendModeCaveats
+        public string category;          // missingFonts|unsupportedFills|rasterFallbacks|oversizedPngs|blendModeCaveats|variantExtraction
         public string severity;          // info|warning
         public string nodeId;
         public string nodeName;
         public string asset;
         public string message;
+        // TS contract (Record<string, string|number|boolean>) only ever puts scalars
+        // here; `object` is just Newtonsoft's landing type. Expect no nested objects/arrays.
         public Dictionary<string, object> details;
     }
 
