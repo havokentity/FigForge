@@ -29,7 +29,13 @@ namespace FigForge
             TextureImportHelper.EnsureFolder(atlasFolder);
             string path = $"{atlasFolder}/{Sanitize(screenName)}_Atlas.spriteatlas";
 
-            var atlas = new SpriteAtlas();
+            // Reconfigure an existing atlas in place rather than CreateAsset over it:
+            // re-creating churns the .spriteatlas GUID, breaking any references (and
+            // the late-binding SpriteAtlasManager lookups) that point at the old one.
+            var atlas = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(path);
+            bool isNew = atlas == null;
+            if (isNew) atlas = new SpriteAtlas();
+
             var packing = new SpriteAtlasPackingSettings
             {
                 padding = settings.padding,
@@ -40,9 +46,17 @@ namespace FigForge
             atlas.SetIncludeInBuild(settings.includeInBuild);
 
             var folderAsset = AssetDatabase.LoadAssetAtPath<Object>(spriteFolder);
+            // Clear prior packables so a reconfigured atlas doesn't accumulate stale
+            // folder entries across rebuilds; then add the current sprite folder.
+            if (!isNew)
+            {
+                var prior = atlas.GetPackables();
+                if (prior != null && prior.Length > 0) atlas.Remove(prior);
+            }
             if (folderAsset != null) atlas.Add(new Object[] { folderAsset });
 
-            AssetDatabase.CreateAsset(atlas, path);
+            if (isNew) AssetDatabase.CreateAsset(atlas, path);
+            else EditorUtility.SetDirty(atlas);
             AssetDatabase.SaveAssets();
             SpriteAtlasUtility.PackAtlases(new[] { atlas }, EditorUserBuildSettings.activeBuildTarget);
             return atlas;

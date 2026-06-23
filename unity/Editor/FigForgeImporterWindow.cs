@@ -142,7 +142,7 @@ namespace FigForge
             _projectPaths = Directory
                 .GetFiles(Application.dataPath, "project.json", SearchOption.AllDirectories)
                 .Select(p => "Assets" + p.Substring(Application.dataPath.Length).Replace('\\', '/'))
-                .Where(p => { try { return File.ReadAllText(p).Contains("figforge/project"); } catch { return false; } })
+                .Where(p => HasSchemaMarker(p, "figforge/project"))
                 .ToList();
             _selectedProject = Mathf.Clamp(_selectedProject, 0, Mathf.Max(0, _projectPaths.Count - 1));
 
@@ -153,9 +153,25 @@ namespace FigForge
         // Only FigForge manifests carry the "figforge/manifest" schema marker.
         // Requiring it keeps the scan from trying to parse foreign/old-schema
         // manifest.json files in the project (which throw and spam the log).
-        static bool IsFigForgeManifest(string assetPath)
+        static bool IsFigForgeManifest(string assetPath) => HasSchemaMarker(assetPath, "figforge/manifest");
+
+        // The schema marker sits in the file head (it's the first/second JSON key the
+        // plugin emits), so read only a bounded prefix instead of slurping the whole
+        // file. RefreshManifests runs on every OnEnable/ImportZip/LiveBuildPage and
+        // scans the entire Assets tree — full ReadAllText on every manifest.json /
+        // project.json (some carry large inlined data) made that needlessly heavy.
+        const int SchemaProbeBytes = 8 * 1024;
+        static bool HasSchemaMarker(string assetPath, string marker)
         {
-            try { return File.ReadAllText(assetPath).Contains("figforge/manifest"); }
+            try
+            {
+                var buffer = new char[SchemaProbeBytes];
+                using (var reader = new StreamReader(assetPath))
+                {
+                    int read = reader.Read(buffer, 0, buffer.Length);
+                    return read > 0 && new string(buffer, 0, read).Contains(marker);
+                }
+            }
             catch { return false; }
         }
 
@@ -744,6 +760,9 @@ namespace FigForge
             }
             catch (System.Exception e)
             {
+                // Also surface in the Console: the in-window log is invisible when the
+                // importer isn't focused (the per-screen inner catches already LogError).
+                Debug.LogError($"[FigForge] build failed: {e}");
                 Log($"build failed: {e.Message}\n{e.StackTrace}", MessageType.Error);
             }
             finally
@@ -1501,7 +1520,9 @@ namespace FigForge
                 Log($"built page '{proj.name}'{customizationSummary} — {built} screen(s){shellSummary}, initial '{proj.initial}' ✓", MessageType.Info);
                 return true;
             }
-            catch (System.Exception e) { Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); return false; }
+            // Also LogError so the failure shows in the Console even when the importer
+            // window isn't focused (the per-screen inner catches already do this).
+            catch (System.Exception e) { Debug.LogError($"[FigForge] page build failed: {e}"); Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); return false; }
             // EndBatch sweeps orphan Frames.<Old>.g.cs and clears the shared reserved set. In the
             // finally so a mid-import throw can't leave the batch open (which would make the NEXT
             // single-frame import wrongly think it's still in a full run).

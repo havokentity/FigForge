@@ -81,7 +81,7 @@ namespace FigForge
             // to the TMP default instead.
             try
             {
-                string src = FindFontFile(family, style); // project-relative .ttf/.otf (OS file copied in)
+                string src = FindFontFile(family, style, log); // project-relative .ttf/.otf (OS file copied in)
                 if (src == null) return null;
 
                 string outPath = $"{FontFolder}/{Safe(Path.GetFileNameWithoutExtension(src))} SDF.asset";
@@ -273,7 +273,7 @@ namespace FigForge
 
         // Best .ttf/.otf for (family, style) across project + package + OS by
         // tier; copies an OS file into the project when it's the winner.
-        static string FindFontFile(string family, string style)
+        static string FindFontFile(string family, string style, Action<string> log)
         {
             var candidates = AssetDatabase.FindAssets("t:Font").Select(AssetDatabase.GUIDToAssetPath)
                 .Where(IsFontFile).Concat(BundledInterFontFiles()).Concat(OsFontFiles())
@@ -291,10 +291,58 @@ namespace FigForge
             if (chosen == null) return null;
             if (IsAssetDatabasePath(chosen)) return chosen;
 
+            // Embedding a font from the OS folders copies a binary the user may not
+            // have redistribution rights to — flag it so a packaged build's licensing
+            // is a deliberate choice, not a silent surprise.
+            log?.Invoke($"embedding system font '{Path.GetFileName(chosen)}' from {chosen} into {FontFolder}/ — verify you may redistribute it before shipping a build");
+
             TextureImportHelper.EnsureFolder(FontFolder);
-            string dest = $"{FontFolder}/{Path.GetFileName(chosen)}";
+            // Two distinct OS files can share a bare filename across font folders;
+            // qualify the destination on collision (when an existing copy is a
+            // DIFFERENT file) so the second source doesn't clobber the first. A
+            // byte-identical copy is reused as-is, so re-imports don't pile up suffixes.
+            string dest = UniqueFontDest(Path.GetFileName(chosen), chosen);
             try { File.Copy(chosen, ProjectAbs(dest), true); AssetDatabase.ImportAsset(dest); return dest; }
             catch { return null; }
+        }
+
+        // Resolve a destination under FontFolder that won't overwrite an unrelated
+        // existing copy. The plain name is reused when it's free or already holds the
+        // same bytes as the source; otherwise we append a numeric suffix, again
+        // reusing the first slot whose contents already match the source.
+        static string UniqueFontDest(string fileName, string sourceAbs)
+        {
+            string plain = $"{FontFolder}/{fileName}";
+            if (!File.Exists(ProjectAbs(plain)) || SameFile(ProjectAbs(plain), sourceAbs)) return plain;
+
+            string stem = Path.GetFileNameWithoutExtension(fileName);
+            string ext = Path.GetExtension(fileName);
+            for (int n = 1; n < 1000; n++)
+            {
+                string candidate = $"{FontFolder}/{stem}_{n}{ext}";
+                string candidateAbs = ProjectAbs(candidate);
+                if (!File.Exists(candidateAbs) || SameFile(candidateAbs, sourceAbs)) return candidate;
+            }
+            return plain; // pathological; fall back to overwriting the plain name
+        }
+
+        static bool SameFile(string aAbs, string bAbs)
+        {
+            try
+            {
+                var a = new FileInfo(aAbs);
+                var b = new FileInfo(bAbs);
+                if (!a.Exists || !b.Exists || a.Length != b.Length) return false;
+                using (var sa = a.OpenRead())
+                using (var sb = b.OpenRead())
+                {
+                    int x;
+                    while ((x = sa.ReadByte()) != -1)
+                        if (x != sb.ReadByte()) return false;
+                    return true;
+                }
+            }
+            catch { return false; }
         }
 
         static IEnumerable<string> BundledInterFontFiles()

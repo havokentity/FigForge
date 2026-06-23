@@ -57,11 +57,15 @@ namespace FigForge
                 EditorGUIUtility.labelWidth = 0f;
                 if (kind.enumValueIndex == (int)FigForgeFillKind.Gradient)
                 {
-                    if (gradient.gradientValue == null)
-                        gradient.gradientValue = DefaultGradient(color.colorValue);
+                    // Don't seed a default here: this path runs every repaint, so an
+                    // unconditional write marks the object dirty just from being drawn.
+                    // The mode-popup EndChangeCheck below already seeds on the actual
+                    // user action that switches a fill to Gradient. Fall back to a
+                    // throwaway default purely for display when the value is still null.
                     EditorGUI.showMixedValue = gradient.hasMultipleDifferentValues;
                     EditorGUI.BeginChangeCheck();
-                    var nextGradient = EditorGUI.GradientField(swatchRect, gradient.gradientValue);
+                    var nextGradient = EditorGUI.GradientField(swatchRect,
+                        gradient.gradientValue ?? DefaultGradient(color.colorValue));
                     if (EditorGUI.EndChangeCheck())
                         gradient.gradientValue = nextGradient;
                     EditorGUI.showMixedValue = false;

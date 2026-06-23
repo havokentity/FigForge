@@ -31,6 +31,14 @@ namespace FigForge
         const int DefaultPort = 1995;
         const string LiveRoot = "Assets/FigForge/Live";
 
+        // Loopback + token-gated, so these are belt-and-braces caps. The plugin's own
+        // send guard rejects bundles above ~200 MB encoded (see ui.ts sendToUnity);
+        // mirror a slightly higher ceiling here so a single malformed/huge POST can't
+        // pin unbounded memory in the Editor, and bound the queue so a burst of
+        // requests can't grow _inbox without limit before Pump drains it.
+        const long MaxBodyBytes = 256L * 1024 * 1024; // 256 MB
+        const int MaxInboxDepth = 8;
+
         static HttpListener _listener;
         static readonly Queue<string> _inbox = new Queue<string>();
         static readonly object _gate = new object();
@@ -163,6 +171,23 @@ namespace FigForge
                             Respond(res, 401, "{\"ok\":false,\"error\":\"unauthorized\"}");
                             break;
                         }
+                        // Reject an oversized body up front (declared Content-Length)
+                        // before reading it into memory — a single huge POST shouldn't
+                        // be able to pin hundreds of MB in the Editor.
+                        if (ctx.Request.ContentLength64 > MaxBodyBytes)
+                        {
+                            Respond(res, 413, "{\"ok\":false,\"error\":\"payload too large\"}");
+                            break;
+                        }
+                        // Bound the queue so a burst can't grow _inbox without limit
+                        // before the main-thread Pump drains it.
+                        bool full;
+                        lock (_gate) full = _inbox.Count >= MaxInboxDepth;
+                        if (full)
+                        {
+                            Respond(res, 503, "{\"ok\":false,\"error\":\"importer busy\"}");
+                            break;
+                        }
                         // The wire is always UTF-8 (the plugin posts JSON via fetch,
                         // which encodes JS strings as UTF-8). Request.ContentEncoding
                         // is NOT trustworthy: without an explicit charset in the
@@ -172,7 +197,14 @@ namespace FigForge
                         string body;
                         using (var sr = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
                             body = sr.ReadToEnd();
-                        lock (_gate) _inbox.Enqueue(body);
+                        lock (_gate)
+                        {
+                            // Re-check under the lock: another request may have filled
+                            // the queue between the check above and here.
+                            if (_inbox.Count >= MaxInboxDepth) full = true;
+                            else _inbox.Enqueue(body);
+                        }
+                        if (full) { Respond(res, 503, "{\"ok\":false,\"error\":\"importer busy\"}"); break; }
                         Respond(res, 202, "{\"ok\":true,\"queued\":true}");
                         break;
                     default:
@@ -220,9 +252,24 @@ namespace FigForge
 
         static void ImportBundle(string json)
         {
-            var bundle = JsonUtility.FromJson<LiveBundle>(json);
+            LiveBundle bundle;
+            try { bundle = JsonUtility.FromJson<LiveBundle>(json); }
+            catch (Exception e) { throw new Exception($"unparseable bundle JSON: {e.Message}"); }
             if (bundle == null || bundle.screens == null || bundle.screens.Length == 0)
                 throw new Exception("empty or unparseable bundle");
+
+            // Version-gate the wire format BEFORE any destructive step (mirrors
+            // ManifestParser's supported-version check). The bundle carries no
+            // top-level version; each screen's manifest string does, so probe the
+            // first non-empty one. A mismatched generation degrades field-by-field
+            // silently otherwise — and the swap below would already have deleted the
+            // previous good import before ManifestParser.Load rejected it downstream.
+            string bundleVersion = FirstManifestVersion(bundle.screens);
+            if (bundleVersion != null && System.Array.IndexOf(SupportedManifestVersions, bundleVersion) < 0)
+                throw new Exception(
+                    $"bundle manifest version '{bundleVersion}' is not supported by this importer " +
+                    $"(supported: {string.Join(", ", SupportedManifestVersions)}) — import rejected. " +
+                    "One side is stale: update the FigForge Unity importer or re-export with a current plugin.");
 
             string projName = bundle.project != null && !string.IsNullOrEmpty(bundle.project.name)
                 ? bundle.project.name : "Untitled";
@@ -367,6 +414,31 @@ namespace FigForge
             for (int i = 0; i < s.Length; i++) chars[i] = char.IsLetterOrDigit(s[i]) ? s[i] : '_';
             return new string(chars);
         }
+
+        // Manifest wire-format versions this receiver accepts — kept in sync with
+        // ManifestParser.SupportedManifestVersions (the downstream gate). "1.0" =
+        // legacy number[] live-import assets, "2.0" = base64 assets + canonicalSchema.
+        static readonly string[] SupportedManifestVersions = { "1.0", "2.0" };
+
+        // Pull the `version` field out of the first screen whose manifest carries one.
+        // Returns null when none is present (a pre-versioned bundle), which we treat as
+        // "don't reject on version" — ManifestParser.Load still has the final say.
+        static string FirstManifestVersion(LiveScreen[] screens)
+        {
+            foreach (var s in screens)
+            {
+                if (s == null || string.IsNullOrEmpty(s.manifest)) continue;
+                try
+                {
+                    var probe = JsonUtility.FromJson<VersionProbe>(s.manifest);
+                    if (probe != null && !string.IsNullOrEmpty(probe.version)) return probe.version;
+                }
+                catch { /* malformed manifest string — let downstream parse surface it */ }
+            }
+            return null;
+        }
+
+        [Serializable] class VersionProbe { public string version; }
 
         // ---- wire payload (mirrors the plugin's export-page-complete message) --
         [Serializable] class LiveBundle { public LiveProject project; public LiveScreen[] screens; }
