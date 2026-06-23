@@ -301,31 +301,38 @@ namespace FigForge
             btn.transition = Selectable.Transition.None;
 
             Graphic rowBg;
+            FigForgeFill rowRegularFill;
             if (itemStyle != null && itemStyle.enabled)
             {
                 if (row.GetComponent<CanvasRenderer>() == null) row.AddComponent<CanvasRenderer>();
                 var rr = row.AddComponent<FigForgeLayeredRect>();
                 ApplyStyleToLayeredRect(rr, itemStyle);
-                // AddComponent fires Awake/OnEnable -> Apply() synchronously, while the state
-                // colours are still default white — that would overwrite itemStyle.fill with
-                // white at rest. Disable first so Apply() doesn't run on add, set the colours,
-                // then re-enable so OnEnable -> Apply() paints the correct normal fill.
-                var states = row.AddComponent<FigForgeButtonStateColors>();
-                states.enabled = false;
-                states.normal = itemStyle.fill;
-                states.highlighted = hasItemRollover ? FigForgeFill.Solid(itemRollover) : itemStyle.fill;
-                states.pressed = hasItemRollover ? FigForgeFill.Solid(itemRollover) : itemStyle.fill;
-                states.enabled = true;
                 rowBg = rr;
+                rowRegularFill = itemStyle.fill;
             }
             else
             {
                 var img = row.AddComponent<Image>();
                 img.color = new Color(1, 1, 1, 0);
                 rowBg = img;
+                rowRegularFill = FigForgeFill.Solid(new Color(1, 1, 1, 0));
             }
             btn.targetGraphic = rowBg;
             ApplyRowCorners(rowBg, index, count);
+
+            // Wire selection so styled rows behave like template rows: a FigForgeListRow
+            // bound to the same background recolours per state AND lets ApplySelectionVisual
+            // paint the highlight, with its OnPointerClick driving single-select. This row
+            // component now owns ALL states (it replaces FigForgeButtonStateColors here),
+            // so there's a single writer to the graphic — rollover/pressed/selected all use
+            // the rollover colour, matching the previous flat/styled visual output.
+            var rolloverFill = hasItemRollover ? FigForgeFill.Solid(itemRollover) : rowRegularFill;
+            var fr = row.AddComponent<FigForgeListRow>();
+            fr.owner = this; fr.index = index;
+            fr.regular = rowRegularFill;
+            fr.rollover = rolloverFill; fr.pressed = rolloverFill; fr.selected = rolloverFill;
+            fr.hasRollover = hasItemRollover; fr.hasPressed = hasItemRollover; fr.hasSelected = hasItemRollover;
+            fr.Bind(rowBg);
 
             var lblGo = NewRect("Label", row.transform);
             var lrt = lblGo.GetComponent<RectTransform>();
