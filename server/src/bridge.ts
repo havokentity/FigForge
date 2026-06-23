@@ -81,7 +81,7 @@ export class Bridge {
     return `req-${hhmmss}-${++this.counter}`;
   }
 
-  send(tool: string, nodeIds?: string[], params?: Record<string, unknown>): Promise<RpcResponse> {
+  send(tool: string, nodeIds?: string[], params?: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<RpcResponse> {
     if (!this.connected || !this.socket) {
       return Promise.resolve({ error: 'Figma plugin is not connected to the bridge.' });
     }
@@ -91,7 +91,7 @@ export class Bridge {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         resolve({ error: `Timed out waiting for plugin (${tool}).` });
-      }, REQUEST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(requestId, { resolve, timer });
       this.socket!.send(JSON.stringify(payload));
     });

@@ -69,18 +69,18 @@ export class FigForgeNode implements PluginSender {
     }
   }
 
-  async send(tool: string, nodeIds?: string[], params?: Record<string, unknown>): Promise<RpcResponse> {
+  async send(tool: string, nodeIds?: string[], params?: Record<string, unknown>, timeoutMs?: number): Promise<RpcResponse> {
     if (this.role === 'leader' && this.leader) {
-      return this.leader.send(tool, nodeIds, params);
+      return this.leader.send(tool, nodeIds, params, timeoutMs);
     }
     // Follower path. If the leader has vanished, try to take over once.
     const alive = await this.follower.ping();
     if (!alive) {
       await this.tryBecomeLeader();
       if (this.role === 'leader' && this.leader) {
-        return this.leader.send(tool, nodeIds, params);
+        return this.leader.send(tool, nodeIds, params, timeoutMs);
       }
     }
-    return this.follower.send(tool, nodeIds, params);
+    return this.follower.send(tool, nodeIds, params, timeoutMs);
   }
 }

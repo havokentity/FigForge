@@ -36,5 +36,5 @@ export type ToolResult = {
 
 /** Anything that can send a tool request to the plugin and await a response. */
 export interface PluginSender {
-  send(tool: string, nodeIds?: string[], params?: Record<string, unknown>): Promise<RpcResponse>;
+  send(tool: string, nodeIds?: string[], params?: Record<string, unknown>, timeoutMs?: number): Promise<RpcResponse>;
 }

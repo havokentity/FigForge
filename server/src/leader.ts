@@ -11,7 +11,11 @@ import { WebSocketServer } from 'ws';
 import { Bridge } from './bridge.js';
 import { rpcRequestSchema } from './schema.js';
 import type { PluginSender, RpcResponse } from './types.js';
-import { BRIDGE_PORT, VERSION } from './version.js';
+import { BRIDGE_PORT, EXPORT_TIMEOUT_MS, VERSION } from './version.js';
+
+// Tools that ship large base64 payloads and need the long round-trip budget
+// when proxied through a follower (which carries no explicit timeout over /rpc).
+const EXPORT_TOOLS = new Set(['export_unity', 'export_project_unity', 'get_screenshot']);
 
 export const RPC_MAX_BODY_BYTES = 1_048_576;
 
@@ -149,8 +153,8 @@ export class Leader implements PluginSender {
     });
   }
 
-  send(tool: string, nodeIds?: string[], params?: Record<string, unknown>): Promise<RpcResponse> {
-    return this.bridge.send(tool, nodeIds, params);
+  send(tool: string, nodeIds?: string[], params?: Record<string, unknown>, timeoutMs?: number): Promise<RpcResponse> {
+    return this.bridge.send(tool, nodeIds, params, timeoutMs);
   }
 
   private onRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -178,7 +182,10 @@ export class Leader implements PluginSender {
         throw new Error(`Invalid RPC request (${where}): ${issue?.message ?? 'bad shape'}`);
       }
       const rpc = parsed.data;
-      result = await this.bridge.send(rpc.tool, rpc.nodeIds, rpc.params);
+      // A follower proxying a heavy export carries no timeout over /rpc; give
+      // the plugin the same long budget the leader would use for these tools.
+      const timeoutMs = EXPORT_TOOLS.has(rpc.tool) ? EXPORT_TIMEOUT_MS : undefined;
+      result = await this.bridge.send(rpc.tool, rpc.nodeIds, rpc.params, timeoutMs);
     } catch (e) {
       if (e instanceof RpcBodyTooLargeError) {
         res.writeHead(413, { 'content-type': 'application/json' });

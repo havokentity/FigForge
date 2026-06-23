@@ -21,6 +21,7 @@ import {
   screenshotInput,
   validateManifestContractInput,
 } from './schema.js';
+import { EXPORT_TIMEOUT_MS } from './version.js';
 
 function ok(data: unknown): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
@@ -124,7 +125,7 @@ export async function executeExportUnity(
   params: ExportUnityParams = {}
 ): Promise<{ outDir: string; screenName?: string; manifestPath: string; assetCount: number; elementCount: number }> {
   const resolvedDir = resolveAndValidateOutputPath(outDir, workspaceRoot);
-  const resp = await sender.send('export_unity', [nodeId], params as Record<string, unknown>);
+  const resp = await sender.send('export_unity', [nodeId], params as Record<string, unknown>, EXPORT_TIMEOUT_MS);
   if (resp.error) throw new Error(resp.error);
 
   const data = resp.data as { exports?: UnityExport[] } | undefined;
@@ -172,7 +173,7 @@ export async function executeExportProjectUnity(
   screens: Array<{ name?: string; role: string; section: string; manifestPath: string; assetCount: number }>;
 }> {
   const resolvedDir = resolveAndValidateOutputPath(outDir, workspaceRoot);
-  const resp = await sender.send('export_project_unity', undefined, params as Record<string, unknown>);
+  const resp = await sender.send('export_project_unity', undefined, params as Record<string, unknown>, EXPORT_TIMEOUT_MS);
   if (resp.error) throw new Error(resp.error);
 
   const data = resp.data as ProjectExport | undefined;
@@ -526,7 +527,9 @@ export function registerTools(server: McpServer, sender: PluginSender, workspace
     saveScreenshotsInput,
     async ({ items, scale }) => {
       const ids = items.map((i) => i.nodeId);
-      const r = await sender.send('get_screenshot', ids, { scale });
+      // Bulk screenshot saves can return many large base64 PNGs at once, so
+      // give them the same long round-trip budget as exports.
+      const r = await sender.send('get_screenshot', ids, { scale }, EXPORT_TIMEOUT_MS);
       if (r.error) return fail(r.error);
       const shots = (r.data as { screenshots?: { nodeId: string; data: string | number[] }[] })?.screenshots || [];
       const byId = new Map(shots.map((s) => [s.nodeId, s.data]));
