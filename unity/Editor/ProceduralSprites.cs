@@ -66,7 +66,10 @@ namespace FigForge
 
             AssetDatabase.CreateAsset(sprite, path);
             AssetDatabase.AddObjectToAsset(tex, sprite);
-            AssetDatabase.SaveAssets();
+            // No per-Get SaveAssets — it flushes ALL dirty assets, so calling it
+            // once per generated sprite stalls the build. The in-memory `sprite` is
+            // returned directly (not reloaded), and the importer's end-of-build
+            // finally flushes everything created this pass.
 
             _mem[radius] = sprite;
             return sprite;
@@ -125,7 +128,7 @@ namespace FigForge
             sprite.name = $"Soft_{key}";
             AssetDatabase.CreateAsset(sprite, path);
             AssetDatabase.AddObjectToAsset(tex, sprite);
-            AssetDatabase.SaveAssets();
+            // No per-Get SaveAssets — flushed once at end-of-build (see RoundedRectSpriteCache).
             _mem[key] = sprite;
             return sprite;
         }
@@ -181,7 +184,7 @@ namespace FigForge
             sprite.name = $"Outline_{key}";
             AssetDatabase.CreateAsset(sprite, path);
             AssetDatabase.AddObjectToAsset(tex, sprite);
-            AssetDatabase.SaveAssets();
+            // No per-Get SaveAssets — flushed once at end-of-build (see RoundedRectSpriteCache).
             _mem[key] = sprite;
             return sprite;
         }
@@ -233,7 +236,7 @@ namespace FigForge
             sprite.name = $"Grad_{key}";
             AssetDatabase.CreateAsset(sprite, path);
             AssetDatabase.AddObjectToAsset(tex, sprite);
-            AssetDatabase.SaveAssets();
+            // No per-Get SaveAssets — flushed once at end-of-build (see RoundedRectSpriteCache).
 
             _mem[key] = sprite;
             return sprite;
@@ -333,7 +336,7 @@ namespace FigForge
             sprite.name = $"RG_{key}";
             AssetDatabase.CreateAsset(sprite, path);
             AssetDatabase.AddObjectToAsset(tex, sprite);
-            AssetDatabase.SaveAssets();
+            // No per-Get SaveAssets — flushed once at end-of-build (see RoundedRectSpriteCache).
             _mem[key] = sprite;
             return sprite;
         }
