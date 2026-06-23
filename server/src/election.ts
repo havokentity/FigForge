@@ -103,7 +103,31 @@ export class FigForgeNode implements PluginSender {
       // from a crashed leader). Same bounded wait before issuing the send.
       await this.waitForPluginReconnect();
     }
-    return this.follower.send(tool, nodeIds, params, timeoutMs);
+    const resp = await this.follower.send(tool, nodeIds, params, timeoutMs);
+    // The /ping above and this send are not atomic: the leader can die in the
+    // gap, so a ping-confirmed leader can still be gone by send time. Follower
+    // marks that connection-level failure with an "unreachable" error (vs a
+    // "Leader returned <status>" error, which means the leader is alive and the
+    // failure is real). On unreachable, self-heal exactly as the ping==false
+    // path does — try to take over and retry once — so a leader death mid-call
+    // doesn't surface as a spurious error.
+    if (this.isLeaderUnreachableError(resp)) {
+      await this.tryBecomeLeader();
+      if (this.role === 'leader' && this.leader) {
+        return this.leader.send(tool, nodeIds, params, timeoutMs);
+      }
+      // We lost the port race: a new leader bound. Wait (bounded) for its plugin
+      // socket to land, then retry the proxied call once.
+      await this.waitForPluginReconnect();
+      return this.follower.send(tool, nodeIds, params, timeoutMs);
+    }
+    return resp;
+  }
+
+  /** A connection-level failure reaching the leader (it vanished), as opposed
+   * to an HTTP error from a live leader. Mirrors Follower.send's error strings. */
+  private isLeaderUnreachableError(resp: RpcResponse): boolean {
+    return typeof resp.error === 'string' && resp.error.startsWith('Leader unreachable:');
   }
 
   /**

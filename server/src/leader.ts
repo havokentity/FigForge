@@ -7,6 +7,7 @@
 // =============================================================================
 
 import http from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { Bridge } from './bridge.js';
 import { rpcRequestSchema } from './schema.js';
@@ -30,6 +31,16 @@ function isLoopbackAddress(address: string | undefined): boolean {
   return address !== undefined && LOOPBACK_ADDRESSES.has(address);
 }
 
+/** Constant-time string compare. Length-checks first (timingSafeEqual throws on
+ * unequal-length buffers) so a mismatched token can't leak its length, then
+ * compares the bytes without short-circuiting on the first differing char. */
+function safeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
 export class RpcBodyTooLargeError extends Error {
   constructor(limitBytes = RPC_MAX_BODY_BYTES) {
     super(`RPC body exceeds ${limitBytes} bytes.`);
@@ -38,6 +49,10 @@ export class RpcBodyTooLargeError extends Error {
 }
 
 export function readRpcBody(req: http.IncomingMessage, limitBytes = RPC_MAX_BODY_BYTES): Promise<string> {
+  // Content-Length is only an early-reject optimization: it lets us refuse an
+  // oversized body before draining any of it. It is client-supplied and not
+  // trusted as the enforcement point — the streaming byte counter below (onData)
+  // is what actually caps the body, regardless of any declared or absent header.
   const contentLength = req.headers['content-length'];
   const declaredBytes = typeof contentLength === 'string' ? Number(contentLength) : undefined;
   if (declaredBytes !== undefined && Number.isFinite(declaredBytes) && declaredBytes > limitBytes) {
@@ -141,7 +156,7 @@ export class Leader implements PluginSender {
         (typeof protocolToken === 'string'
           ? protocolToken.split(',').map((s) => s.trim()).find((s) => s.length > 0) ?? null
           : null);
-      if (presented !== expectedToken) return false;
+      if (presented === null || !safeStringEqual(presented, expectedToken)) return false;
     }
     return true;
   }

@@ -14,8 +14,6 @@ export const figmaNodeId = z
     'Expected a Figma node id like "123:456" or an instance path like "I123:4;567:8" (colon, not hyphen).'
   );
 
-export const screenshotFormat = z.enum(['PNG', 'SVG', 'JPG']).default('PNG');
-
 export const getNodeInput = { nodeId: figmaNodeId.describe('Node id to fetch') };
 
 export const designContextInput = {

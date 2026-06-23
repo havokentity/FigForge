@@ -26,8 +26,13 @@ import { EXPORT_TIMEOUT_MS } from './version.js';
 function ok(data: unknown): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
+// Cap forwarded error text. Plugin/runtime errors are echoed to the MCP client
+// verbatim; an unbounded string (e.g. a giant stack or payload dump from the
+// plugin) shouldn't be relayed wholesale, so truncate to a sane ceiling.
+const MAX_ERROR_LEN = 2_000;
 function fail(message: string): ToolResult {
-  return { content: [{ type: 'text', text: message }], isError: true };
+  const text = message.length > MAX_ERROR_LEN ? `${message.slice(0, MAX_ERROR_LEN)}… (truncated)` : message;
+  return { content: [{ type: 'text', text }], isError: true };
 }
 function unwrap(r: RpcResponse): ToolResult {
   return r.error ? fail(r.error) : ok(r.data);
@@ -65,7 +70,9 @@ export function resolveAndValidateOutputPath(outDir: string, workspaceRoot: stri
   const realResolved = canonicalizeExisting(resolved);
   const realRoot = canonicalizeExisting(root);
   if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
-    throw new Error(`Refusing to write outside the bridge working directory: ${outDir}`);
+    // Don't echo the (possibly absolute) caller-supplied path back in the error —
+    // it can leak the resolved filesystem location. The refusal alone is enough.
+    throw new Error('Refusing to write outside the bridge working directory.');
   }
   // Return the canonicalized path that was actually validated (not the raw
   // `resolved`), so the bytes land at the location whose containment we checked
@@ -116,7 +123,13 @@ function safeFolderName(raw: unknown, fallback: string): string {
  * bridge during the transition. */
 function wireBytesToBuffer(data: unknown): Buffer | null {
   if (typeof data === 'string') return Buffer.from(data, 'base64');
-  if (Array.isArray(data)) return Buffer.from(data as number[]);
+  if (Array.isArray(data)) {
+    // Buffer.from(number[]) silently coerces non-byte entries (NaN/floats/out-of-
+    // range wrap to 0..255), which would write corrupt bytes from malformed wire
+    // data. Reject unless every entry is a finite integer already in byte range.
+    const isByteArray = data.every((v) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 255);
+    return isByteArray ? Buffer.from(data as number[]) : null;
+  }
   return null;
 }
 
@@ -537,15 +550,24 @@ export function registerTools(server: McpServer, sender: PluginSender, workspace
       const shots = (r.data as { screenshots?: { nodeId: string; data: string | number[] }[] })?.screenshots || [];
       const byId = new Map(shots.map((s) => [s.nodeId, s.data]));
       const written: string[] = [];
+      const skipped: string[] = [];
       for (const item of items) {
         const bytes = wireBytesToBuffer(byId.get(item.nodeId));
-        if (!bytes) continue;
+        if (!bytes) {
+          // Plugin returned no (or malformed) bytes for this node — record it
+          // instead of silently dropping it so the caller can see what missed.
+          skipped.push(item.nodeId);
+          continue;
+        }
         const resolved = resolveAndValidateOutputPath(item.outputPath, workspaceRoot);
         await mkdir(path.dirname(resolved), { recursive: true });
         await writeFile(resolved, bytes);
         written.push(resolved);
       }
-      return ok({ written });
+      const result = { written, skipped };
+      // Nothing landed on disk at all — surface as an error rather than a
+      // success with an empty `written`.
+      return written.length === 0 ? fail(JSON.stringify(result, null, 2)) : ok(result);
     }
   );
 
