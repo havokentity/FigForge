@@ -472,7 +472,7 @@ function renderTree() {
 
     row.innerHTML = `
       <span class="twirl" title="${children.length ? 'Expand/collapse' : ''}">${children.length ? (expanded || revealingMatches ? '▾' : '▸') : ''}</span>
-      <span class="type-tag">${TYPE_SHORT[node.type] || node.type.slice(0, 3)}</span>
+      <span class="type-tag">${escapeHtml(TYPE_SHORT[node.type] || node.type.slice(0, 3))}</span>
       <span class="tname">${escapeHtml(node.displayName)}</span>
       ${node.canonicalRef ? `<span class="canon-tag" title="canonical: ${escapeHtml(node.canonicalRef)}">${escapeHtml(node.canonicalRef)}</span>` : ''}
     `;

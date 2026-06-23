@@ -1792,7 +1792,7 @@ export async function exportDesign(
         ? stretchTransform()
         : mapTransform({
             rect: { x: nx, y: ny, w: nw, h: nh },
-            parent: parentDims(node, planById),
+            parent: parentDims(node),
             abs: absXY(node),
             parentAbs: parentAbsXY(node),
             horizontal: (node as unknown as { constraints?: Constraints }).constraints?.horizontal,
@@ -2733,7 +2733,7 @@ export async function exportDesign(
       nodeY = nodeAbs[1] - gy;
       parentAbs = layoutParentAbs(lp);
     } else {
-      parentSize = parentDims(node, planById);
+      parentSize = parentDims(node);
       const xy = localXY(node);
       nodeX = xy.x;
       nodeY = xy.y;
@@ -3149,10 +3149,7 @@ function layoutParentAbs(lp: SceneNode): [number, number] | undefined {
   return absXY(lp);
 }
 
-function parentDims(
-  node: SceneNode,
-  planById: Map<string, Plan>
-): { w: number; h: number } {
+function parentDims(node: SceneNode): { w: number; h: number } {
   const parent = (node as unknown as { parent?: BaseNode | null }).parent;
   if (parent && 'width' in parent) {
     return {

@@ -16,6 +16,7 @@
 // =============================================================================
 import earcut from 'earcut';
 import type { RGBA, VectorDrawing, VectorMesh } from './types';
+import { INVISIBLE_PAINT_EPS } from './traverser';
 
 const AA_PX = 0.75;          // anti-alias feather width, node-local px
 const FLATTEN_TOL = 0.15;    // max bézier chord deviation, node-local px
@@ -37,7 +38,7 @@ const MAX_RING_SLOTS = 2 * (MAX_TOTAL_VERTS + 1);
 function singleSolid(paints: unknown): RGBA | null | 'unsupported' {
   if (typeof paints === 'symbol') return 'unsupported'; // figma.mixed
   if (!Array.isArray(paints)) return null;
-  const vis = (paints as Paint[]).filter((p) => p && p.visible !== false && (p.opacity ?? 1) > 0.0001);
+  const vis = (paints as Paint[]).filter((p) => p && p.visible !== false && (p.opacity ?? 1) > INVISIBLE_PAINT_EPS);
   if (vis.length === 0) return null;
   if (vis.length > 1) return 'unsupported';
   const p = vis[0];
@@ -112,9 +113,13 @@ export function buildVectorDrawing(node: SceneNode): VectorDrawing | null {
 // ---------------------------------------------------------------------------
 function parsePath(data: string): number[][] | null {
   const out: number[][] = [];
-  if (!data) return out;
+  // Empty / whitespace-only data is a LEGITIMATELY empty path (e.g. a node with
+  // no fill geometry) → empty ring array. A non-empty string that yields no
+  // tokens is a genuine PARSE FAILURE → null, so the caller keeps the PNG
+  // fallback rather than silently treating it as an empty shape.
+  if (!data || !data.trim()) return out;
   const tok = data.match(/[a-zA-Z]|-?\d*\.?\d+(?:[eE][+-]?\d+)?/g);
-  if (!tok) return out;
+  if (!tok) return null;
 
   let i = 0;
   let cur: number[] = [];

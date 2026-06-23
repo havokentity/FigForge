@@ -111,6 +111,14 @@ const VECTOR_TYPES = new Set([
 const CONTAINER_TYPES = new Set(['FRAME', 'GROUP', 'COMPONENT', 'INSTANCE', 'COMPONENT_SET']);
 
 /**
+ * Paint opacity at or below which a paint contributes nothing to the rendered
+ * output ("effectively invisible"). Shared so the exportability check here and
+ * the vector-mesh path (vector.ts singleSolid) agree on faint paints instead of
+ * each picking its own threshold (was ===0 here vs >0.0001 there).
+ */
+export const INVISIBLE_PAINT_EPS = 0.0001;
+
+/**
  * A paint that contributes nothing to the rendered output and must be treated
  * as "no fill": hidden, fully transparent, or an IMAGE paint with no source
  * attached. The image case is a placeholder left in the design — without this
@@ -120,7 +128,7 @@ const CONTAINER_TYPES = new Set(['FRAME', 'GROUP', 'COMPONENT', 'INSTANCE', 'COM
 export function isEmptyPaint(paint: Paint | undefined | null): boolean {
   if (!paint) return true;
   if (paint.visible === false) return true;
-  if (typeof paint.opacity === 'number' && paint.opacity === 0) return true;
+  if (typeof paint.opacity === 'number' && paint.opacity <= INVISIBLE_PAINT_EPS) return true;
   if (paint.type === 'IMAGE' && !(paint as ImagePaint).imageHash) return true;
   return false;
 }
@@ -167,6 +175,11 @@ function hasBackgroundBlur(node: SceneNode): boolean {
 
 export function hasVisibleStroke(node: SceneNode): boolean {
   const w = (node as unknown as { strokeWeight?: number }).strokeWeight;
+  // Only a numeric weight <= 0 definitively hides the stroke. When strokeWeight
+  // is figma.mixed (per-side weights via strokeTopWeight/etc.), `typeof w` is not
+  // 'number', so we fall through and conservatively treat the stroke as visible
+  // if any stroke paint is present — at least one side could be > 0, and missing
+  // a real border is worse than baking a thin one.
   if (typeof w === 'number' && w <= 0) return false;
   return paints(node, 'strokes').some((f) => !isEmptyPaint(f));
 }
