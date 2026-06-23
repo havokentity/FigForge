@@ -282,6 +282,14 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
     }
 
     case 'create-button': {
+      // Creators switch figma.currentPage and run async; an in-flight export
+      // mutates node.visible and would be corrupted by the page switch — reject
+      // behind the same gate the export paths use (rejected as error-flagged
+      // 'status', not 'export-error', so the running export's UI is untouched).
+      if (exportInFlight) {
+        figma.ui.postMessage({ type: 'status', message: EXPORT_BUSY_MESSAGE, error: true });
+        break;
+      }
       try {
         useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
         await createCanonicalButton();
@@ -298,6 +306,10 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
     }
 
     case 'create-canonical': {
+      if (exportInFlight) { // see 'create-button' — creators switch pages, gate behind export
+        figma.ui.postMessage({ type: 'status', message: EXPORT_BUSY_MESSAGE, error: true });
+        break;
+      }
       try {
         useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
         const comp = await createCanonical(String((msg as { kind?: string }).kind || ''),
@@ -327,6 +339,10 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
     }
 
     case 'create-shell': {
+      if (exportInFlight) { // see 'create-button' — creators switch pages, gate behind export
+        figma.ui.postMessage({ type: 'status', message: EXPORT_BUSY_MESSAGE, error: true });
+        break;
+      }
       try {
         useComponentsPage = (msg as { componentsPage?: boolean }).componentsPage !== false;
         const result = await createShellScaffold((msg as { shellOpts?: Partial<ShellOptions> }).shellOpts);
@@ -851,6 +867,10 @@ async function handleMcp(req: McpRequest) {
         // vs ~3.7× as decimal number[] text. The bridge (server/src/tools.ts)
         // accepts both forms during the transition.
         const shots: { nodeId: string; data: string }[] = [];
+        // Ids that resolve to nothing or to a non-exportable node are reported in
+        // `missing` rather than silently dropped — otherwise a shorter screenshots
+        // array reads as success and the caller can't tell partial from complete.
+        const missing: string[] = [];
         for (const id of ids) {
           const node = await figma.getNodeByIdAsync(id) as SceneNode | null;
           if (node && 'exportAsync' in node) {
@@ -858,9 +878,11 @@ async function handleMcp(req: McpRequest) {
               exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
             }).exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: scale } });
             shots.push({ nodeId: id, data: bytesToBase64(bytes) });
+          } else {
+            missing.push(id);
           }
         }
-        response.data = { screenshots: shots };
+        response.data = { screenshots: shots, missing };
         break;
       }
       case 'export_unity': {
@@ -880,6 +902,10 @@ async function handleMcp(req: McpRequest) {
           };
           const exportSets = exportSetsWithConfigs(req.params?.elementConfigs as ElementConfig[] | undefined);
           const exports: unknown[] = [];
+          // Ids that resolve to nothing or to a non-exportable node are reported
+          // in `missing` rather than silently dropped (see get_screenshot) — a
+          // shorter exports array would otherwise read as a complete success.
+          const missing: string[] = [];
           for (const id of ids) {
             const node = await figma.getNodeByIdAsync(id) as SceneNode | null;
             if (node && 'exportAsync' in node) {
@@ -901,9 +927,11 @@ async function handleMcp(req: McpRequest) {
                 // either form.
                 assets: result.assets.map((a) => ({ name: a.name, data: bytesToBase64(a.data) })),
               });
+            } else {
+              missing.push(id);
             }
           }
-          response.data = { exports };
+          response.data = { exports, missing };
         } finally {
           exportInFlight = false;
         }
@@ -955,6 +983,9 @@ async function handleMcp(req: McpRequest) {
         break;
       }
       case 'create_canonical': {
+        // Creators switch figma.currentPage and run async; reject while an export
+        // is mutating node.visible (same gate as export_unity above).
+        if (exportInFlight) throw new Error(EXPORT_BUSY_MESSAGE);
         useComponentsPage = (req.params as { componentsPage?: boolean } | undefined)?.componentsPage !== false;
         const kind = String((req.params as { kind?: string } | undefined)?.kind || '');
         const comp = kind === 'button'
@@ -975,6 +1006,7 @@ async function handleMcp(req: McpRequest) {
         break;
       }
       case 'create_shell': {
+        if (exportInFlight) throw new Error(EXPORT_BUSY_MESSAGE); // see 'create_canonical'
         useComponentsPage = (req.params as { componentsPage?: boolean } | undefined)?.componentsPage !== false;
         const result = await createShellScaffold((req.params as { shellOpts?: Partial<ShellOptions> } | undefined)?.shellOpts);
         response.data = {
@@ -1019,6 +1051,7 @@ async function loadUiFont(): Promise<FontName> {
     }
   }
   const all = await figma.listAvailableFontsAsync();
+  if (all.length === 0) throw new Error('No fonts available to load');
   const f = all[0].fontName;
   await figma.loadFontAsync(f);
   return f;
