@@ -144,6 +144,12 @@ namespace FigForge
 
         const int MaxRedirectDepth = 8;
 
+        // Re-entrancy generation token. Hiding other screens fires OnHide(); a handler may
+        // navigate re-entrantly during that loop. Each ShowInternal claims a generation, and
+        // only the call whose generation is still current commits the final Current/visibility
+        // — so the innermost nav wins and the outer call doesn't clobber it on unwind.
+        int _showGen;
+
         bool ShowInternal(FigForgeFrame target, string label, bool runGuards, int redirectDepth, FigForgeNavLink via)
         {
             BindAll();
@@ -186,6 +192,9 @@ namespace FigForge
                 Debug.LogWarning($"[FigForge] FrameManager: screen '{target.ScreenKey}' requires shell '{target.shellKey}', but no matching shell is registered.");
                 return false;
             }
+            // Claim a generation after all early-return guards: any nested Show triggered
+            // during the hide loop (or shell SetVisible) below bumps _showGen past ours.
+            int gen = ++_showGen;
             foreach (var s in screens)
                 if (s != null && s != target && s != activeShell)
                     s.SetVisible(false);
@@ -202,6 +211,10 @@ namespace FigForge
                 RefreshCompositors(target.gameObject);
             }
             FillParent(target.GetComponent<RectTransform>());
+            // If a nested Show ran during the hide loop / shell work above (e.g. from an
+            // OnHide handler), it bumped _showGen and already committed ITS target. Bail
+            // without touching Current/visibility so we don't clobber the innermost nav.
+            if (_showGen != gen) return true;
             // Assign Current BEFORE SetVisible(true): SetVisible fires OnShow(), and if a
             // handler navigates again re-entrantly, that inner call must win. Setting Current
             // first means the inner navigation's result isn't clobbered when we unwind here.
