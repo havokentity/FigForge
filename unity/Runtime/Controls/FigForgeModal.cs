@@ -97,6 +97,12 @@ namespace FigForge
 
         bool _bound;
 
+        // The last ModalData-installed closure for each action, so Bind* can remove ONLY its own
+        // previously-added listener instead of wiping Inspector/user-added listeners.
+        UnityAction _modalPrimary;
+        UnityAction _modalSecondary;
+        UnityAction _modalTertiary;
+
         // Per-instance content stack: opening the SAME modal again pushes the current state
         // and shows the new one; each close peels back (LIFO) until empty, then dismisses —
         // so one GameObject "stacks" without cloning a second instance.
@@ -311,19 +317,23 @@ namespace FigForge
 
         public void BindPrimary(UnityAction action)
         {
-            onPrimary.RemoveAllListeners();
+            // Remove ONLY our own previously-installed closure, not Inspector/user listeners.
+            if (_modalPrimary != null) onPrimary.RemoveListener(_modalPrimary);
+            _modalPrimary = action;
             if (action != null) onPrimary.AddListener(action);
         }
 
         public void BindSecondary(UnityAction action)
         {
-            onSecondary.RemoveAllListeners();
+            if (_modalSecondary != null) onSecondary.RemoveListener(_modalSecondary);
+            _modalSecondary = action;
             if (action != null) onSecondary.AddListener(action);
         }
 
         public void BindTertiary(UnityAction action)
         {
-            onTertiary.RemoveAllListeners();
+            if (_modalTertiary != null) onTertiary.RemoveListener(_modalTertiary);
+            _modalTertiary = action;
             if (action != null) onTertiary.AddListener(action);
         }
 

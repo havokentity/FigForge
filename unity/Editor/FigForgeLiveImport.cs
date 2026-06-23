@@ -230,10 +230,21 @@ namespace FigForge
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
             string destAbs = Path.Combine(projectRoot, destAssets.Replace('/', Path.DirectorySeparatorChar));
 
-            // Clean re-import: drop the previous version of this project.
-            if (Directory.Exists(destAbs)) Directory.Delete(destAbs, true);
-            Directory.CreateDirectory(destAbs);
+            // Stage the whole bundle into a uniquely-named temp sibling first, so a
+            // malformed/empty push can never wipe the previously-good import. Only
+            // after every file is written do we delete the old dest and move temp
+            // into place. On any failure we leave dest untouched and drop the temp.
+            string liveRootAbs = Path.Combine(projectRoot, LiveRoot.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(liveRootAbs);
+            string tmpAbs = Path.Combine(liveRootAbs, $".{SafeName(projName)}__tmp_{Guid.NewGuid():N}");
+            if (Directory.Exists(tmpAbs)) Directory.Delete(tmpAbs, true);
+            Directory.CreateDirectory(tmpAbs);
+            // From here on, file writes target the temp folder; `destAbs` is only
+            // touched at the very end during the swap.
+            string buildAbs = tmpAbs;
 
+            try
+            {
             var index = new ProjIndex
             {
                 name = projName,
@@ -251,7 +262,7 @@ namespace FigForge
                 while (used.Contains(folder)) folder = $"{baseFolder}_{n++}";
                 used.Add(folder);
 
-                string folderAbs = Path.Combine(destAbs, folder);
+                string folderAbs = Path.Combine(buildAbs, folder);
                 Directory.CreateDirectory(folderAbs);
                 File.WriteAllText(Path.Combine(folderAbs, "manifest.json"), s.manifest ?? "{}");
                 if (s.assets != null)
@@ -300,7 +311,40 @@ namespace FigForge
                 });
             }
             index.screens = indexScreens.ToArray();
-            File.WriteAllText(Path.Combine(destAbs, "project.json"), JsonUtility.ToJson(index, true));
+            File.WriteAllText(Path.Combine(buildAbs, "project.json"), JsonUtility.ToJson(index, true));
+
+            // Confirm the staged bundle is non-empty and that project.json parses
+            // back before we touch the existing good import.
+            if (index.screens.Length == 0)
+                throw new Exception("no screens staged");
+            string stagedProjectJson = File.ReadAllText(Path.Combine(buildAbs, "project.json"));
+            if (JsonUtility.FromJson<ProjIndex>(stagedProjectJson) == null)
+                throw new Exception("staged project.json failed to parse");
+            }
+            catch
+            {
+                // Validation/write failed — leave the existing dest untouched.
+                try { if (Directory.Exists(tmpAbs)) Directory.Delete(tmpAbs, true); } catch { /* best effort */ }
+                throw;
+            }
+
+            // Swap: drop the previous version of this project, then move the fully
+            // staged bundle into place. Do this just before the AssetDatabase sees
+            // it so a partial/failed write never leaves a corrupt dest.
+            try
+            {
+                if (Directory.Exists(destAbs)) Directory.Delete(destAbs, true);
+                // Drop any stale .meta Unity left for the old folder so the move
+                // doesn't collide with it on import.
+                string destMeta = destAbs + ".meta";
+                if (File.Exists(destMeta)) { try { File.Delete(destMeta); } catch { /* best effort */ } }
+                Directory.Move(tmpAbs, destAbs);
+            }
+            catch
+            {
+                try { if (Directory.Exists(tmpAbs)) Directory.Delete(tmpAbs, true); } catch { /* best effort */ }
+                throw;
+            }
 
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
