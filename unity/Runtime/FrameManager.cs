@@ -230,7 +230,17 @@ namespace FigForge
 
         internal void AddGuard(FigForgeFrame frame, NavGuard guard)
         {
-            if (frame != null) AddGuard(frame.ScreenKey, guard);
+            if (frame == null || guard == null) return;
+            // A frame whose name sanitizes to empty must NOT silently become a global
+            // guard (the string overload treats an empty key as global) — that would
+            // apply this frame's precondition to every navigation.
+            var key = SanitizeKey(frame.ScreenKey);
+            if (string.IsNullOrEmpty(key))
+            {
+                Debug.LogWarning($"[FigForge] AddGuard: frame '{frame.name}' has no usable screen key; guard not registered. Use AddGlobalGuard for a global guard.");
+                return;
+            }
+            AddGuard(key, guard);
         }
 
         internal void AddGlobalGuard(NavGuard guard) { if (guard != null) _globalGuards.Add(guard); }

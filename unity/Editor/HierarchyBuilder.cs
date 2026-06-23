@@ -299,7 +299,17 @@ namespace FigForge
                 if (prefab != null)
                 {
                     inst = (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, parent);
-                    inst.name = ObjectName(e, canonicalKind);
+                    if (inst == null)
+                    {
+                        // A broken/corrupt managed prefab can instantiate to null —
+                        // fall back to a labelled placeholder instead of NRE'ing.
+                        ctx.log($"canonical '{e.canonical.Ref}' prefab failed to instantiate → placeholder");
+                        inst = BuildPlaceholderButton(e, parent, ctx);
+                    }
+                    else
+                    {
+                        inst.name = ObjectName(e, canonicalKind);
+                    }
                 }
                 else if (canonicalKind == "button" && e.canonical.shape != null)
                 {

@@ -137,8 +137,9 @@ namespace FigForge
         public static string AccessorKey(string fieldName)
             => !string.IsNullOrEmpty(fieldName) && fieldName[0] == '_' ? fieldName.Substring(1) : fieldName;
 
-        static void DrawFields(SerializedObject so, FieldInfo[] fields, Dictionary<int, bool> expanded)
+        static void DrawFields(SerializedObject so, FieldInfo[] fields, Dictionary<int, bool> expanded, HashSet<int> path = null)
         {
+            path ??= new HashSet<int>();
             foreach (var f in fields)
             {
                 var prop = so.FindProperty(f.Name);
@@ -178,10 +179,20 @@ namespace FigForge
                     if (ne)
                     {
                         EditorGUI.indentLevel++;
-                        var childSo = new SerializedObject(groupComp);
-                        childSo.Update();
-                        DrawFields(childSo, AccessorFields(groupComp.GetType()), expanded);
-                        childSo.ApplyModifiedProperties();
+                        // Guard against cyclic group wiring (A→B→A) recursing forever:
+                        // only descend if this group isn't already on the current path.
+                        if (path.Add(id))
+                        {
+                            var childSo = new SerializedObject(groupComp);
+                            childSo.Update();
+                            DrawFields(childSo, AccessorFields(groupComp.GetType()), expanded, path);
+                            childSo.ApplyModifiedProperties();
+                            path.Remove(id);
+                        }
+                        else
+                        {
+                            EditorGUILayout.LabelField("   ↑ cycle (group already shown above)");
+                        }
                         EditorGUI.indentLevel--;
                     }
                 }
@@ -352,8 +363,11 @@ namespace FigForge
             return list;
         }
 
-        static void Collect(Component comp, string path, FigForgeScreen reg, List<MissingRef> list)
+        static void Collect(Component comp, string path, FigForgeScreen reg, List<MissingRef> list, HashSet<int> visited = null)
         {
+            visited ??= new HashSet<int>();
+            // Cyclic group wiring would otherwise recurse until StackOverflow.
+            if (comp == null || !visited.Add(comp.GetInstanceID())) return;
             foreach (var f in FigForgeAccessorTree.AccessorFields(comp.GetType()))
             {
                 string key = FigForgeAccessorTree.AccessorKey(f.Name);
@@ -375,7 +389,7 @@ namespace FigForge
                 if (val == null)
                     list.Add(new MissingRef { path = path + "." + key, fixable = reg != null && reg.Get(key) != null });
                 else if (typeof(FigForgeFrameElement).IsAssignableFrom(f.FieldType) && val is Component child)
-                    Collect(child, path + "." + key, reg, list); // descend into wired groups
+                    Collect(child, path + "." + key, reg, list, visited); // descend into wired groups
             }
         }
 
