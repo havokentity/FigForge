@@ -173,6 +173,13 @@ function normalizeValue(axis: string, name: string, value: string | boolean): st
   return typeof value === 'boolean' ? (value ? 'true' : 'false') : (words(value) || String(value));
 }
 
+// Recognized axis buckets legitimately collapse several differently-named
+// properties onto one key (e.g. both "State" and "Interaction" → 'state'), and
+// first-wins there is intentional. The fallback branch of axisFor instead returns
+// the trimmed property name, so two DISTINCT fallback properties that trim to the
+// same string would otherwise silently drop the second — those we disambiguate.
+const RECOGNIZED_AXES = new Set(['state', 'value', 'size', 'tone', 'intent', 'severity']);
+
 export function normalizeVariantEntries(entries: VariantInput[]): CanonicalVariantProps | undefined {
   const raw: CanonicalVariantAxis[] = [];
   const axes: Record<string, string> = {};
@@ -181,11 +188,18 @@ export function normalizeVariantEntries(entries: VariantInput[]): CanonicalVaria
 
   for (const entry of entries) {
     if (!entry || !entry.name) continue;
-    const axis = axisFor(entry.name, entry.value);
+    let axis = axisFor(entry.name, entry.value);
     const value = normalizeValue(axis, entry.name, entry.value);
     if (value === undefined) continue;
     const source = entry.source ?? 'componentProperties';
     const originalValue = typeof entry.value === 'boolean' ? (entry.value ? 'true' : 'false') : String(entry.value);
+    // Fallback (unrecognized) axis collision: a distinct property trimmed to an
+    // already-used key. Suffix it (axis_2, axis_3, …) so it isn't silently lost.
+    if (axes[axis] !== undefined && !RECOGNIZED_AXES.has(axis)) {
+      let n = 2;
+      while (axes[`${axis}_${n}`] !== undefined) n++;
+      axis = `${axis}_${n}`;
+    }
     if (axes[axis] === undefined) {
       axes[axis] = value;
       original[axis] = originalValue;

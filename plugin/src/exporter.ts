@@ -282,6 +282,17 @@ function vanillaEffects(effects: Shadow[] | undefined): Shadow[] | undefined {
   return drops.length ? drops : undefined;
 }
 
+// PNG-baked nodes: exportAsync already composites the node's OWN drop/inner
+// shadow + layer blur into the sprite, so Unity must NOT re-render them on top
+// (double shadow/blur). Keep only effects that read the live backdrop and so
+// cannot be baked — background/backdrop blur — which Unity's compositor draws
+// against dynamic pixels behind the sprite.
+function bakedAssetEffects(effects: Shadow[] | undefined): Shadow[] | undefined {
+  if (!effects) return undefined;
+  const live = effects.filter((e) => e.kind === 'backgroundBlur');
+  return live.length ? live : undefined;
+}
+
 function buildStyle(node: SceneNode, options: ExportOptions, hasAsset: boolean): Style | undefined {
   const opacity = (node as unknown as { opacity?: number }).opacity ?? 1;
   const blendMode = nodeBlendMode(node);
@@ -2752,6 +2763,17 @@ export async function exportDesign(
         delete style.fills;
         delete style.stroke;
         delete style.strokes;
+      }
+      // Any PNG-backed node (bake-self or a plain exportable image/icon/vector)
+      // already has its own drop/inner shadow + layer blur composited into the
+      // sprite by exportAsync. Strip those baked effects so Unity doesn't draw
+      // them a second time on top; keep only live backdrop-reading blur. (Vanilla
+      // drops effects entirely below — this just makes the non-vanilla path match
+      // what flattenVanillaStyle already does for hasAsset.)
+      if (hasAsset && style?.effects) {
+        const live = bakedAssetEffects(style.effects);
+        if (live) style.effects = live;
+        else delete style.effects;
       }
       style = flattenVanillaStyle(style, hasAsset);
       if (hasAsset || style?.fill || style?.stroke) components.push('Image');
