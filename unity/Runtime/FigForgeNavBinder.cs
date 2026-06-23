@@ -37,6 +37,10 @@ namespace FigForge
             foreach (var link in links)
             {
                 if (link == null || string.IsNullOrEmpty(link.targetScreen)) continue;
+                // Idempotency guard: the find is scene-global, so every binder
+                // sees every link. Skip links a prior binder already wired so each
+                // button's onClick gets exactly one listener (one click => one Show).
+                if (link.bound) continue;
                 // No ?? here: in the editor a missing Button comes back as Unity's
                 // fake-null stub, which ?? treats as found — explicit == null is safe.
                 var btn = link.GetComponent<Button>();
@@ -45,6 +49,7 @@ namespace FigForge
                 var target = link.targetScreen;
                 var via = link;
                 btn.onClick.AddListener(() => screenManager.Show(target, via));
+                link.bound = true;
             }
         }
     }
