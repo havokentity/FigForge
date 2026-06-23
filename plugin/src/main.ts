@@ -51,24 +51,39 @@ function selectedRoot(): SceneNode | null {
   return ok ? node : null;
 }
 
+// buildTree is async, so two pushSelection runs can overlap (selectionchange
+// firing again, or selectionchange racing the startup/explicit reload calls).
+// A monotonically-increasing token makes only the LATEST run post to the UI: a
+// stale run that resolves second is dropped rather than overwriting fresher
+// state. The whole body is wrapped so a buildTree rejection surfaces as a
+// no-selection state instead of an unhandled rejection swallowed by `void`.
+let pushSelectionToken = 0;
 async function pushSelection() {
-  const root = selectedRoot();
-  if (!root) {
-    figma.ui.postMessage({ type: 'no-selection' });
-    return;
+  const token = ++pushSelectionToken;
+  try {
+    const root = selectedRoot();
+    if (!root) {
+      if (token === pushSelectionToken) figma.ui.postMessage({ type: 'no-selection' });
+      return;
+    }
+    const tree = await buildTree(root, excluded);
+    if (token !== pushSelectionToken) return; // superseded by a newer pushSelection
+    const size = {
+      w: (root as unknown as { width?: number }).width ?? 0,
+      h: (root as unknown as { height?: number }).height ?? 0,
+    };
+    let count = 0;
+    const walk = (n: typeof tree) => {
+      count++;
+      n.children.forEach(walk);
+    };
+    walk(tree);
+    figma.ui.postMessage({ type: 'selection-info', name: root.name, elementCount: count, size, tree });
+  } catch (e) {
+    if (token === pushSelectionToken) {
+      figma.ui.postMessage({ type: 'no-selection', error: String((e as Error)?.message || e) });
+    }
   }
-  const tree = await buildTree(root, excluded);
-  const size = {
-    w: (root as unknown as { width?: number }).width ?? 0,
-    h: (root as unknown as { height?: number }).height ?? 0,
-  };
-  let count = 0;
-  const walk = (n: typeof tree) => {
-    count++;
-    n.children.forEach(walk);
-  };
-  walk(tree);
-  figma.ui.postMessage({ type: 'selection-info', name: root.name, elementCount: count, size, tree });
 }
 
 figma.on('selectionchange', () => { void pushSelection(); });
@@ -939,10 +954,13 @@ async function handleMcp(req: McpRequest) {
       }
       case 'export_project_unity': {
         if (exportInFlight) throw new Error(EXPORT_BUSY_MESSAGE);
-        const found = collectScreens(figma.currentPage);
-        if (found.length === 0) throw new Error('No top-level frames (or frames in sections) on this page.');
+        // Claim the gate immediately after the guard (before collectScreens, which
+        // reads the tree exportDesign mutates) so a concurrent export can't slip in
+        // during collection — matching export_unity above. Cleared in `finally`.
         exportInFlight = true;
         try {
+          const found = collectScreens(figma.currentPage);
+          if (found.length === 0) throw new Error('No top-level frames (or frames in sections) on this page.');
           const scale = (req.params?.scale as ExportScale) || DEFAULT_EXPORT_SCALE;
           const options = {
             ...DEFAULT_EXPORT_OPTIONS,

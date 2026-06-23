@@ -33,11 +33,12 @@ export function generateFileName(root: string, element: string, scale: number): 
 // between is the instance name. Examples:
 //   Btn_Save_PrimaryButton        → kind=button, instance=Save,        ref=PrimaryButton
 //   Btn_Cancel_Secondary_Button   → kind=button, instance=Cancel,      ref=Secondary_Button
-//                                    (ref is the *last* token: "Button"; see below)
+//                                    (ref is everything AFTER the instance token)
 //
-// To keep multi-word refs usable we treat the ref as the final token only.
-// Designers who need underscores in a ref should avoid them; the convention is
-// deliberately simple while we support a single canonical kind (button).
+// The first token is the kind tag, the SECOND token is the instance name, and the
+// REMAINDER (joined back with underscores) is the ref — so multi-word refs like
+// "Secondary_Button" survive. Three-part names are unchanged (the remainder is a
+// single token). The instance is a single token by design; refs may be multi-word.
 // ---------------------------------------------------------------------------
 const KIND_TAGS: Record<string, CanonicalKind> = {
   btn: 'button',
@@ -80,8 +81,8 @@ export function parseCanonical(name: string): CanonicalRef | null {
   const kind = KIND_TAGS[parts[0].toLowerCase()];
   if (!kind) return null;
 
-  const ref = parts[parts.length - 1];
-  const instanceName = parts.slice(1, parts.length - 1).join('_');
+  const instanceName = parts[1];
+  const ref = parts.slice(2).join('_');
   if (!ref || !instanceName) return null;
 
   return { kind, ref, instanceName };

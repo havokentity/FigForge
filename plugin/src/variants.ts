@@ -180,10 +180,27 @@ function normalizeValue(axis: string, name: string, value: string | boolean): st
 // same string would otherwise silently drop the second — those we disambiguate.
 const RECOGNIZED_AXES = new Set(['state', 'value', 'size', 'tone', 'intent', 'severity']);
 
+// When the SAME axis is supplied by more than one source, the instance's live,
+// resolved value must win over component/variant defaults — relying on array push
+// order made this fragile. Higher number = higher precedence. componentProperties
+// is the instance's currently-bound value; componentSet is the master default.
+const SOURCE_PRIORITY: Record<string, number> = {
+  componentProperties: 4,
+  variantProperties: 3,
+  mainComponent: 2,
+  componentSet: 1,
+};
+function sourcePriority(source: string | undefined): number {
+  return source ? (SOURCE_PRIORITY[source] ?? 0) : 0;
+}
+
 export function normalizeVariantEntries(entries: VariantInput[]): CanonicalVariantProps | undefined {
   const raw: CanonicalVariantAxis[] = [];
   const axes: Record<string, string> = {};
   const original: Record<string, string> = {};
+  // Priority of the source that currently owns each axis value — a later entry
+  // from a higher-priority source (the instance's live value) overwrites it.
+  const axisPriority: Record<string, number> = {};
   const sources = new Set<string>();
 
   for (const entry of entries) {
@@ -192,6 +209,7 @@ export function normalizeVariantEntries(entries: VariantInput[]): CanonicalVaria
     const value = normalizeValue(axis, entry.name, entry.value);
     if (value === undefined) continue;
     const source = entry.source ?? 'componentProperties';
+    const priority = sourcePriority(source);
     const originalValue = typeof entry.value === 'boolean' ? (entry.value ? 'true' : 'false') : String(entry.value);
     // Fallback (unrecognized) axis collision: a distinct property trimmed to an
     // already-used key. Suffix it (axis_2, axis_3, …) so it isn't silently lost.
@@ -200,9 +218,13 @@ export function normalizeVariantEntries(entries: VariantInput[]): CanonicalVaria
       while (axes[`${axis}_${n}`] !== undefined) n++;
       axis = `${axis}_${n}`;
     }
-    if (axes[axis] === undefined) {
+    // Set the axis if unseen, or if this source outranks the one that set it — so
+    // the instance's resolved value wins over component/variant defaults instead
+    // of whichever source happened to be pushed first.
+    if (axes[axis] === undefined || priority > (axisPriority[axis] ?? -1)) {
       axes[axis] = value;
       original[axis] = originalValue;
+      axisPriority[axis] = priority;
     }
     sources.add(source);
     raw.push({

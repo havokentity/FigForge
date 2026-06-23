@@ -175,6 +175,17 @@ function isVisible(node: SceneNode): boolean {
   return (node as unknown as { visible?: boolean }).visible !== false;
 }
 
+/**
+ * Fully transparent via node-level opacity (opacity===0). Such a node renders
+ * nothing, so rasterizing it bakes a blank PNG (+ an invisible Image) into Unity.
+ * `visible:false` is already filtered by isVisible; opacity is a separate channel
+ * Figma exposes independently, so it needs its own guard in the exportable check.
+ */
+function isZeroOpacity(node: SceneNode): boolean {
+  const o = (node as unknown as { opacity?: number }).opacity;
+  return typeof o === 'number' && o === 0;
+}
+
 function hasChildren(node: SceneNode): node is SceneNode & ChildrenMixin {
   return 'children' in node;
 }
@@ -198,6 +209,7 @@ export function isIconContainer(node: SceneNode): boolean {
  */
 export function isExportable(node: SceneNode): boolean {
   if (!isVisible(node)) return false;
+  if (isZeroOpacity(node)) return false; // opacity:0 → renders nothing, bakes a blank PNG
   if (VECTOR_TYPES.has(node.type)) return true;
   if (node.type === 'TEXT') return false; // structural by default
   if (isIconContainer(node)) return true; // all-vector children → single icon

@@ -135,14 +135,32 @@ export function mapTransform(input: MapInput): UnityTransform {
     const pTop = snapPixel(py);
     const pBottom = snapPixel(py + parent.h);
 
-    pw = pRight > pLeft ? pRight - pLeft : parent.w;
-    ph = pBottom > pTop ? pBottom - pTop : parent.h;
+    // Degenerate snap (parent < 1px collapses pRight<=pLeft, or rounding inverts
+    // the edge) falls back to the UNSNAPPED parent size. When it does, the child
+    // edges must also be derived from unsnapped space on that axis — otherwise we
+    // mix a snapped child rect against an unsnapped parent size and the anchors
+    // resolve against the wrong origin/extent.
+    const widthOk = pRight > pLeft;
+    const heightOk = pBottom > pTop;
+    pw = widthOk ? pRight - pLeft : parent.w;
+    ph = heightOk ? pBottom - pTop : parent.h;
 
-    // Child rect edges relative to the SNAPPED parent origin (Unity parent-space).
-    left = aLeft - pLeft;
-    right = aRight - pLeft;
-    top = ph - (aTop - pTop); // figma top edge, Y-flipped
-    bottom = ph - (aBottom - pTop); // figma bottom edge, Y-flipped
+    // Child rect edges relative to the parent origin (Unity parent-space). Snapped
+    // edges when the parent axis snapped cleanly; unsnapped when we fell back.
+    if (widthOk) {
+      left = aLeft - pLeft;
+      right = aRight - pLeft;
+    } else {
+      left = fax - px;
+      right = fax + rect.w - px;
+    }
+    if (heightOk) {
+      top = ph - (aTop - pTop); // figma top edge, Y-flipped
+      bottom = ph - (aBottom - pTop); // figma bottom edge, Y-flipped
+    } else {
+      top = ph - (fay - py); // figma top edge, Y-flipped (unsnapped)
+      bottom = ph - (fay + rect.h - py); // figma bottom edge, Y-flipped (unsnapped)
+    }
   } else {
     pw = parent.w;
     ph = parent.h;

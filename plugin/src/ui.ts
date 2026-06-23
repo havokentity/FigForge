@@ -748,18 +748,20 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
   // `data` array from a 1.0-era plugin.
   // Conservative scalability guard: the whole project is base64-encoded into one
   // in-memory JSON body and POSTed in a single fetch — there is no streaming yet.
-  // Estimate the encoded payload (base64 ≈ 1.33× the raw bytes) and warn the user
-  // before a very large send that may exhaust memory or be refused by Unity.
-  // NOTE: this is only a heads-up; a real fix is per-screen/per-asset streaming.
+  // Estimate the encoded payload (base64 ≈ 1.33× the raw bytes); past the limit a
+  // single JSON.stringify is liable to OOM the iframe (or be refused by Unity), so
+  // reject up front rather than crash mid-encode with no recoverable message.
+  // NOTE: a real fix is per-screen/per-asset streaming; this is the hard ceiling.
   const APPROX_BODY_LIMIT = 200 * 1024 * 1024; // ~200 MB encoded
   let rawBytes = 0;
   for (const s of screens) for (const a of s.assets) rawBytes += a.data.length;
   const approxBodyBytes = Math.ceil(rawBytes * 4 / 3);
   if (approxBodyBytes > APPROX_BODY_LIMIT) {
     setStatus(
-      `This project is very large (~${Math.round(approxBodyBytes / (1024 * 1024))} MB encoded) — the single-request send may run out of memory or be refused by Unity. Sending anyway; if it fails, export fewer screens at a time.`,
+      `This project is too large to send (~${Math.round(approxBodyBytes / (1024 * 1024))} MB encoded, cap ${APPROX_BODY_LIMIT / (1024 * 1024)} MB) — the single-request send would likely run out of memory or be refused by Unity. Export fewer screens at a time.`,
       true,
     );
+    return;
   }
   let wireScreens: Array<{ name: string; manifest: string; section?: string; role?: string; assets: Array<{ name: string; b64: string }> }> | null = screens.map((s) => ({
     name: s.name,
@@ -768,8 +770,10 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
     role: s.role,
     assets: s.assets.map((a) => ({ name: a.name, b64: bytesToBase64(a.data) })),
   }));
+  let serialized = false;
   try {
     const body = JSON.stringify({ project, screens: wireScreens });
+    serialized = true;
     // Drop the large base64 wire copy before awaiting the fetch — the request
     // already holds its own reference to `body`, so this lets the encoded screens
     // be reclaimed instead of pinning two full copies for the whole round-trip.
@@ -787,6 +791,17 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
       setStatus('Unity rejected the token — copy it from the FigForge importer (Live import → Plugin token) into the Token field.', true);
     else setStatus(`Unity refused the import (HTTP ${res.status}).`, true);
   } catch (e) {
+    // If we never finished JSON.stringify, the throw is a serialization/OOM
+    // failure (the payload was too big to encode into one string), not a network
+    // problem — say so plainly so the user reduces the send rather than chasing
+    // Unity connectivity.
+    if (!serialized) {
+      setStatus(
+        `Couldn't build the send payload — the project is too large to serialize in one request (${String((e as Error)?.message || e)}). Export fewer screens at a time.`,
+        true,
+      );
+      return;
+    }
     // A fetch to a non-whitelisted origin never reaches the network — Figma
     // blocks it at the iframe boundary, surfacing the same TypeError as a
     // connection-refused failure. Name the real cause when the port isn't the
@@ -1132,6 +1147,17 @@ window.onmessage = (event: MessageEvent) => {
       img.src = url;
       previewImg = img;
       img.onload = () => updatePreviewZoom();
+      img.onerror = () => {
+        // The blob never decoded (corrupt PNG / revoked URL) — restore the empty
+        // state and reclaim the object URL instead of leaving a broken-image icon.
+        if (previewObjectUrl === url) {
+          URL.revokeObjectURL(url);
+          previewObjectUrl = null;
+        }
+        previewImg = null;
+        $('#previewWrap').innerHTML = '<div class="empty">Preview unavailable.</div>';
+        setPreviewZoomLabel('Fit');
+      };
       $('#previewWrap').appendChild(img);
       updatePreviewZoom();
       break;
@@ -1192,6 +1218,13 @@ window.onmessage = (event: MessageEvent) => {
         // the drop visible instead of silently swallowing the response.
         bridgeLog(`dropped mcp-response (${msg.payload?.type ?? 'unknown'}) — socket not OPEN`);
       }
+      break;
+
+    default:
+      // A message type main sent that this UI build doesn't handle (version skew
+      // or a new path that forgot its UI case). Make it visible instead of
+      // silently dropping it, so the gap is diagnosable from the log.
+      bridgeLog(`unhandled message from main: ${String(msg.type)}`);
       break;
   }
 };
