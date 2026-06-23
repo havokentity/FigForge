@@ -18,7 +18,10 @@ jobs:
           # type stripping landed in Node 22.6).
           node-version: 22
 
-      - name: Contract — canonical schema in lockstep
+      - name: Contract — schema + manifest version + field parity in lockstep
+        # Guards three plugin<->importer contract points: the canonical-schema
+        # generation, the manifest wire-format version (importer hard-fails on an
+        # unsupported one), and best-effort top-level Manifest field-name parity.
         run: node scripts/check-canonical-schema.mjs
 
       - name: Plugin — typecheck + build
@@ -46,3 +49,31 @@ jobs:
 # a real compile job would also require a UNITY_LICENSE secret that is
 # unavailable on fork PRs. Adding it now would either hard-fail or block the
 # pipeline, so it is deferred. See the CI concern noted in the rollout.
+#
+# Future path forward (DISABLED — do NOT enable without the prerequisites below):
+# spin up a throwaway Unity project that references this package via the local
+# manifest, then run game-ci/unity-test-runner to compile + run EditMode tests.
+# Prerequisites before un-commenting:
+#   1. A UNITY_LICENSE (+ UNITY_EMAIL / UNITY_PASSWORD) repo secret. These are
+#      NOT available to fork PRs, so the job must be guarded so fork PRs skip it
+#      cleanly rather than fail.
+#   2. A minimal Unity project under e.g. ci/unity-project/ whose Packages/
+#      manifest.json points "com.figforge.importer" at "file:../../unity".
+#
+# unity-compile:
+#   runs-on: ubuntu-latest
+#   # Skip on fork PRs: secrets (UNITY_LICENSE) are not exposed there, so the job
+#   # cannot authenticate and would otherwise hard-fail. Same-repo pushes/PRs run it.
+#   if: github.event.pull_request.head.repo.full_name == github.repository
+#   steps:
+#     - uses: actions/checkout@v4
+#       with:
+#         lfs: true
+#     - uses: game-ci/unity-test-runner@v4
+#       env:
+#         UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+#         UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+#         UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+#       with:
+#         projectPath: ci/unity-project   # throwaway project referencing unity/ via file: dependency
+#         testMode: EditMode
