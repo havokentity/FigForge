@@ -207,6 +207,13 @@ namespace FigForge
             return string.Join("/", parts.ToArray());
         }
 
+        // Above this many warm-able graphics the per-batch Canvas.ForceUpdateCanvases()
+        // flushes cost more (a full-canvas rebuild each) than the SceneView stall they
+        // pre-empt, so on very large pages we skip the intermediate flushes and rely on
+        // the single trailing flush. Correctness is unchanged either way: every graphic
+        // is still touched/dirtied; only the number of redundant rebuild passes differs.
+        const int WarmUpIntermediateFlushCap = 2000;
+
         // Warm the generated SDF graphics during editor import so the SceneView does
         // not spend the next several seconds rebuilding visible chunks of the page.
         // Batches still run inside the import call; the size only controls how often
@@ -237,6 +244,9 @@ namespace FigForge
             Canvas.ForceUpdateCanvases();
 
             var sources = pageRoot.GetComponentsInChildren<IFigForgeCompositorSource>(true);
+            // On very large pages the intermediate flushes dominate import time without
+            // changing the result, so gate them off and let the trailing flush do the work.
+            bool intermediateFlush = (all.Count + sources.Length) <= WarmUpIntermediateFlushCap;
             int warmedSources = 0;
             for (int i = 0; i < sources.Length; i++)
             {
@@ -244,7 +254,7 @@ namespace FigForge
                 if (source == null || !source.isActiveAndEnabled) continue;
                 _ = source.GetCompositorSurface();
                 warmedSources++;
-                if (warmedSources % batchSize == 0)
+                if (intermediateFlush && warmedSources % batchSize == 0)
                     Canvas.ForceUpdateCanvases();
             }
 
@@ -256,11 +266,10 @@ namespace FigForge
                 g.SetVerticesDirty();
                 g.SetMaterialDirty();
 
-                if ((i + 1) % batchSize == 0)
+                if (intermediateFlush && (i + 1) % batchSize == 0)
                     Canvas.ForceUpdateCanvases();
             }
 
-            Canvas.ForceUpdateCanvases();
             Canvas.ForceUpdateCanvases();
             SceneView.RepaintAll();
         }
@@ -2622,7 +2631,8 @@ namespace FigForge
             if (button == null || bg == null || (rollover == null && pressed == null)) return;
             if (bg is FigForgeRoundedRect || bg is FigForgeLayeredRect)
             {
-                var baseFill = ShapeFills(shape).Count > 0 ? ShapeFills(shape)[0] : FigForgeFill.Solid(bg.color);
+                var fills = ShapeFills(shape);
+                var baseFill = fills.Count > 0 ? fills[0] : FigForgeFill.Solid(bg.color);
                 var states = button.AddComponent<FigForgeButtonStateColors>();
                 states.normal = baseFill;
                 states.highlighted = rollover != null ? FigForgeFill.Solid(ToColor(rollover)) : baseFill;
@@ -2755,7 +2765,8 @@ namespace FigForge
             if (bg == null || (c.bgRollover == null && c.bgPressed == null)) return;
             if (c.shape != null && (bg is FigForgeRoundedRect || bg is FigForgeLayeredRect))
             {
-                var fill = ShapeFills(c.shape).Count > 0 ? ShapeFills(c.shape)[0] : FigForgeFill.None;
+                var fills = ShapeFills(c.shape);
+                var fill = fills.Count > 0 ? fills[0] : FigForgeFill.None;
                 var states = bg.gameObject.AddComponent<FigForgeButtonStateColors>();
                 SetStates(states, fill, new CanonicalStateColors
                 {
@@ -4104,8 +4115,17 @@ namespace FigForge
             bind.signature = sig; // stamp so a later definition change triggers regen
 
             TextureImportHelper.EnsureFolder(CanonicalFolder);
-            var prefab = UnityEditor.PrefabUtility.SaveAsPrefabAsset(temp, path);
-            UnityEngine.Object.DestroyImmediate(temp);
+            GameObject prefab;
+            try
+            {
+                prefab = UnityEditor.PrefabUtility.SaveAsPrefabAsset(temp, path);
+            }
+            finally
+            {
+                // Always tear down the scratch GameObject so a throwing save does not
+                // leak a stray copy into the editing scene.
+                UnityEngine.Object.DestroyImmediate(temp);
+            }
             if (prefab != null)
             {
                 ctx.log($"generated canonical {kind} '{refName}' → {path}");
