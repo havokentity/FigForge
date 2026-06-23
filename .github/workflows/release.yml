@@ -25,23 +25,31 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Match CI and package.json engines (>=22.6) — the server tests run .ts
+          # files directly via `node --test`, which needs Node 22.6+.
+          node-version: 22
 
       - name: Resolve version
         id: ver
         run: echo "version=${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}" >> "$GITHUB_OUTPUT"
 
+      - name: Contract — schema + manifest version + field parity in lockstep
+        run: node scripts/check-canonical-schema.mjs
+
       - name: Build plugin
         run: |
           cd plugin
           npm ci
+          npm run typecheck
           npm run build
 
-      - name: Build server
+      - name: Build + test server
         run: |
           cd server
           npm ci
+          npm run typecheck
           npm run build
+          npm test
 
       - name: Package artifacts
         env:
