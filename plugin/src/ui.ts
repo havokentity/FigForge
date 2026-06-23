@@ -721,10 +721,18 @@ $('#exportFrameUnityBtn').addEventListener('click', () => {
   post({ type: 'export', target: 'unity', scale: parseScale(), options: currentOptions(), elementConfigs: collectConfigs() });
 });
 
-function unityImportUrl(): string {
+// The plugin manifest's networkAccess.allowedDomains only whitelists
+// http://localhost:1995 (Figma matches the exact port — no wildcards), so any
+// other port is blocked by Figma before the fetch ever leaves the iframe.
+const UNITY_ALLOWED_PORT = 1995;
+
+function unityImportPort(): number {
   const raw = ($('#unityPort') as HTMLInputElement)?.value;
-  const port = Math.min(65535, Math.max(1024, parseInt(raw, 10) || 1995));
-  return `http://localhost:${port}/import`;
+  return Math.min(65535, Math.max(1024, parseInt(raw, 10) || UNITY_ALLOWED_PORT));
+}
+
+function unityImportUrl(): string {
+  return `http://localhost:${unityImportPort()}/import`;
 }
 
 function unityToken(): string {
@@ -779,7 +787,20 @@ async function sendToUnity(project: { name: string; initial: string }, screens: 
       setStatus('Unity rejected the token — copy it from the FigForge importer (Live import → Plugin token) into the Token field.', true);
     else setStatus(`Unity refused the import (HTTP ${res.status}).`, true);
   } catch (e) {
-    setStatus(`Couldn't reach Unity at ${url} — is the FigForge importer open with live import enabled?`, true);
+    // A fetch to a non-whitelisted origin never reaches the network — Figma
+    // blocks it at the iframe boundary, surfacing the same TypeError as a
+    // connection-refused failure. Name the real cause when the port isn't the
+    // one the manifest allows, so the user doesn't chase a dead Unity instead.
+    const port = unityImportPort();
+    if (port !== UNITY_ALLOWED_PORT) {
+      setStatus(
+        `Figma blocks port ${port} — only ${UNITY_ALLOWED_PORT} is allowed by the plugin manifest. ` +
+          `Change the importer port back to ${UNITY_ALLOWED_PORT}, or add http://localhost:${port} to manifest allowedDomains.`,
+        true,
+      );
+    } else {
+      setStatus(`Couldn't reach Unity at ${url} — is the FigForge importer open with live import enabled?`, true);
+    }
   }
 }
 
@@ -1022,7 +1043,11 @@ function withCurrentExportSettings(payload: { type?: string; params?: Record<str
 function disconnectMcp() {
   wantConnected = false;
   if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  if (socket) { socket.close(); socket = null; }
+  // Detach the old socket's handlers before closing so its async onclose can't
+  // race a later connect (it would null out a freshly-created socket).
+  const old = socket;
+  if (old) { old.onclose = old.onmessage = old.onopen = old.onerror = null; old.close(); }
+  socket = null;
   setMcp('off');
 }
 
@@ -1049,7 +1074,12 @@ if (bridgeTokenEl) {
     savePrefs({ bridgeToken: bridgeTokenEl.value.trim() });
     if (!wantConnected) return;
     if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    if (socket) { socket.close(); socket = null; }
+    // Detach the old socket's handlers before closing so its async onclose can't
+    // run `socket = null` after connectMcp() has assigned the NEW socket — which
+    // would orphan the live connection.
+    const old = socket;
+    if (old) { old.onclose = old.onmessage = old.onopen = old.onerror = null; old.close(); }
+    socket = null;
     connectMcp();
   });
 }
@@ -1156,6 +1186,11 @@ window.onmessage = (event: MessageEvent) => {
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(msg.payload));
         bridgeLog(`→ ${msg.payload.type} ${msg.payload.error ? 'ERR' : 'ok'}`);
+      } else {
+        // The socket reconnected (or dropped) mid-roundtrip, so this computed
+        // reply has nowhere to go. Buffer-and-flush is out of scope; at least make
+        // the drop visible instead of silently swallowing the response.
+        bridgeLog(`dropped mcp-response (${msg.payload?.type ?? 'unknown'}) — socket not OPEN`);
       }
       break;
   }
