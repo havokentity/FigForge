@@ -49,6 +49,10 @@ namespace FigForge
         // placed this build, resetting their name/rect/binding overrides to prefab
         // defaults (the page's first inputs came out as default-sized 'inputfield').
         public readonly HashSet<string> resolvedCanonicalRefs = new HashSet<string>();
+        // Radio canonicals are grouped by (parent, canonical ref): two independent radio
+        // SETS placed under the same parent must NOT share a ToggleGroup, or selecting an
+        // option in one set would clear the other. Keyed "parentInstanceID|ref".
+        public readonly Dictionary<string, ToggleGroup> radioGroups = new Dictionary<string, ToggleGroup>();
     }
 
     public static class HierarchyBuilder
@@ -61,6 +65,7 @@ namespace FigForge
 
             ctx.registered.Clear();
             ctx.resolvedCanonicalRefs.Clear();
+            ctx.radioGroups.Clear();
 
             // One Figma frame = one root. If several, wrap them under a page root.
             // Compositor auto-create is suppressed for the whole element build:
@@ -353,11 +358,18 @@ namespace FigForge
                     ctx.log($"canonical {e.canonical.kind} '{e.canonical.Ref}' → placeholder");
                     inst = BuildPlaceholderButton(e, parent, ctx);
                 }
-                // Radios under the same parent share one ToggleGroup → mutually exclusive.
+                // Radios of the SAME ref under one parent share a ToggleGroup (mutually
+                // exclusive), but distinct refs get distinct groups so independent radio
+                // sets under the same frame don't deselect each other.
                 if (canonicalKind == "radio")
                 {
-                    var grp = parent.GetComponent<ToggleGroup>() ?? parent.gameObject.AddComponent<ToggleGroup>();
-                    grp.allowSwitchOff = true;
+                    string groupKey = parent.GetInstanceID() + "|" + e.canonical.Ref;
+                    if (!ctx.radioGroups.TryGetValue(groupKey, out var grp) || grp == null)
+                    {
+                        grp = parent.gameObject.AddComponent<ToggleGroup>();
+                        grp.allowSwitchOff = true;
+                        ctx.radioGroups[groupKey] = grp;
+                    }
                     var tg = inst.GetComponentInChildren<Toggle>(true);
                     if (tg != null) tg.group = grp;
                 }
@@ -4007,7 +4019,7 @@ namespace FigForge
 
             // Candidate prefab: a library-mapped one (hand-made or previously
             // generated) wins lookup; else an existing generated prefab on disk.
-            string path = $"{CanonicalFolder}/{SafeAsset(refName)}.prefab";
+            string path = $"{CanonicalFolder}/{CanonicalPrefabFile(refName)}.prefab";
             var lib = ctx.canonical ?? LoadOrCreateCanonicalLibrary();
             ctx.canonical = lib;
             var refEntry = lib.ResolveEntry(kind, refName);
@@ -4552,6 +4564,18 @@ namespace FigForge
             var a = new char[s.Length];
             for (int i = 0; i < s.Length; i++) a[i] = char.IsLetterOrDigit(s[i]) ? s[i] : '_';
             return new string(a);
+        }
+
+        // Prefab file stem for a canonical ref. SafeAsset maps every non-alphanumeric
+        // char to '_', so two distinct refs differing only in punctuation/whitespace
+        // (e.g. "Btn/Primary" vs "Btn-Primary") would sanitize to the SAME file and
+        // silently overwrite each other. When sanitization is lossy, append a stable
+        // hash of the FULL ref so distinct refs map to distinct files; clean alphanumeric
+        // refs keep their pristine name. Deterministic per ref, so reuse survives re-import.
+        static string CanonicalPrefabFile(string refName)
+        {
+            string safe = SafeAsset(refName);
+            return safe == refName ? safe : $"{safe}_{SigHash(refName)}";
         }
 
         static void AddTransparentRaycastTarget(GameObject go)
