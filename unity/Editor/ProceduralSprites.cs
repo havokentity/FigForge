@@ -13,6 +13,7 @@
 // =============================================================================
 
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -355,6 +356,79 @@ namespace FigForge
                 if (!AssetDatabase.IsValidFolder(next)) AssetDatabase.CreateFolder(cur, parts[i]);
                 cur = next;
             }
+        }
+    }
+
+    // The caches above persist one .asset per distinct key, and the key includes the
+    // element's exact pixel size (RoundedGradientSpriteCache especially — up to 2048×2048
+    // RGBA32). A re-Forge after a resize generates fresh assets under new keys; the old
+    // ones are never deleted, so _GeneratedSprites grows unbounded across edit cycles.
+    //
+    // Auto-sweeping at import start is NOT safe here: BuildPageProject rebuilds ONE project,
+    // but _GeneratedSprites is shared across every imported page in the scene/project, so a
+    // blind clear would delete sprites still referenced by pages that aren't being rebuilt
+    // this pass. Instead this is an explicit, dependency-checked cleanup: it deletes only
+    // generated sprites that NOTHING in the project (scenes + prefabs) references, so a live
+    // import that still points at a sprite always keeps it.
+    static class ProceduralSpriteCleanup
+    {
+        const string Root = "Assets/FigForge/_GeneratedSprites";
+
+        [MenuItem("Window/FigForge/Clean Up Orphaned Generated Sprites")]
+        public static void CleanUpOrphans()
+        {
+            if (!AssetDatabase.IsValidFolder(Root))
+            {
+                EditorUtility.DisplayDialog("FigForge", "No generated sprites folder to clean.", "OK");
+                return;
+            }
+
+            // Every generated sprite asset under _GeneratedSprites.
+            var generated = AssetDatabase.FindAssets("t:Sprite", new[] { Root })
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Where(p => p.StartsWith(Root + "/", System.StringComparison.Ordinal))
+                .Distinct()
+                .ToList();
+            if (generated.Count == 0)
+            {
+                EditorUtility.DisplayDialog("FigForge", "No generated sprites found.", "OK");
+                return;
+            }
+
+            // Build the set of generated sprites referenced by any scene or prefab in the
+            // project. GetDependencies(recursive) walks the serialized references of each
+            // scene/prefab, so a sprite reachable from a built page (in-scene or saved prefab)
+            // is kept; only truly unreferenced assets are removed.
+            var referenced = new HashSet<string>();
+            var consumers = AssetDatabase.FindAssets("t:Scene t:Prefab")
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .Distinct();
+            foreach (var c in consumers)
+                foreach (var dep in AssetDatabase.GetDependencies(c, true))
+                    if (dep.StartsWith(Root + "/", System.StringComparison.Ordinal))
+                        referenced.Add(dep);
+
+            var orphans = generated.Where(p => !referenced.Contains(p)).ToList();
+            if (orphans.Count == 0)
+            {
+                EditorUtility.DisplayDialog("FigForge",
+                    $"No orphaned generated sprites — all {generated.Count} are referenced.", "OK");
+                return;
+            }
+
+            if (!EditorUtility.DisplayDialog("FigForge — Clean Up Generated Sprites",
+                $"Delete {orphans.Count} of {generated.Count} generated sprite asset(s) that no scene "
+                + "or prefab references?\n\nReferenced sprites are kept.", "Delete", "Cancel"))
+                return;
+
+            var failed = new List<string>();
+            AssetDatabase.DeleteAssets(orphans.ToArray(), failed);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            int deleted = orphans.Count - failed.Count;
+            Debug.Log($"[FigForge] cleaned up {deleted} orphaned generated sprite(s)"
+                + (failed.Count > 0 ? $" ({failed.Count} could not be deleted)" : "") + ".");
         }
     }
 }
