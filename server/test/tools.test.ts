@@ -8,7 +8,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
 
 import { resolveAndValidateOutputPath, executeExportUnity, validateManifest } from '../dist/tools.js';
@@ -57,7 +57,9 @@ describe('figmaNodeId schema', () => {
 });
 
 describe('resolveAndValidateOutputPath', () => {
-  const root = path.resolve(os.tmpdir(), 'figforge-workspace');
+  // realpath the tmp base: the guard now returns the canonicalized path it
+  // validated, and os.tmpdir() is itself a symlink on macOS (/var -> /private/var).
+  const root = path.resolve(realpathSync(os.tmpdir()), 'figforge-workspace');
 
   it('allows the root itself and nested subdirs', () => {
     assert.equal(resolveAndValidateOutputPath('.', root), root);

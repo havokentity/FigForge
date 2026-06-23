@@ -67,7 +67,10 @@ export function resolveAndValidateOutputPath(outDir: string, workspaceRoot: stri
   if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
     throw new Error(`Refusing to write outside the bridge working directory: ${outDir}`);
   }
-  return resolved;
+  // Return the canonicalized path that was actually validated (not the raw
+  // `resolved`), so the bytes land at the location whose containment we checked
+  // — a symlinked ancestor can't redirect the write between check and use.
+  return realResolved;
 }
 
 interface UnityExport {

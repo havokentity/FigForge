@@ -95,6 +95,10 @@ export class Leader implements PluginSender {
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
+    // An 'error' event with no listener throws and crashes the process; log instead.
+    this.wss.on('error', (err) => {
+      process.stderr.write(`[figforge-bridge] ws server error: ${err instanceof Error ? err.message : String(err)}\n`);
+    });
     this.server = http.createServer((req, res) => this.onRequest(req, res));
     this.server.on('upgrade', (req, socket, head) => {
       if (req.url !== undefined && this.isAllowedWsUpgrade(req)) {
@@ -148,6 +152,14 @@ export class Leader implements PluginSender {
       this.server.once('error', reject);
       this.server.listen(BRIDGE_PORT, '127.0.0.1', () => {
         this.server.off('error', reject);
+        // Bind succeeded: replace the one-shot bind guard with a permanent
+        // handler so a later runtime error (e.g. EMFILE/ENFILE on accept under
+        // fd exhaustion) is logged instead of crashing the bridge as an
+        // unhandled 'error' event — which would sever the plugin socket and
+        // force every follower to scramble for takeover.
+        this.server.on('error', (err) => {
+          process.stderr.write(`[figforge-bridge] http server error: ${err instanceof Error ? err.message : String(err)}\n`);
+        });
         resolve();
       });
     });
