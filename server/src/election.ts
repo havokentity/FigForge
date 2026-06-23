@@ -14,6 +14,19 @@ import type { PluginSender, RpcResponse } from './types.js';
 
 type Role = 'leader' | 'follower';
 
+// After a takeover we lost (someone else became leader), the winner's Figma
+// plugin WebSocket has usually dropped and is mid-reconnect. Sending immediately
+// races that reconnect and surfaces a spurious "plugin not connected" error during
+// a normal leader-restart window. Poll the new leader's /ping pluginConnected flag
+// for a short bounded period so a healthy system isn't reported as broken. The
+// bound is small (well under the per-tool budgets) and only delays the lost-race
+// path — the happy path (we are leader, or a follower whose leader's plugin is
+// already connected) is untouched.
+const PLUGIN_RECONNECT_WAIT_MS = 3_000;
+const PLUGIN_RECONNECT_POLL_MS = 250;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 export class FigForgeNode implements PluginSender {
   private role: Role = 'follower';
   private leader: Leader | null = null;
@@ -74,13 +87,40 @@ export class FigForgeNode implements PluginSender {
       return this.leader.send(tool, nodeIds, params, timeoutMs);
     }
     // Follower path. If the leader has vanished, try to take over once.
-    const alive = await this.follower.ping();
-    if (!alive) {
+    const status = await this.follower.pingStatus();
+    if (!status.reachable) {
       await this.tryBecomeLeader();
       if (this.role === 'leader' && this.leader) {
         return this.leader.send(tool, nodeIds, params, timeoutMs);
       }
+      // We lost the port race: a brand-new leader just bound. Its plugin socket
+      // is almost certainly mid-reconnect, so wait (bounded) for it to land
+      // before sending — otherwise we'd surface a spurious not-connected error
+      // during a normal leader restart.
+      await this.waitForPluginReconnect();
+    } else if (!status.pluginConnected) {
+      // Leader is up but its plugin isn't connected yet (e.g. it just took over
+      // from a crashed leader). Same bounded wait before issuing the send.
+      await this.waitForPluginReconnect();
     }
     return this.follower.send(tool, nodeIds, params, timeoutMs);
+  }
+
+  /**
+   * Poll the leader's /ping pluginConnected flag until the plugin reconnects or
+   * the bounded window elapses. Returns regardless; the subsequent send still
+   * surfaces a real not-connected error if the plugin never came back. This only
+   * retries the wait/probe — it never re-issues a tool call, so it is
+   * side-effect-free.
+   */
+  private async waitForPluginReconnect(): Promise<void> {
+    const deadline = Date.now() + PLUGIN_RECONNECT_WAIT_MS;
+    while (Date.now() < deadline) {
+      const status = await this.follower.pingStatus();
+      if (status.reachable && status.pluginConnected) return;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return;
+      await delay(Math.min(PLUGIN_RECONNECT_POLL_MS, remaining));
+    }
   }
 }

@@ -13,11 +13,23 @@ export class Follower implements PluginSender {
   private base = `http://127.0.0.1:${BRIDGE_PORT}`;
 
   async ping(): Promise<boolean> {
+    return (await this.pingStatus()).reachable;
+  }
+
+  /**
+   * Probe the leader's /ping. `reachable` means a leader answered; `pluginConnected`
+   * reflects whether that leader currently holds the Figma plugin WebSocket (the
+   * /ping body exposes it — see Leader.onRequest). A freshly-elected leader is
+   * reachable but not yet plugin-connected during the plugin's reconnect window.
+   */
+  async pingStatus(): Promise<{ reachable: boolean; pluginConnected: boolean }> {
     try {
       const r = await fetch(`${this.base}/ping`, { signal: AbortSignal.timeout(2000) });
-      return r.ok;
+      if (!r.ok) return { reachable: false, pluginConnected: false };
+      const body = (await r.json()) as { pluginConnected?: unknown };
+      return { reachable: true, pluginConnected: body?.pluginConnected === true };
     } catch {
-      return false;
+      return { reachable: false, pluginConnected: false };
     }
   }
 
