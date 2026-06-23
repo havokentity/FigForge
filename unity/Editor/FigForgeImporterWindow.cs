@@ -1323,6 +1323,22 @@ namespace FigForge
                 mgr.shell = null;
                 RemoveStaleImported(canvas.transform, proj.name, new HashSet<string>(loaded.Select(s => s.importKey)));
 
+                // Declare the full set of frame class names this import will generate so every
+                // per-frame WriteFiles shares one reserved set (sections resolve to a single
+                // nested class) and EndBatch can sweep Frames.<Old>.g.cs left by a Figma rename/
+                // remove. Overlays have no frame class (see WriteFiles), so they're excluded —
+                // mirrors BuildModel's className = ToIdentifier(displayName ?? name).
+                var expectedFrameClasses = new HashSet<string>();
+                foreach (var s in loaded)
+                {
+                    if (FrameRoles.IsOverlay(s.ps.role)) continue;
+                    var sc = s.m != null ? s.m.screen : null;
+                    if (sc == null) continue;
+                    expectedFrameClasses.Add(IdentifierUtil.ToIdentifier(
+                        !string.IsNullOrEmpty(sc.displayName) ? sc.displayName : sc.name));
+                }
+                FrameCodeGenDriver.BeginBatch(expectedFrameClasses);
+
                 // 1. Persistent Shells (optional) — one per Section. Screens in the
                 // same Section mount into that shell's Content slot. Shell frames are
                 // registered too, so they can be shown directly like any other frame.
@@ -1459,7 +1475,10 @@ namespace FigForge
                 return true;
             }
             catch (System.Exception e) { Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); return false; }
-            finally { EditorUtility.ClearProgressBar(); AssetDatabase.SaveAssets(); }
+            // EndBatch sweeps orphan Frames.<Old>.g.cs and clears the shared reserved set. In the
+            // finally so a mid-import throw can't leave the batch open (which would make the NEXT
+            // single-frame import wrongly think it's still in a full run).
+            finally { FrameCodeGenDriver.EndBatch(); EditorUtility.ClearProgressBar(); AssetDatabase.SaveAssets(); }
         }
 
         void BuildPageUITK(ProjectData proj, List<LoadedScreen> loaded)

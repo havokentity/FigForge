@@ -25,6 +25,43 @@ namespace FigForge
         const string GenRoot = "Assets/FigForge/Generated";
         const string FramesDir = GenRoot + "/Frames";
 
+        // ---- import batch (full multi-frame import) -----------------------------------
+        // A full project import calls WriteFiles once per frame. Without a shared notion of
+        // "every frame in THIS import", each WriteFiles rebuilds its cross-frame reserved set
+        // by scanning Frames.*.g.cs on disk — which (a) varies between frames as files are
+        // written, so two frames in one section can compute different section class names
+        // (CS0102), and (b) harvests orphaned files left by renamed/removed frames as if they
+        // were real, and never deletes them. A batch fixes both: the importer declares the
+        // expected frame class names up front (single source of truth), every per-frame emit
+        // sees the SAME reserved set, and EndBatch sweeps the orphans. Outside a batch (a
+        // single-frame incremental rebuild) we fall back to the on-disk scan and DO NOT sweep,
+        // so a partial run can never delete files for frames it simply didn't touch.
+        static HashSet<string> _batchFrameClassNames;
+
+        /// <summary>Open a full-import batch. <paramref name="expectedFrameClassNames"/> is the
+        /// complete set of frame class names this import will generate (overlays excluded — they
+        /// have no frame class). While open, every frame's cross-frame reserved set is this exact
+        /// set, so all frames in a section resolve to one nested class. Must be paired with
+        /// <see cref="EndBatch"/> (call it from a finally).</summary>
+        public static void BeginBatch(IEnumerable<string> expectedFrameClassNames)
+        {
+            _batchFrameClassNames = new HashSet<string>(System.StringComparer.Ordinal);
+            if (expectedFrameClassNames != null)
+                foreach (var n in expectedFrameClassNames)
+                    if (!string.IsNullOrEmpty(n)) _batchFrameClassNames.Add(n);
+        }
+
+        /// <summary>Close a full-import batch and sweep orphaned Frames.&lt;Old&gt;.g.cs /
+        /// Frames/&lt;Old&gt;.g.cs left by frames renamed or removed in Figma. Only runs for a
+        /// full import (a batch was open); a single-frame rebuild never sweeps.</summary>
+        public static void EndBatch()
+        {
+            var expected = _batchFrameClassNames;
+            _batchFrameClassNames = null;
+            if (expected == null) return;
+            SweepOrphanFrameFiles(expected);
+        }
+
         /// <summary>Generate the accessor layer for one imported frame. Returns the model
         /// so the caller can wire the prefab against the same identifiers.</summary>
         public static FrameModel Generate(Manifest m, string section = "", bool includeGroups = true)
@@ -264,9 +301,8 @@ namespace FigForge
             else if (File.Exists(dialogsCs))
             {
                 // Frame stopped being an overlay (or lost its dialogs) — drop the stale accessors.
-                File.Delete(dialogsCs);
-                if (File.Exists(dialogsCs + ".meta")) File.Delete(dialogsCs + ".meta");
-                changed = true;
+                // Via the AssetDatabase so the .meta + asset DB don't go stale.
+                if (DeleteAsset(dialogsCs)) changed = true;
             }
 
             // Compile on the next tick — never mid-import (a domain reload would abort it).
@@ -304,15 +340,13 @@ namespace FigForge
                 foreach (var file in Directory.GetFiles(dir, "*.g.cs"))
                 {
                     if (expected.Contains(Path.GetFileName(file))) continue;
-                    File.Delete(file);
-                    if (File.Exists(file + ".meta")) File.Delete(file + ".meta");
-                    changed = true;
+                    // Via the AssetDatabase so the .meta + asset DB stay consistent.
+                    if (DeleteAsset(dir + "/" + Path.GetFileName(file))) changed = true;
                 }
                 if (expected.Count == 0) // no groups left — drop the folder entirely
                 {
-                    try { Directory.Delete(dir, true); } catch { /* best-effort */ }
-                    if (File.Exists(dir + ".meta")) File.Delete(dir + ".meta");
-                    changed = true;
+                    if (DeleteAsset(dir)) changed = true;
+                    else Debug.LogWarning($"[FigForge] could not delete empty group folder '{dir}' — remove it manually.");
                 }
             }
             return changed;
@@ -325,6 +359,73 @@ namespace FigForge
             return true;
         }
 
+        // Delete a generated asset through the AssetDatabase so the .meta + asset DB stay
+        // consistent (a raw File.Delete leaves an orphan .meta and a stale DB entry). Falls
+        // back to File.Delete only if the asset isn't under the project's Assets/ DB. Returns
+        // true if anything was removed.
+        static bool DeleteAsset(string path)
+        {
+            if (path.StartsWith("Assets/", System.StringComparison.Ordinal) && AssetDatabase.DeleteAsset(path))
+                return true;
+            bool removed = false;
+            if (File.Exists(path)) { File.Delete(path); removed = true; }
+            if (File.Exists(path + ".meta")) { File.Delete(path + ".meta"); removed = true; }
+            return removed;
+        }
+
+        // Full-import sweep (EndBatch only): delete Frames.<Old>.g.cs files and Frames/<Old>.g.cs
+        // frame classes (+ their <Old>.g group folders) whose class name is no longer expected —
+        // i.e. a frame renamed or removed in Figma. The filename is the authoritative class name
+        // (body-free), same convention SiblingFrameClassNames relies on. Scoped to a FULL import so
+        // it can't delete a frame that simply wasn't part of a partial rebuild.
+        static void SweepOrphanFrameFiles(HashSet<string> expected)
+        {
+            if (!Directory.Exists(GenRoot)) return;
+
+            // Stale Frames.<class>.g.cs (the per-frame accessor partial).
+            const string fmPrefix = "Frames.";
+            const string suffix = ".g.cs";
+            foreach (var file in Directory.GetFiles(GenRoot, "Frames.*.g.cs"))
+            {
+                string name = Path.GetFileName(file);
+                if (name == "Frames.Core.g.cs") continue;          // the fixed core, not a frame
+                if (name.Length <= fmPrefix.Length + suffix.Length) continue;
+                string cls = name.Substring(fmPrefix.Length, name.Length - fmPrefix.Length - suffix.Length);
+                if (expected.Contains(cls)) continue;
+                DeleteAsset(GenRoot + "/" + name);
+            }
+
+            // Stale Dialogs.<class>.g.cs (overlay accessors whose frame was renamed/removed) —
+            // keyed by the same frame className, and DialogFrameClassNames harvests these too, so
+            // an orphan would poison the reserved set just like an orphan Frames.<class>.g.cs.
+            const string dlgPrefix = "Dialogs.";
+            foreach (var file in Directory.GetFiles(GenRoot, "Dialogs.*.g.cs"))
+            {
+                string name = Path.GetFileName(file);
+                if (name == "Dialogs.Core.g.cs") continue;          // the fixed core, not a frame
+                if (name.Length <= dlgPrefix.Length + suffix.Length) continue;
+                string cls = name.Substring(dlgPrefix.Length, name.Length - dlgPrefix.Length - suffix.Length);
+                if (expected.Contains(cls)) continue;
+                DeleteAsset(GenRoot + "/" + name);
+            }
+
+            // Stale Frames/<class>.g.cs (the FigForgeFrame subclass) + its <class>.g group folder.
+            if (Directory.Exists(FramesDir))
+            {
+                foreach (var file in Directory.GetFiles(FramesDir, "*.g.cs"))
+                {
+                    string name = Path.GetFileName(file);
+                    if (name.Length <= suffix.Length) continue;
+                    string cls = name.Substring(0, name.Length - suffix.Length);
+                    if (expected.Contains(cls)) continue;
+                    DeleteAsset(FramesDir + "/" + name);
+                    string groupDir = FramesDir + "/" + cls + ".g";
+                    if (Directory.Exists(groupDir) && !DeleteAsset(groupDir))
+                        Debug.LogWarning($"[FigForge] could not delete stale group folder '{groupDir}' — remove it manually.");
+                }
+            }
+        }
+
         // ---- cross-frame identifier reservation (CS0102 guards) -----------------------
         // Frames are generated one at a time, each writing its own `Frames.<class>.g.cs` /
         // `Dialogs.<class>.g.cs` into a SHARED partial class. A duplicate member emitted by a
@@ -335,6 +436,17 @@ namespace FigForge
         // (the filename is the authoritative, body-free source) plus the frame being written.
         static HashSet<string> SiblingFrameClassNames(string selfClassName)
         {
+            // During a full import the expected set is fixed up front — return it verbatim so
+            // EVERY frame in the run (and so every frame in a section) sees the same reserved set
+            // and resolves a section to one nested class. On-disk orphans are deliberately NOT
+            // consulted here: they're swept at EndBatch instead of poisoning the reserved set.
+            if (_batchFrameClassNames != null)
+            {
+                var batch = new HashSet<string>(_batchFrameClassNames, System.StringComparer.Ordinal);
+                if (!string.IsNullOrEmpty(selfClassName)) batch.Add(selfClassName);
+                return batch;
+            }
+
             var names = new HashSet<string>(System.StringComparer.Ordinal);
             if (!string.IsNullOrEmpty(selfClassName)) names.Add(selfClassName);
             if (!Directory.Exists(GenRoot)) return names;
