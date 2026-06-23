@@ -1078,6 +1078,18 @@ export async function exportDesign(
   const assets: BinaryAsset[] = [];
   const assetEntries: ManifestAsset[] = [];
   const hashToFile = new Map<string, string>();
+  // Disambiguate file-name collisions in O(1) per asset (a Set lookup) instead
+  // of an O(n) scan over `assets`, and always rebuild the candidate from the
+  // BASE name (`base_1.png`, `base_2.png`, …) so repeated collisions never
+  // compound suffixes into `base_1_2.png`.
+  const usedAssetNames = new Set<string>();
+  function uniqueAssetName(base: string): string {
+    let candidate = base;
+    let n = 1;
+    while (usedAssetNames.has(candidate)) candidate = base.replace('.png', `_${n++}.png`);
+    usedAssetNames.add(candidate);
+    return candidate;
+  }
   const assetByNode = new Map<string, { file: string; w: number; h: number }>();
   const failedExportIds = new Set<string>();
 
@@ -1154,10 +1166,7 @@ export async function exportDesign(
       let file = hashToFile.get(hash);
       const dims = pngSize(bytes);
       if (!file) {
-        file = generateFileName(root.name, p.node.name, scaleNum);
-        // disambiguate collisions
-        let n = 1;
-        while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
+        file = uniqueAssetName(generateFileName(root.name, p.node.name, scaleNum));
         hashToFile.set(hash, file);
         assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: p.node.id, scale: scaleNum });
@@ -1206,9 +1215,7 @@ export async function exportDesign(
         const dims = pngSize(bytes);
         let file = hashToFile.get(hash);
         if (!file) {
-          file = generateFileName(root.name, `${master.name}_${layerName}`, scaleNum);
-          let n = 1;
-          while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
+          file = uniqueAssetName(generateFileName(root.name, `${master.name}_${layerName}`, scaleNum));
           hashToFile.set(hash, file);
           assets.push({ name: file, data: bytes });
           assetEntries.push({ file, nodeId: layer.id, scale: scaleNum });
@@ -1241,9 +1248,7 @@ export async function exportDesign(
       const dims = pngSize(bytes);
       let file = hashToFile.get(hash);
       if (!file) {
-        file = generateFileName(root.name, nameHint, scaleNum);
-        let n = 1;
-        while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
+        file = uniqueAssetName(generateFileName(root.name, nameHint, scaleNum));
         hashToFile.set(hash, file);
         assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
@@ -1277,6 +1282,12 @@ export async function exportDesign(
     }
   }
 
+  // Depth cap for the recursive state-layer shape/colour finders below. A button
+  // state layer's renderable fill lives within a handful of nesting levels; this
+  // bounds the descent so a pathologically deep (or accidentally cyclic-looking)
+  // subtree can't blow the stack or stall the export.
+  const MAX_STATE_RECURSION = 32;
+
   // First solid-fill colour of a node → RGBA (null if no solid fill).
   function solidRGBA(node: SceneNode): RGBA | null {
     const fills = (node as unknown as { fills?: Paint[] | symbol }).fills;
@@ -1291,12 +1302,13 @@ export async function exportDesign(
   // so reading only the layer's own fill grabs the (often default) frame colour
   // instead of the real one. Called on an INSTANCE's state layer it picks up that
   // instance's overridden colour. null = no solid fill (e.g. a gradient state).
-  function stateSolid(node: SceneNode): RGBA | null {
+  function stateSolid(node: SceneNode, depth = 0): RGBA | null {
     const own = solidRGBA(node);
     if (own) return own;
+    if (depth >= MAX_STATE_RECURSION) return null;
     if ('children' in node) {
       for (const c of (node as ChildrenMixin).children as SceneNode[]) {
-        const f = stateSolid(c);
+        const f = stateSolid(c, depth + 1);
         if (f) return f;
       }
     }
@@ -1489,16 +1501,17 @@ export async function exportDesign(
     return node.type !== 'TEXT' && node.type !== 'SLICE';
   }
 
-  async function stateShape(node: SceneNode): Promise<ButtonShape | null> {
+  async function stateShape(node: SceneNode, depth = 0): Promise<ButtonShape | null> {
     if (visualShapeCandidate(node)) {
       const own = await shapeOfWithAsset(node);
       if (own) return own;
     }
+    if (depth >= MAX_STATE_RECURSION) return null;
     if ('children' in node) {
       const kids = (node as ChildrenMixin).children as SceneNode[];
       for (const c of kids) {
         if (c.name.toLowerCase() === 'label' || c.name.toLowerCase() === 'hitarea') continue;
-        const sh = await stateShape(c);
+        const sh = await stateShape(c, depth + 1);
         if (sh) return sh;
       }
     }
@@ -1573,14 +1586,31 @@ export async function exportDesign(
     return true;
   }
 
+  // Variant props for a component set's COMPONENT children, extracted ONCE per
+  // set (a single async pass) and cached by set id. componentSetStateSource is
+  // called many times per master (one per state, plus exportStates), and each
+  // call would otherwise re-extract props for every sibling — O(states ×
+  // children) async work over an unchanging set.
+  type SetVariantEntry = { child: SceneNode; variants: CanonicalVariantProps | undefined };
+  const setVariantCache = new Map<string, SetVariantEntry[]>();
+  async function setVariantEntries(set: ComponentSetNode): Promise<SetVariantEntry[]> {
+    const cached = setVariantCache.get(set.id);
+    if (cached) return cached;
+    const entries: SetVariantEntry[] = [];
+    for (const child of set.children as SceneNode[]) {
+      if (child.type !== 'COMPONENT') continue;
+      entries.push({ child, variants: await extractVariantProps(child) });
+    }
+    setVariantCache.set(set.id, entries);
+    return entries;
+  }
+
   async function componentSetStateSource(master: SceneNode, state: string): Promise<SceneNode | undefined> {
     const comp = master.type === 'COMPONENT' ? master as ComponentNode : undefined;
     const set = comp?.parent?.type === 'COMPONENT_SET' ? comp.parent as ComponentSetNode : undefined;
     if (!set) return undefined;
     const base = await extractVariantProps(master);
-    for (const child of set.children as SceneNode[]) {
-      if (child.type !== 'COMPONENT') continue;
-      const variants = await extractVariantProps(child);
+    for (const { child, variants } of await setVariantEntries(set)) {
       if (variants?.state === state && compatibleVariant(base, variants)) return child;
     }
     return undefined;
@@ -1689,9 +1719,7 @@ export async function exportDesign(
       const dims = pngSize(bytes);
       let file = hashToFile.get(hash);
       if (!file) {
-        file = generateFileName(root.name, node.name, scaleNum);
-        let n = 1;
-        while (assets.some((a) => a.name === file)) file = file.replace('.png', `_${n++}.png`);
+        file = uniqueAssetName(generateFileName(root.name, node.name, scaleNum));
         hashToFile.set(hash, file);
         assets.push({ name: file, data: bytes });
         assetEntries.push({ file, nodeId: node.id, scale: scaleNum });
@@ -3016,9 +3044,26 @@ function decomposeFlip(node: SceneNode): { rotation: number; flipX: boolean; fli
   if (!rt || !rt[0] || !rt[1]) return { rotation: fallbackRot, flipX: false, flipY: false };
   const a = rt[0][0], b = rt[0][1], c = rt[1][0], d = rt[1][1];
   if (a * d - b * c >= 0) return { rotation: fallbackRot, flipX: false, flipY: false };
-  // Reflection. Two single-axis factorings exist; pick the one with the SMALLER
-  // residual rotation, so a pure horizontal flip → flipX/0° and a pure vertical
-  // flip → flipY/0° (instead of the other axis + 180°):
+  // The angle recovery below assumes M is a (uniformly scaled) rotation·reflection:
+  // the atan2 ratios are only meaningful when the two columns are orthogonal and
+  // equal-length. A non-uniform scale or shear breaks that assumption, so detect it
+  // and fall back to node.rotation rather than emitting a bogus angle. (The flip
+  // flags still come from the determinant sign, which is robust to scale/shear.)
+  const col0 = Math.hypot(a, c), col1 = Math.hypot(b, d);
+  const dot = a * b + c * d;                      // 0 ⇒ orthogonal columns (no shear)
+  const orthoTol = 1e-3 * Math.max(col0 * col1, 1e-6);
+  const scaleTol = 1e-2 * Math.max(col0, col1, 1e-6);
+  if (col0 < 1e-6 || col1 < 1e-6 || Math.abs(dot) > orthoTol || Math.abs(col0 - col1) > scaleTol) {
+    // Sheared / non-uniformly-scaled reflection: the clean R·diag factoring doesn't
+    // apply. Keep node.rotation and mirror horizontally (Figma's default flip);
+    // exact recovery would need a full polar/QR decomposition we don't attempt here.
+    return { rotation: fallbackRot, flipX: true, flipY: false };
+  }
+  // Reflection with orthogonal, equal-length columns (a uniformly scaled
+  // rotation·reflection). The atan2 ratios below are scale-invariant — a positive
+  // uniform scale cancels — so they recover the true angle. Pick the single-axis
+  // factoring with the SMALLER residual rotation, so a pure horizontal flip →
+  // flipX/0° and a pure vertical flip → flipY/0° (instead of the other axis + 180°):
   //   M = R(θ)·diag(-1,1) ⇒ θ = atan2(b, -a)   [flip X — origin is the RIGHT edge]
   //   M = R(θ)·diag(1,-1) ⇒ θ = atan2(b,  a)   [flip Y — origin is the BOTTOM edge]
   const thetaX = (Math.atan2(b, -a) * 180) / Math.PI;

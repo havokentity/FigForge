@@ -123,8 +123,14 @@ function parsePath(data: string): number[][] | null {
   let cx = 0;
   let cy = 0;
   const num = (): number => parseFloat(tok[i++]);
+  let bad = false; // tripped if any parsed coord is non-finite → PNG fallback
   const flush = (): void => {
-    if (cur.length >= 6) out.push(cur);
+    if (cur.length >= 6) {
+      for (let k = 0; k < cur.length; k++) {
+        if (!Number.isFinite(cur[k])) { bad = true; break; }
+      }
+      out.push(cur);
+    }
     cur = [];
   };
 
@@ -184,6 +190,9 @@ function parsePath(data: string): number[][] | null {
     }
   }
   flush();
+  // Any non-finite coordinate (NaN/Infinity from a malformed token) would
+  // poison earcut downstream — bail to the PNG fallback instead.
+  if (bad) return null;
   return out;
 }
 
@@ -243,8 +252,13 @@ function triangulate(contours: number[][], windingRule: string): { verts: number
   const rule = (windingRule || '').toUpperCase();
   if (rings.length > 1 && rule !== 'EVENODD') return null;
 
-  const repX = rings.map((r) => r[0]);
-  const repY = rings.map((r) => r[1]);
+  // Representative point per ring for containment tests. Using vertex[0] is
+  // degenerate — it lies ON the ring, so an exactly-shared vertex with another
+  // ring makes pointInRing's parity test unreliable. The centroid of the ring's
+  // first triangle is an interior-ish point that generically misses every
+  // vertex/edge of the other rings. Rings here always have >= 3 points.
+  const repX = rings.map((r) => (r[0] + r[2] + r[4]) / 3);
+  const repY = rings.map((r) => (r[1] + r[3] + r[5]) / 3);
 
   const depth: number[] = rings.map((_, i) => {
     let d = 0;
@@ -333,7 +347,13 @@ function withAA(coreVerts: number[], coreTris: number[], color: RGBA): VectorMes
   const tris = coreTris.slice();
   const alpha: number[] = new Array(coreVerts.length / 2).fill(1);
 
-  const key = (a: number, b: number): number => a * 0x100000 + b;
+  // Pack a directed edge (a,b) into one number. The radix must exceed the max
+  // vertex index, or two distinct edges collide. Core verts are bounded by the
+  // MAX_TOTAL_VERTS cap enforced before withAA runs, so MAX_TOTAL_VERTS+1 is a
+  // safe radix (max key ~5.8e8, well under MAX_SAFE_INTEGER). The old 0x100000
+  // (2^20) radix silently collided once a mesh exceeded ~1M verts.
+  const RADIX = MAX_TOTAL_VERTS + 1;
+  const key = (a: number, b: number): number => a * RADIX + b;
   const hasTwin = new Set<number>();
   for (let t = 0; t < coreTris.length; t += 3) {
     hasTwin.add(key(coreTris[t], coreTris[t + 1]));
