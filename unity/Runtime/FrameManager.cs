@@ -133,14 +133,24 @@ namespace FigForge
             => ShowInternal(Find(frameName), frameName, true, 0, via);
 
         // Show a registered frame directly (reference equality, no name lookup).
-        public bool Show(FigForgeFrame frame)
-            => ShowInternal(frame != null && screens.Contains(frame) ? frame : null,
-                            frame != null ? frame.ScreenKey : "<none>", true, 0, null);
+        public bool Show(FigForgeFrame frame) => ShowFrame(frame, true);
 
         // Show without consulting navigation guards (initial screen / engine-internal).
-        internal bool ShowUnguarded(FigForgeFrame frame)
-            => ShowInternal(frame != null && screens.Contains(frame) ? frame : null,
-                            frame != null ? frame.ScreenKey : "<none>", false, 0, null);
+        internal bool ShowUnguarded(FigForgeFrame frame) => ShowFrame(frame, false);
+
+        // Common path for the reference overloads. A non-null frame that isn't registered
+        // gets a specific diagnostic (rather than the generic "no screen named" message
+        // ShowInternal logs for a null target) — but is NOT auto-registered, to keep the
+        // warning a clear signal that the caller wired up the frame wrong.
+        bool ShowFrame(FigForgeFrame frame, bool runGuards)
+        {
+            if (frame != null && !screens.Contains(frame))
+            {
+                Debug.LogWarning($"[FigForge] FrameManager: frame '{frame.ScreenKey}' is not registered with this manager.");
+                return false;
+            }
+            return ShowInternal(frame, frame != null ? frame.ScreenKey : "<none>", runGuards, 0, null);
+        }
 
         const int MaxRedirectDepth = 8;
 

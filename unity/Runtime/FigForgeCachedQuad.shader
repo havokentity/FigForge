@@ -81,7 +81,10 @@ Shader "FigForge/CachedQuad"
                 // Premultiplied output: scale the WHOLE colour by the mask factor.
                 c *= UnityGet2DClipping(i.worldPosition.xy, _ClipRect);
                 #endif
-                clip(c.a - 0.001);
+                // Additive blends (Screen/PlusLighter) can carry near-zero alpha but
+                // non-zero RGB; clipping on alpha alone would drop their contribution.
+                // Clip on the max channel so additive light still composites.
+                clip(max(c.a, max(c.r, max(c.g, c.b))) - 0.001);
                 return c;
             }
             ENDCG

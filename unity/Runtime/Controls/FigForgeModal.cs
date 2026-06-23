@@ -110,7 +110,9 @@ namespace FigForge
         readonly System.Collections.Generic.List<ModalData> _contentStack =
             new System.Collections.Generic.List<ModalData>();
 
-        public bool IsOpen => gameObject.activeSelf;
+        // Matches the modal stack's liveness test (activeInHierarchy): a modal under an
+        // inactive parent isn't reachable/visible, so it must not report as open.
+        public bool IsOpen => gameObject.activeInHierarchy;
 
         // ---- modal stack (LIFO) ------------------------------------------------------
         // Opening pushes; closing pops. The top modal is the interactive one (its backdrop
@@ -246,7 +248,12 @@ namespace FigForge
             if (!gameObject.activeSelf) gameObject.SetActive(true);
             _stack.Remove(this);            // de-dup if re-opened
             _stack.Add(this);               // push: now the top
-            transform.SetAsLastSibling();   // render above earlier modals in the same parent
+            // Render above earlier modals — but only within THIS modal's own parent. Sibling
+            // order doesn't reorder across different parents/Canvases; correct cross-parent
+            // stacking would need per-modal sorting (e.g. an overlay Canvas with sortingOrder,
+            // like the toast host). The importer keeps stacked modals under one parent, so the
+            // single-parent assumption holds for generated output.
+            transform.SetAsLastSibling();
             onOpened.Invoke();
         }
 

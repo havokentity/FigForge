@@ -5,6 +5,7 @@
 using System.Globalization;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 
 namespace FigForge
@@ -13,6 +14,8 @@ namespace FigForge
     [DisallowMultipleComponent]
     public class FigForgeStepper : MonoBehaviour
     {
+        [System.Serializable] public class StepperEvent : UnityEvent<float> { }
+
         public TMP_InputField input;
         public Button minusButton;
         public Button plusButton;
@@ -22,6 +25,9 @@ namespace FigForge
         public float step = 1f;
 
         [SerializeField] float m_Value;
+
+        [Tooltip("Invoked with the new value whenever it changes (buttons, typed input, or Value setter).")]
+        public StepperEvent onValueChanged = new StepperEvent();
 
         public float Value
         {
@@ -83,10 +89,7 @@ namespace FigForge
             bool changed = !Mathf.Approximately(m_Value, clamped);
             m_Value = clamped;
             RefreshText();
-            if (changed && sendCallback)
-            {
-                // Reserved for future event surface; input text already reflects value.
-            }
+            if (changed && sendCallback) onValueChanged.Invoke(m_Value);
         }
 
         void RefreshText()

@@ -119,6 +119,17 @@ namespace FigForge
             MarkPageCompositorDirty();
         }
 
+        void OnDestroy()
+        {
+            // OnDisable normally tears down the present quad + surface, but Unity does
+            // not guarantee OnDisable before OnDestroy in every teardown path (e.g.
+            // destroying an inactive GameObject), which would orphan the hidden
+            // __FigForgeTextBlend child. Mirror FigForgeLayeredRect.OnDestroy and clean
+            // up here too — both calls are guarded no-ops when already released.
+            DestroyPresent();
+            ReleaseSurface();
+        }
+
         void OnRectTransformDimensionsChange()
         {
             _cachedScaleFactor = -1f; // rect size feeds the surface scale — re-evaluate it

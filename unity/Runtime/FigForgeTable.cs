@@ -49,7 +49,9 @@ namespace FigForge
             set => gameObject.SetActive(value);
         }
 
-        // Set the rows from cell text grids (n rows × m cells; short rows pad blank).
+        // Set the rows from cell text grids (n rows × m cells). Stored rows keep their
+        // input width as-is; rendering normalizes each row to `columns` — short rows pad
+        // blank and extra cells beyond `columns` are not rendered.
         public void SetRows(IList<IList<string>> rows)
         {
             _rows.Clear();
@@ -187,7 +189,11 @@ namespace FigForge
             var le = row.GetComponent<LayoutElement>() ?? row.AddComponent<LayoutElement>();
             le.minHeight = rowHeight; le.preferredHeight = rowHeight;
 
-            for (int c = 0; c < Mathf.Max(columns, cells != null ? cells.Count : 0); c++)
+            // Normalize to `columns`, matching the styled fallback: short rows pad blank,
+            // extra cells beyond the column count are dropped (the template only has
+            // Cell1..CellColumns slots anyway). Mirrors the SetRows doc contract.
+            int cols = Mathf.Max(1, columns);
+            for (int c = 0; c < cols; c++)
             {
                 var cellT = FindByName(row.transform, "Cell" + (c + 1));
                 if (cellT == null) continue;

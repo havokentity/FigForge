@@ -245,6 +245,12 @@ namespace FigForge
         // so it defaults false on load/instantiate → the first access normalizes.
         bool _listsNormalized;
         FigForgePageCompositor _pageCompositor;
+#if UNITY_EDITOR
+        // OnValidate fires repeatedly during a drag-edit; each call used to queue a
+        // fresh delayCall closure, stacking N registration passes per dirty burst.
+        // Gate on this flag so only one is pending at a time; cleared when it runs.
+        bool _pendingValidateRegistration;
+#endif
 
         public IReadOnlyList<FigForgeFill> Fills => fills;
         public IReadOnlyList<FigForgeStrokeLayer> Strokes => strokes;
@@ -1507,12 +1513,17 @@ namespace FigForge
             // which Unity disallows inside OnValidate ("SendMessage cannot be called during
             // OnValidate") — defer it to the next editor tick, guarding against the
             // component being destroyed or disabled in between.
-            UnityEditor.EditorApplication.delayCall += () =>
+            if (!_pendingValidateRegistration)
             {
-                if (this == null || !isActiveAndEnabled) return;
-                UpdatePageCompositorRegistration();
-                MarkPageCompositorDirty();
-            };
+                _pendingValidateRegistration = true;
+                UnityEditor.EditorApplication.delayCall += () =>
+                {
+                    _pendingValidateRegistration = false;
+                    if (this == null || !isActiveAndEnabled) return;
+                    UpdatePageCompositorRegistration();
+                    MarkPageCompositorDirty();
+                };
+            }
             MarkPageCompositorDirty();
             base.OnValidate();
             SetVerticesDirty();

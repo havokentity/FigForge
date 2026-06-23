@@ -752,6 +752,12 @@ namespace FigForge
                 {
                     var graphic = _canvasGraphics[i];
                     if (graphic == null) continue;
+                    // Skip the compositor's OWN present graphics: a registered source's
+                    // mainTexture is the blended RT we (re)write every rebuild, so folding
+                    // it in makes the hash chase its own output — a self-dirty loop that
+                    // recomposites the page every frame, O(graphics)/frame. Foreign content
+                    // (TMP text, plain Images) is what this hash is meant to watch.
+                    if (IsOwnPresentGraphic(graphic)) continue;
                     var t = graphic.transform;
                     hash = hash * 31 + graphic.GetInstanceID();
                     // Sibling index + parent identity catch reorders/reparents.
@@ -773,6 +779,24 @@ namespace FigForge
                 }
                 return hash;
             }
+        }
+
+        // True when this graphic is one of our registered compositor sources' present
+        // graphics — the quad that draws a layer's blended RT. Such graphics are owned
+        // and rewritten by the compositor, so they must not feed the foreign hash. A
+        // source presents on its own GameObject, so a transform match identifies it.
+        // _advancedLayers is small (registered Tier-2/blur layers only), so the scan is
+        // cheap relative to the per-graphic foreign-hash work it guards.
+        bool IsOwnPresentGraphic(Graphic graphic)
+        {
+            var t = graphic.transform;
+            for (int i = 0; i < _advancedLayers.Count; i++)
+            {
+                var layer = _advancedLayers[i];
+                if (layer != null && (layer as Object) != null && layer.transform == t)
+                    return true;
+            }
+            return false;
         }
 
         // Text-content edits keep rect, position, color, and texture instance all

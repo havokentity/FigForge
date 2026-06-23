@@ -50,6 +50,16 @@ namespace FigForge
             if (!_dragging && !_allowElastic) ClampToRange();
         }
 
+        protected override void OnDisable()
+        {
+            // Drop any in-flight drag/elastic grace so the control doesn't resume mid-bounce
+            // when re-enabled (e.g. a frame hidden then shown again): a stale _allowElastic
+            // would skip the wheel-overshoot clamp until the next drag.
+            _dragging = false;
+            _allowElastic = false;
+            base.OnDisable();
+        }
+
         protected override void LateUpdate()
         {
             base.LateUpdate();

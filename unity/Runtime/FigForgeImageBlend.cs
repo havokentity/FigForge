@@ -122,6 +122,13 @@ namespace FigForge
 
         void OnDestroy()
         {
+            // OnDisable normally tears down the present quad + surface, but Unity does
+            // not guarantee OnDisable before OnDestroy in every teardown path (e.g.
+            // destroying an inactive GameObject), which would orphan the hidden
+            // __FigForgeImageBlend child. Mirror FigForgeLayeredRect.OnDestroy and clean
+            // up here too — both calls are guarded no-ops when already released.
+            DestroyPresent();
+            ReleaseSurface();
             if (_bakeMaterial != null)
             {
                 if (Application.isPlaying) Destroy(_bakeMaterial);
