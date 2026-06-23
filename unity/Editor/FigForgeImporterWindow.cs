@@ -120,6 +120,16 @@ namespace FigForge
             RefreshFonts();
         }
 
+        // Destroy the GUIStyle backing textures WindowStyles created. _styles is rebuilt
+        // by EnsureStyles after each domain reload, so without this the prior instance's
+        // HideAndDontSave textures leak as orphaned native objects. Null it so a later
+        // OnGUI rebuilds fresh styles rather than touching disposed textures.
+        void OnDisable()
+        {
+            _styles?.Dispose();
+            _styles = null;
+        }
+
         void RefreshManifests()
         {
             _manifestPaths = Directory
@@ -457,6 +467,23 @@ namespace FigForge
             if (string.IsNullOrEmpty(zip)) return;
 
             var dest = $"Assets/FigForge/Imports/{SafeName(Path.GetFileNameWithoutExtension(zip))}";
+
+            // A prior import into the same folder is merged into, not replaced — same-named
+            // files are overwritten but stale assets from the old import linger silently.
+            // If the destination already holds an import, confirm before clearing it so the
+            // result is exactly the zip's contents. Fresh/empty folder → no prompt.
+            if (AssetDatabase.IsValidFolder(dest) &&
+                Directory.EnumerateFileSystemEntries(
+                    Path.Combine(Directory.GetParent(Application.dataPath).FullName,
+                        dest.Replace('/', Path.DirectorySeparatorChar))).Any())
+            {
+                if (!EditorUtility.DisplayDialog("Replace existing import?",
+                    $"Folder \"{dest}\" already has an import — replace its contents?\n\nStale files from the previous import will be removed so the result matches this zip.",
+                    "Replace", "Cancel"))
+                    return;
+                AssetDatabase.DeleteAsset(dest);
+            }
+
             var manifestPath = ZipImporter.ExtractToAssets(zip, dest);
             if (string.IsNullOrEmpty(manifestPath)) return;
 
@@ -1892,6 +1919,23 @@ namespace FigForge
 
         sealed class WindowStyles
         {
+            // Every Texture2D MakeTexture/MakeButtonTexture/MakeForgeButtonTexture builds is
+            // collected here so Dispose() can DestroyImmediate them. They use
+            // HideFlags.HideAndDontSave (never serialized), so without an explicit destroy they
+            // leak as orphaned native textures each time _styles is rebuilt (e.g. domain reload).
+            readonly List<Texture2D> _textures = new List<Texture2D>();
+            // Instance field initializers below can't call instance methods (CS0236), so the
+            // static Make* helpers stash each created texture here; the constructor (which runs
+            // after all field initializers) takes ownership into _textures so Dispose() can
+            // destroy them. The editor is single-threaded, so this scratch list is safe.
+            static readonly List<Texture2D> s_pending = new List<Texture2D>();
+
+            public WindowStyles()
+            {
+                _textures.AddRange(s_pending);
+                s_pending.Clear();
+            }
+
             public readonly GUIStyle hero = new GUIStyle
             {
                 padding = new RectOffset(16, 16, 14, 12),
@@ -2059,6 +2103,7 @@ namespace FigForge
                 };
                 texture.SetPixel(0, 0, color);
                 texture.Apply();
+                s_pending.Add(texture);
                 return texture;
             }
 
@@ -2095,6 +2140,7 @@ namespace FigForge
                 }
 
                 texture.Apply();
+                s_pending.Add(texture);
                 return texture;
             }
 
@@ -2140,6 +2186,7 @@ namespace FigForge
                 }
 
                 texture.Apply();
+                s_pending.Add(texture);
                 return texture;
             }
 
@@ -2150,6 +2197,16 @@ namespace FigForge
                 float ax = Mathf.Max(px, 0f);
                 float ay = Mathf.Max(py, 0f);
                 return Mathf.Sqrt(ax * ax + ay * ay) + Mathf.Min(Mathf.Max(px, py), 0f) - radius;
+            }
+
+            // Destroy the native textures this instance created. Only our own
+            // HideAndDontSave textures are tracked here, so this never touches shared
+            // or asset textures. Guarded + cleared so a double-call is a no-op.
+            public void Dispose()
+            {
+                foreach (var t in _textures)
+                    if (t != null) DestroyImmediate(t);
+                _textures.Clear();
             }
         }
     }
