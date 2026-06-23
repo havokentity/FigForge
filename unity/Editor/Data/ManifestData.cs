@@ -166,8 +166,8 @@ namespace FigForge
         public float[] borderColor;
         public float borderWidth;
         public string borderAlign;        // inside|outside|center (null = inside)
-        public ShadowData shadow;         // first drop shadow on the regular layer
-        public List<ShadowData> shadows;  // all visible drop shadows
+        public ShadowData shadow;         // first drop shadow on the regular layer — legacy: read for older manifests; not emitted by the 2.0 exporter
+        public List<ShadowData> shadows;  // all visible drop shadows — legacy: read for older manifests; not emitted by the 2.0 exporter
         public List<ShadowData> effects;  // all visible Figma effects
     }
     public class CanonicalStateColors { public float[] normal; public float[] highlighted; public float[] pressed; }

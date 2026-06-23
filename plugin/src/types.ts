@@ -191,6 +191,9 @@ export interface ButtonShape {
   borderWidth?: number;
   borderAlign?: StrokeAlign; // inside|outside|center (default inside)
   effects?: Shadow[];
+  // legacy: read by the Unity importer for older manifests; NEVER emitted by the current (2.0) exporter
+  shadow?: Shadow; // first drop shadow on the regular layer
+  shadows?: Shadow[]; // all visible drop shadows
 }
 
 export interface CanonicalStateShapes {
