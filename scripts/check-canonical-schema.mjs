@@ -171,4 +171,46 @@ if (onlyTs.length || onlyCs.length) {
   console.log(`✓ Manifest top-level fields in parity (${tsFields.size}): ${[...tsFields].join(', ')}`);
 }
 
+// ---------------------------------------------------------------------------
+// (4) CanonicalKind coverage — every value in the TS `CanonicalKind` union MUST
+// be parseable by the C# importer. The importer accepts a kind only if
+// CanonicalLibrary.TryParseKind has a matching (lowercased) `case "…":` label
+// (this covers both the enum names and aliases like "dialog"/"notification").
+// So the set of TryParseKind labels MUST be a SUPERSET of the TS union — adding
+// a TS kind without wiring TryParseKind would make those instances silently
+// fail to resolve their prefab, and this gate catches it.
+// Best-effort & intentionally loose: it only checks that each TS literal has a
+// C# case; it does NOT require the two sides to match exactly (C# may accept
+// extra aliases the TS union doesn't list).
+// ---------------------------------------------------------------------------
+const canonicalLibraryCs = read('unity/Runtime/CanonicalLibrary.cs');
+
+// TS: `export type CanonicalKind = 'a' | 'b' | …;` → the quoted literals.
+const tsUnionDecl = matchOrExit(
+  typesTs,
+  /export type CanonicalKind\s*=\s*([^;]+);/,
+  'CanonicalKind union',
+  'plugin/src/types.ts',
+)[1];
+const tsKinds = [...tsUnionDecl.matchAll(/'([^']+)'/g)].map((m) => m[1].toLowerCase());
+
+// C#: every `case "label":` in the file (TryParseKind is the only switch with
+// string cases here). Lowercased to mirror TryParseKind's ToLowerInvariant().
+const csKindCases = new Set(
+  [...canonicalLibraryCs.matchAll(/case\s+"([^"]+)"\s*:/g)].map((m) => m[1].toLowerCase()),
+);
+
+const missingKinds = tsKinds.filter((k) => !csKindCases.has(k));
+if (missingKinds.length) {
+  fail(
+    `✗ CanonicalKind coverage gap: the TS union (plugin/src/types.ts) lists kind(s) ` +
+      `[${missingKinds.map((k) => `'${k}'`).join(', ')}] that CanonicalLibrary.TryParseKind ` +
+      `(unity/Runtime/CanonicalLibrary.cs) does NOT accept — those instances would fail to ` +
+      `resolve their prefab.\n` +
+      `  Add a matching 'case "…":' to TryParseKind (it lowercases input, so use the lowercase form).`,
+  );
+} else {
+  console.log(`✓ CanonicalKind coverage: all ${tsKinds.length} TS kinds parseable by TryParseKind`);
+}
+
 process.exit(failed ? 1 : 0);

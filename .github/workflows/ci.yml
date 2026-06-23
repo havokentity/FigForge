@@ -17,6 +17,13 @@ jobs:
           # files directly via `node --test test/*.test.ts` (native TypeScript
           # type stripping landed in Node 22.6).
           node-version: 22
+          # Cache the npm download cache, keyed off both lockfiles, so the
+          # per-package `npm ci` steps below restore from cache instead of
+          # re-downloading every dependency on each run.
+          cache: 'npm'
+          cache-dependency-path: |
+            plugin/package-lock.json
+            server/package-lock.json
 
       - name: Contract — schema + manifest version + field parity in lockstep
         # Guards three plugin<->importer contract points: the canonical-schema

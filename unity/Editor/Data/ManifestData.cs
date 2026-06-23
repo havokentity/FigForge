@@ -31,6 +31,11 @@ namespace FigForge
 
     public class ManifestSettings
     {
+        // Required in the TS contract (plugin/src/types.ts emits 0.15 by default);
+        // mirrored here as the canonical default so an older/partial manifest that
+        // omits it still gets the same value. The sole read site
+        // (FigForgeImporterWindow.ApplyManifestSettings) additionally null-guards
+        // Manifest.settings, so a null settings block can't NPE.
         public float fontFaceDilate = 0.15f;
     }
 
@@ -221,6 +226,10 @@ namespace FigForge
         public string primaryLabel;      // modal primary action label (legacy / fallback)
         public string secondaryLabel;    // modal secondary action label (legacy / fallback)
         public List<ModalActionData> actions; // modal action buttons in design order (left→right), up to 3
+        // NOTE: severity/position (and progressStyle below) are TS string-union types
+        // (plugin/src/types.ts) but are intentionally kept as open strings on the C#
+        // side — the importer switches on known values and falls back gracefully, so
+        // it must not reject an unrecognized value a newer plugin might emit.
         public string severity;          // toast: info | success | warning | error
         public string position;          // toast host position
         public float? duration;          // toast auto-dismiss seconds

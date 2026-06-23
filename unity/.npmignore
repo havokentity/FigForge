@@ -1,0 +1,6 @@
+# Keep EditMode tests out of the published UPM tarball (`npm pack`). The Tests
+# folder + its asmdef are dev-only; shipping them would compile test code (and
+# pull a test-framework dependency) into consumers' projects. The directory is
+# deliberately NOT renamed so the in-repo test asmdef keeps resolving.
+Tests
+Tests.meta
