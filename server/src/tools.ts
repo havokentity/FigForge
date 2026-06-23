@@ -206,9 +206,13 @@ export async function executeExportProjectUnity(
     const screen = screens[i];
     if (!screen?.manifest) continue;
     const base = safeFolderName(screen.name || screen.manifest.screen?.name, `screen_${i + 1}`);
+    // Dedup with a "__N" suffix. safeFolderName collapses runs of underscores,
+    // so a double underscore can never appear in `base` itself — that keeps the
+    // suffix unambiguous, so a base that already ends in "_2" can't alias the
+    // dedup of a plain "base" + 2 onto the same folder name.
     let folder = base;
     let n = 1;
-    while (used.has(folder)) folder = `${base}_${n++}`;
+    while (used.has(folder)) folder = `${base}__${n++}`;
     used.add(folder);
 
     const screenDir = path.join(resolvedDir, folder);
