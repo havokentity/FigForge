@@ -28,6 +28,15 @@ const WINDOW_PRESETS: Record<string, { w: number; h: number }> = {
 
 figma.showUI(__html__, { width: WINDOW_PRESETS.M.w, height: WINDOW_PRESETS.M.h, themeColors: true });
 
+// Under manifest "documentAccess": "dynamic-page", reading a non-current page's
+// .children / findAll throws unless its pages are loaded first. Cross-page
+// traversal (findMaster, parkMaster, listFrameRecords, upgradeAllListMasters,
+// the COMPONENTS_PAGE fallbacks) all run downstream of a UI message or MCP
+// request, so we load every page once at startup and gate the message handler
+// on that promise. (Loading does NOT make figma.getNodeById legal — those call
+// sites use getNodeByIdAsync.)
+const pagesLoaded: Promise<void> = figma.loadAllPagesAsync();
+
 // Per-session UI state we need to remember between messages.
 const excluded = new Set<string>();
 const merged = new Set<string>();
@@ -85,6 +94,9 @@ function clampDimension(value: unknown, min: number, max: number, fallback: numb
 // UI → main
 // ---------------------------------------------------------------------------
 figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
+  // All cross-page traversal runs from here (directly or via handleMcp), so wait
+  // for every page to be loaded before handling any message (see startup note).
+  await pagesLoaded;
   switch (msg.type) {
     case 'reload':
       await pushSelection();
@@ -129,7 +141,7 @@ figma.ui.onmessage = async (msg: { type: string; [k: string]: unknown }) => {
     }
 
     case 'highlight-element': {
-      const node = figma.getNodeById(msg.nodeId as string) as SceneNode | null;
+      const node = await figma.getNodeByIdAsync(msg.nodeId as string) as SceneNode | null;
       if (node) {
         figma.currentPage.selection = [node];
         figma.viewport.scrollAndZoomIntoView([node]);
@@ -373,7 +385,7 @@ function exportSetsWithConfigs(configs: ElementConfig[] | undefined) {
 }
 
 async function sendPreview(nodeId: string) {
-  const node = figma.getNodeById(nodeId) as SceneNode | null;
+  const node = await figma.getNodeByIdAsync(nodeId) as SceneNode | null;
   if (!node || !('exportAsync' in node)) return;
   try {
     const bytes = await (node as unknown as {
@@ -802,7 +814,7 @@ async function handleMcp(req: McpRequest) {
         break;
       case 'get_node': {
         const id = (req.params?.nodeId as string) || req.nodeIds?.[0];
-        const node = id ? figma.getNodeById(id) : null;
+        const node = id ? await figma.getNodeByIdAsync(id) : null;
         response.data = node ? await summarize(node, 3) : null;
         if (!node) response.error = `Node not found: ${id}`;
         break;
@@ -821,7 +833,7 @@ async function handleMcp(req: McpRequest) {
       }
       case 'get_node_details': {
         const id = (req.params?.nodeId as string) || req.nodeIds?.[0];
-        const node = id ? figma.getNodeById(id) : null;
+        const node = id ? await figma.getNodeByIdAsync(id) : null;
         response.data = node ? await nodeDetails(node) : null;
         if (!node) response.error = `Node not found: ${id}`;
         break;
@@ -840,7 +852,7 @@ async function handleMcp(req: McpRequest) {
         // accepts both forms during the transition.
         const shots: { nodeId: string; data: string }[] = [];
         for (const id of ids) {
-          const node = figma.getNodeById(id) as SceneNode | null;
+          const node = await figma.getNodeByIdAsync(id) as SceneNode | null;
           if (node && 'exportAsync' in node) {
             const bytes = await (node as unknown as {
               exportAsync: (s: ExportSettings) => Promise<Uint8Array>;
@@ -869,7 +881,7 @@ async function handleMcp(req: McpRequest) {
           const exportSets = exportSetsWithConfigs(req.params?.elementConfigs as ElementConfig[] | undefined);
           const exports: unknown[] = [];
           for (const id of ids) {
-            const node = figma.getNodeById(id) as SceneNode | null;
+            const node = await figma.getNodeByIdAsync(id) as SceneNode | null;
             if (node && 'exportAsync' in node) {
               const result = await exportDesign(
                 node,
