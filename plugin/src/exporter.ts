@@ -394,28 +394,24 @@ function pngSize(bytes: Uint8Array): { w: number; h: number } {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return { w: dv.getUint32(16), h: dv.getUint32(20) };
 }
-function fnv1a(bytes: Uint8Array): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < bytes.length; i++) {
-    h ^= bytes[i];
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-  }
-  return h.toString(16);
-}
-
-// Content key for the PNG dedup map. FNV-1a alone is only 32 bits — two
-// different sprites can collide (≈50% odds by ~77k assets, but any single
-// collision silently substitutes the WRONG sprite with no error anywhere).
-// Folding in the byte length plus two cheap probe bytes (middle + last; the
-// first PNG byte is the constant 0x89, so it discriminates nothing) makes an
-// undetected collision require equal hash AND length AND probes — while true
-// duplicates still dedup byte-identically, and the wire format is untouched
-// (this key only ever lives in the in-memory hashToFile map).
+// Content key for the PNG dedup map. A single 32-bit FNV-1a collides at ~50%
+// odds by ~77k assets, and ANY collision silently substitutes the WRONG sprite
+// with no error anywhere. So hash the FULL byte stream with two independent
+// 32-bit lanes (FNV-1a + a distinct multiply-rotate) for a combined 64-bit key,
+// plus the byte length: an undetected collision now needs BOTH 32-bit hashes
+// AND the length to match (~2^-64). True duplicates still produce an identical
+// key and dedup byte-for-byte; the wire format is untouched (this key only ever
+// lives in the in-memory hashToFile map).
 function dedupKey(bytes: Uint8Array): string {
-  const len = bytes.length;
-  const mid = len ? bytes[len >> 1] : 0;
-  const last = len ? bytes[len - 1] : 0;
-  return `${fnv1a(bytes)}-${len.toString(16)}-${mid.toString(16)}-${last.toString(16)}`;
+  let h1 = 0x811c9dc5; // FNV-1a
+  let h2 = (0x01000193 ^ 0x9e3779b9) >>> 0; // distinct seed for the second lane
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    h1 = Math.imul(h1 ^ b, 0x01000193) >>> 0; // FNV-1a prime
+    h2 = Math.imul((h2 ^ b) >>> 0, 0x85ebca77) >>> 0; // distinct prime
+    h2 = ((h2 << 13) | (h2 >>> 19)) >>> 0; // rotl to decorrelate the lanes
+  }
+  return `${h1.toString(16)}-${h2.toString(16)}-${bytes.length.toString(16)}`;
 }
 
 function exportConstraint(scale: ExportScale): ExportSettingsImage['constraint'] {
@@ -1727,7 +1723,9 @@ export async function exportDesign(
       const rasterLeaf = exportable && bakesWholeSubtree(node);
       const children: SceneNode[] = !isCanon && !rasterLeaf && 'children' in node
         ? ((node as ChildrenMixin).children.slice() as SceneNode[]).filter(
-            (c) => (c as unknown as { visible?: boolean }).visible !== false)
+            (c) =>
+              (c as unknown as { visible?: boolean }).visible !== false &&
+              !excludedIds.has(c.id))
         : [];
       subs.push({ node, parentId, exportable, children });
       for (const c of children) await walk(c, node.id);
