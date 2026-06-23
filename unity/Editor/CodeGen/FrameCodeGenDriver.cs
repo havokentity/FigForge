@@ -265,6 +265,9 @@ namespace FigForge
             Directory.CreateDirectory(FramesDir);
             bool changed = false;
             changed |= WriteIfChanged(GenRoot + "/FigForge.Generated.asmdef", FrameCodeGen.EmitAsmdef());
+            // Deterministic .asmdef.meta so the asmdef GUID is source-control-stable across machines
+            // (otherwise Unity mints a random GUID on first import → churn / cross-clone ref drift).
+            changed |= WriteIfChanged(GenRoot + "/FigForge.Generated.asmdef.meta", FrameCodeGen.EmitAsmdefMeta());
 
             // Overlay layers are NOT navigable screens — they don't get a `<Frame> : FigForgeFrame`
             // class or a Frames.X accessor (and a layer named "Dialogs" would collide with the static

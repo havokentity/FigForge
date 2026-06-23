@@ -187,11 +187,11 @@ namespace FigForge
             sb.AppendLine("            if (reg == null) return;");
             foreach (var m in members)
                 if (string.IsNullOrEmpty(m.collectionName))
-                    sb.AppendLine("            " + m.FieldName + " = reg.Get<" + m.csharpType + ">(\"" + m.Key + "\");");
+                    sb.AppendLine("            " + m.FieldName + " = reg.Get<" + m.csharpType + ">(\"" + Escape(m.Key) + "\");");
             foreach (var c in Collections(members))
             {
                 string t = c[0].csharpType;
-                string inits = string.Join(", ", c.ConvertAll(m => "reg.Get<" + t + ">(\"" + m.Key + "\")"));
+                string inits = string.Join(", ", c.ConvertAll(m => "reg.Get<" + t + ">(\"" + Escape(m.Key) + "\")"));
                 sb.AppendLine("            _" + c[0].collectionName + " = new " + t + "[] { " + inits + " };");
             }
             sb.AppendLine("        }");
@@ -267,12 +267,19 @@ namespace FigForge
 
             var sections = new SortedSet<string>(StringComparer.Ordinal);
             foreach (var f in frames) if (!string.IsNullOrEmpty(f.section)) sections.Add(f.section);
+            // Reserve already-emitted safe section names alongside the frame classes: a section
+            // renamed onto another section's identifier (e.g. section "Foo" colliding with a frame
+            // class → "FooSection", while a genuine section "FooSection" also exists) would otherwise
+            // silently merge into an unrelated section's block. Since every section here is visible,
+            // probe against both sets so each distinct section gets a distinct nested class.
+            var reservedNames = new HashSet<string>(frameClasses, StringComparer.Ordinal);
             foreach (var sec in sections)
             {
-                string safe = SafeSectionName(sec, frameClasses, out bool renamed);
+                string safe = SafeSectionName(sec, reservedNames, out bool renamed);
+                reservedNames.Add(safe);
                 if (renamed)
                     UnityEngine.Debug.LogWarning($"[FigForge] section '{sec}' collides with frame class "
-                        + $"'{sec}' → emitted as 'Frames.{safe}'.");
+                        + $"or sibling section → emitted as 'Frames.{safe}'.");
                 sb.AppendLine();
                 sb.AppendLine("        public static partial class " + safe);
                 sb.AppendLine("        {");
@@ -297,6 +304,13 @@ namespace FigForge
         // class, which is a real component type referenced elsewhere). The rename is a pure
         // function of (section, reserved set), so every frame in that section computes the same
         // safe name and they all land in the one partial class.
+        // RESIDUAL: the per-frame path only sees frame class names, not sibling SECTION names (each
+        // frame is emitted into its own file with no cross-section visibility). Two distinct sections
+        // can therefore still resolve to the same safe name (e.g. section "Foo" renamed to "FooSection"
+        // landing on a genuine section "FooSection"). This is benign here — both emit `public static
+        // partial class <name>`, which C# merges, and each frame's accessor lives on its own frame —
+        // so it compiles. The single-file EmitFrameManager (full-import preview) reserves sibling
+        // section names to keep them distinct; the per-frame path cannot without a contract change.
         public static string EmitFrameManagerForFrame(FrameModel f, ISet<string> reservedFrameClassNames = null)
         {
             var sb = new StringBuilder();
@@ -560,6 +574,20 @@ namespace FigForge
                  + "  ],\n"
                  + "  \"autoReferenced\": true\n"
                  + "}\n";
+        }
+
+        // Deterministic .asmdef.meta so the generated asmdef's GUID is source-control-stable
+        // instead of a random per-machine GUID Unity would otherwise mint on first import.
+        // The GUID is a pure function of the asmdef name (same hash used for the .cs metas).
+        public static string EmitAsmdefMeta()
+        {
+            return "fileFormatVersion: 2\n"
+                 + "guid: " + DeterministicGuid("FigForge.Generated.asmdef") + "\n"
+                 + "AssemblyDefinitionImporter:\n"
+                 + "  externalObjects: {}\n"
+                 + "  userData: \n"
+                 + "  assetBundleName: \n"
+                 + "  assetBundleVariant: \n";
         }
 
         // ---- element → C# accessor type ----------------------------------------------

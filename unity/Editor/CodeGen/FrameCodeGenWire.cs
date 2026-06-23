@@ -117,9 +117,18 @@ namespace FigForge
             string typeKey = baseEl.FigmaTypeKey;
             string genType = baseEl.generatedType;
             // FigForgeFrameElement is [DisallowMultipleComponent], so the base must go before the
-            // subclass can be added.
+            // subclass can be added. If the swap fails (AddComponent throws / yields an unexpected
+            // type), re-add the base so the GameObject is never left WITHOUT an element component.
             UnityEngine.Object.DestroyImmediate(baseEl);
-            if (!(go.AddComponent(t) is FigForgeFrameElement comp)) return null;
+            FigForgeFrameElement comp = null;
+            try { comp = go.AddComponent(t) as FigForgeFrameElement; }
+            catch (Exception e) { Debug.LogException(e); }
+            if (comp == null)
+            {
+                var restored = go.AddComponent<FigForgeFrameElement>();
+                if (restored != null) { restored.ConfigureType(typeKey); restored.generatedType = genType; }
+                return null;
+            }
             comp.ConfigureType(typeKey);
             comp.generatedType = genType;
             return comp;
@@ -140,9 +149,32 @@ namespace FigForge
             bool wasInitial = mgr != null && mgr.initialScreen == baseFrame;
 
             // FigForgeFrame is [DisallowMultipleComponent], so the base must go before the
-            // subclass can be added.
+            // subclass can be added. If the swap fails (AddComponent throws / yields an unexpected
+            // type), re-add the base so the page is never left WITHOUT a FigForgeFrame component
+            // (which would orphan it from the manager and break Frames.X navigation).
             UnityEngine.Object.DestroyImmediate(baseFrame);
-            if (!(go.AddComponent(t) is FigForgeFrame comp)) return false;
+            FigForgeFrame comp = null;
+            try { comp = go.AddComponent(t) as FigForgeFrame; }
+            catch (Exception e) { Debug.LogException(e); }
+            if (comp == null)
+            {
+                var restored = go.AddComponent<FigForgeFrame>();
+                if (restored != null)
+                {
+                    restored.isShell = isShell;
+                    restored.usesShell = usesShell;
+                    restored.shellKey = shellKey;
+                    restored.generatedType = genType;
+                    if (mgr != null)
+                    {
+                        if (idx >= 0 && idx < mgr.screens.Count) mgr.screens[idx] = restored;
+                        else if (!mgr.screens.Contains(restored)) mgr.Register(restored);
+                        if (wasInitial) mgr.initialScreen = restored;
+                        EditorUtility.SetDirty(mgr);
+                    }
+                }
+                return false;
+            }
 
             comp.isShell = isShell;
             comp.usesShell = usesShell;
