@@ -89,7 +89,7 @@ importer reads. Change one side, change the other. Everything else is detail.
 | ✎ Vector / icon | rasterized PNG, hash-deduped |
 | 🅣 Text | `TextMeshProUGUI` + per-family/style font mapping |
 | 🔘 `Btn_<name>_<Ref>` / `Inp_<name>_<Ref>` layer | a real **canonical prefab** instance |
-| 🗂 Several frames | one navigable scene — `BaseScreen` pages under a `ScreenManager` |
+| 🗂 Several frames | one navigable scene — `FigForgeScreen` frames under a `FrameManager` |
 | 👻 Empty/placeholder paint, failed export | falls back to the fill colour — **no junk PNG, no white box** |
 
 Plus, in the plugin itself: exclude layers, merge a container to one PNG,
@@ -128,7 +128,7 @@ Follow a single frame through the machine; every capability shows up along the w
 >
 > **5 · Unity rebuilds it.** Anchored hierarchy under a `Canvas`, fonts mapped to
 > `TMP_FontAsset`s, canonical layers swapped for prefab instances, and each frame
-> parented under a `ScreenManager` as one `BaseScreen` — many frames → one
+> shown by a `FrameManager` as one `FigForgeScreen` — many frames → one
 > navigable, multi-page scene.
 
 ---
@@ -181,15 +181,15 @@ From a release instead: unzip `figforge-bridge-<ver>.zip`, then `npm install --o
 
 ```text
 Package Manager ▸ Add package from git URL…
-    https://github.com/havokentity/FigForge.git?path=unity#v1.0.1
+    https://github.com/havokentity/FigForge.git?path=unity#v1.0.57
 Package Manager ▸ Add package from tarball…
     figforge-unity-importer-<ver>.tgz   (from a release)
 Package Manager ▸ Add package from disk…
     unity/package.json
 ```
 
-Pin the git URL to a tag (`#v1.0.1`) so upgrades stay deliberate. Deps — uGUI,
-TextMeshPro, Newtonsoft JSON, 2D Sprite — resolve automatically.
+Pin the git URL to a tag (`#v1.0.57`) so upgrades stay deliberate. Deps — uGUI,
+TextMeshPro, Newtonsoft JSON, 2D Sprite, Input System — resolve automatically.
 </details>
 
 > [!IMPORTANT]
@@ -229,10 +229,14 @@ With the bridge running, an MCP client can drive the whole thing:
 | Tool | Does |
 |:--|:--|
 | `get_metadata` | file name, pages, current page |
-| `get_document` / `get_selection` / `get_node` | read the tree, the selection, or one node |
-| `get_design_context` | a summarized design tree |
-| `get_screenshot` / `save_screenshots` | render node(s) to PNG (returned, or written to disk) |
+| `get_document` / `get_selection` / `get_node` / `get_node_details` | read the tree, the selection, or one node (deep) |
+| `get_design_context` | a layout-aware, summarized design tree |
+| `list_frames` / `list_screens` | enumerate top-level frames / export-eligible screens |
+| `get_screenshot` / `save_screenshots` | render node(s) to PNG (returned base64, or written to disk) |
+| `create_canonical` / `create_shell` | scaffold a canonical control / app-shell frame in the document |
 | **`export_unity`** | run the real exporter and write `manifest.json` + PNGs to a folder |
+| **`export_project_unity`** | export the page as a connected multi-page project bundle |
+| `validate_manifest_contract` | check a manifest/project JSON against the importer contract |
 
 `export_unity` is sandboxed to the workspace root. The plugin's header **MCP
 toggle** dials out to `ws://127.0.0.1:1994/ws` (and auto-reconnects while on);

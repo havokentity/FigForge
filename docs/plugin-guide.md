@@ -48,8 +48,9 @@ deduplicated by content hash.
 
 ## Manifest field reference
 
-Root: `schema`, `version`, `generator`, `exportedAt`, `screen`, `elements[]`,
-`assets[]`, `fonts[]`, `diagnostics`, `canonicalRefs[]`.
+Root: `schema`, `version`, `canonicalSchema`, `generator`, `exportedAt`, `vanilla`,
+`screen`, `elements[]`, `assets[]`, `fonts[]`, `diagnostics`, `settings`,
+`canonicalRefs[]`.
 
 `screen`: `{ id, name, figmaSize{w,h}, referenceResolution{w,h}, exportScale }`.
 

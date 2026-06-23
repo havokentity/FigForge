@@ -44,16 +44,17 @@ WebSocket to the single Figma plugin can exist — so processes elect a **leader
 rest are **followers** proxying over `/rpc`. If the leader dies, a follower's next
 call triggers a takeover.
 
-- `bridge.ts` — request/response correlation over the plugin socket (30s timeout).
+- `bridge.ts` — request/response correlation over the plugin socket (per-tool timeout: 30s for queries, minutes for exports).
 - `leader.ts` / `follower.ts` / `election.ts` — the role machinery.
 - `tools.ts` / `schema.ts` — MCP tool definitions (Zod-validated). `export_unity`
-  and `save_screenshots` validate that output paths stay within the server cwd.
+  and `save_screenshots` validate that output paths stay within the workspace root
+  (`FIGFORGE_WORKSPACE`, defaulting to the launch cwd).
 
 ## Importer (`unity/`)
 
 - **Editor** — `FigForgeImporterWindow` (UI), `ManifestParser`, `TextureImportHelper`,
   `SpriteAtlasHelper`, `HierarchyBuilder`, procedural sprite caches.
-- **Runtime** — `ScreenManager`, `BaseScreen`, `CanonicalLibrary` (so built scenes
+- **Runtime** — `FrameManager`, `FigForgeScreen`, `CanonicalLibrary` (so built scenes
   and prefabs work at runtime without the editor assembly).
 
 ## The contract

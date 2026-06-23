@@ -7,7 +7,7 @@ Imports a FigForge export (`manifest.json` + PNGs) into a Unity uGUI hierarchy.
 - **Package Manager → + → Add package from disk…** and pick this folder's `package.json`, or
 - copy the folder into your project's `Packages/`.
 
-Dependencies (auto-resolved): uGUI, TextMeshPro, Newtonsoft JSON, 2D Sprite.
+Dependencies (auto-resolved): uGUI, TextMeshPro, Newtonsoft JSON, 2D Sprite, Input System.
 
 ## Use
 
