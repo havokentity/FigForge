@@ -290,9 +290,12 @@ namespace FigForge
             // touched at the very end during the swap.
             string buildAbs = tmpAbs;
 
+            // Declared outside the try so it's in scope for the post-swap build call below;
+            // the catch rethrows, so control only reaches that use when index was assigned.
+            ProjIndex index = null;
             try
             {
-            var index = new ProjIndex
+            index = new ProjIndex
             {
                 name = projName,
                 initial = bundle.project != null ? bundle.project.initial : "",
