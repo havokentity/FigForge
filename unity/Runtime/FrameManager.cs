@@ -25,9 +25,6 @@ namespace FigForge
         [Tooltip("Frame shown on Start. None = first registered screen.")]
         public FigForgeFrame initialScreen;
 
-        [Tooltip("Legacy single-shell slot. New imports register shell frames in Screens with Is Shell + Shell Key.")]
-        public GameObject shell;
-
         [Tooltip("Editor-only import layout: number of root screens per row when pages are spread out for authoring.")]
         public int editorColumns = 5;
 
@@ -107,6 +104,11 @@ namespace FigForge
         {
             RegisterSceneGuards();
             if (screens.Count == 0) return;
+            // Persistent frames are end-user-controlled overlays: hidden until the app shows
+            // them, and never auto-hidden by navigation afterward. Hide them once here so they
+            // don't carry the editor's authoring-visible layout into play mode.
+            for (int i = 0; i < screens.Count; i++)
+                if (screens[i] != null && screens[i].persistent) screens[i].SetVisible(false);
             // The initial screen bypasses guards: there's no "from" yet, and blocking the
             // entry point would leave nothing visible.
             ShowUnguarded(initialScreen != null ? initialScreen : screens[0]);
@@ -150,6 +152,29 @@ namespace FigForge
                 return false;
             }
             return ShowInternal(frame, frame != null ? frame.ScreenKey : "<none>", runGuards, 0, null);
+        }
+
+        // Show a PERSISTENT frame as an independent overlay: fill the canvas and become
+        // visible WITHOUT hiding the current screen (and navigation won't auto-hide it —
+        // see the hide loop in ShowInternal). The caller dismisses it with Hide() /
+        // SetVisible(false). No nav guards run — this isn't a route change.
+        internal bool ShowPersistent(FigForgeFrame frame)
+        {
+            BindAll();
+            if (frame == null) return false;
+            if (!screens.Contains(frame))
+            {
+                Debug.LogWarning($"[FigForge] FrameManager: persistent frame '{frame.ScreenKey}' is not registered with this manager.");
+                return false;
+            }
+            FillParent(frame.GetComponent<RectTransform>());
+            // Render above the current screen (sibling order from import is arbitrary). Most-
+            // recently-shown overlay wins; it still sorts below the dialog/toast overlay
+            // canvases, which live on their own higher-sorted canvases.
+            frame.transform.SetAsLastSibling();
+            RefreshCompositors(frame.gameObject);
+            frame.SetVisible(true);
+            return true;
         }
 
         const int MaxRedirectDepth = 8;
@@ -208,7 +233,9 @@ namespace FigForge
             // during the hide loop (or shell SetVisible) below bumps _showGen past ours.
             int gen = ++_showGen;
             foreach (var s in screens)
-                if (s != null && s != target && s != activeShell)
+                // Persistent frames are independent, end-user-controlled overlays — never
+                // auto-hidden by navigation (the user dismisses them via Hide()).
+                if (s != null && s != target && s != activeShell && !s.persistent)
                     s.SetVisible(false);
 
             // The shown route snaps to fill its parent viewport. The design-time
@@ -232,7 +259,6 @@ namespace FigForge
             // first means the inner navigation's result isn't clobbered when we unwind here.
             Current = target;
             target.SetVisible(true);
-            if (shell != null) shell.SetActive(target.usesShell && activeShell == null);
             return true;
         }
 

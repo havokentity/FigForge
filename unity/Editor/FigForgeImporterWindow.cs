@@ -911,8 +911,16 @@ namespace FigForge
                 Log($"reused unchanged '{screen.m.screen.name}'", MessageType.Info);
                 return existing.gameObject; // reused → its generated accessors already exist
             }
+            // A changed frame is rebuilt from scratch (its GameObject is destroyed below), so
+            // capture the user-set `persistent` (don't-auto-hide) flag — the importer doesn't
+            // re-derive it from the manifest — and carry it onto the rebuilt frame so a
+            // re-import never silently resets the user's choice. (== null, not ??: GetComponent
+            // on a missing component yields Unity's fake-null stub that ?? treats as found.)
+            bool prevPersistent = false;
             if (existing != null)
             {
+                var existingFrame = existing.gameObject.GetComponent<FigForgeFrame>();
+                prevPersistent = existingFrame != null && existingFrame.persistent;
                 Log($"patched changed '{screen.m.screen.name}'", MessageType.Info);
                 DestroyImmediate(existing.gameObject);
             }
@@ -925,6 +933,12 @@ namespace FigForge
             if (stretch) StretchToParent(page);
             StampImported(page, projectName, screen);
             EnsureImportMarkers(page); // fresh build: everything here is imported
+            if (prevPersistent)
+            {
+                var pf = page.GetComponent<FigForgeFrame>();
+                if (pf == null) pf = page.AddComponent<FigForgeFrame>();
+                pf.persistent = true;
+            }
             return page;
         }
 
@@ -1310,8 +1324,6 @@ namespace FigForge
                 if (frame == null || !warmed.Add(frame.gameObject)) continue;
                 HierarchyBuilder.WarmUpGeneratedGraphics(frame.gameObject, _warmUpBatchSize);
             }
-            if (mgr.shell != null && warmed.Add(mgr.shell))
-                HierarchyBuilder.WarmUpGeneratedGraphics(mgr.shell, _warmUpBatchSize);
             Canvas.ForceUpdateCanvases();
             SceneView.RepaintAll();
         }
@@ -1366,7 +1378,6 @@ namespace FigForge
                 var mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
                 mgr.editorColumns = _editorColumns;
                 mgr.screens.Clear();
-                mgr.shell = null;
                 RemoveStaleImported(canvas.transform, proj.name, new HashSet<string>(loaded.Select(s => s.importKey)));
 
                 // Declare the full set of frame class names this import will generate so every
@@ -1497,7 +1508,14 @@ namespace FigForge
                 }
 
                 mgr.initialScreen = mgr.Find(proj.initial);
-                if (canvas.GetComponent<FigForgeNavBinder>() == null) canvas.gameObject.AddComponent<FigForgeNavBinder>();
+                var navBinder = canvas.GetComponent<FigForgeNavBinder>() ?? canvas.gameObject.AddComponent<FigForgeNavBinder>();
+                // Pre-wire the manager reference so it's explicit in the Inspector and
+                // the runtime Start() lookup is skipped. The field is a private
+                // [SerializeField] on a runtime-assembly type, so set it via
+                // SerializedObject rather than widening its visibility.
+                var navBinderSO = new SerializedObject(navBinder);
+                navBinderSO.FindProperty("screenManager").objectReferenceValue = mgr;
+                navBinderSO.ApplyModifiedPropertiesWithoutUndo();
 
                 // Editor convenience: keep every imported frame visible/editable.
                 // Runtime Start() still switches to one active frame via Show().

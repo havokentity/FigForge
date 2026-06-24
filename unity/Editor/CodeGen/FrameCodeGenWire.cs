@@ -141,6 +141,7 @@ namespace FigForge
             var go = baseFrame.gameObject;
             bool isShell = baseFrame.isShell;
             bool usesShell = baseFrame.usesShell;
+            bool persistent = baseFrame.persistent;
             string shellKey = baseFrame.shellKey;
             string genType = baseFrame.generatedType;
             var reg = go.GetComponent<FigForgeScreen>();
@@ -163,6 +164,7 @@ namespace FigForge
                 {
                     restored.isShell = isShell;
                     restored.usesShell = usesShell;
+                    restored.persistent = persistent;
                     restored.shellKey = shellKey;
                     restored.generatedType = genType;
                     if (mgr != null)
@@ -178,6 +180,7 @@ namespace FigForge
 
             comp.isShell = isShell;
             comp.usesShell = usesShell;
+            comp.persistent = persistent;
             comp.shellKey = shellKey;
             comp.generatedType = genType;
             comp.__WireFrame(reg);

@@ -53,6 +53,9 @@ namespace FigForge
         // SETS placed under the same parent must NOT share a ToggleGroup, or selecting an
         // option in one set would clear the other. Keyed "parentInstanceID|ref".
         public readonly Dictionary<string, ToggleGroup> radioGroups = new Dictionary<string, ToggleGroup>();
+        // First radio Toggle registered per group key, in build order. If a set ships with
+        // nothing pre-selected, this one is turned on so a radio set is never all-off.
+        public readonly Dictionary<string, Toggle> radioGroupFirst = new Dictionary<string, Toggle>();
     }
 
     public static class HierarchyBuilder
@@ -66,6 +69,7 @@ namespace FigForge
             ctx.registered.Clear();
             ctx.resolvedCanonicalRefs.Clear();
             ctx.radioGroups.Clear();
+            ctx.radioGroupFirst.Clear();
 
             // One Figma frame = one root. If several, wrap them under a page root.
             // Compositor auto-create is suppressed for the whole element build:
@@ -110,6 +114,17 @@ namespace FigForge
                 }
             }
             finally { FigForgePageCompositor.SuppressAutoCreate = false; }
+
+            // A radio set must show one selected option. If the captured design left a
+            // group entirely off, turn on the first radio built for it. (allowSwitchOff is
+            // false, so once on it stays a single-selection set.)
+            foreach (var kv in ctx.radioGroups)
+            {
+                var grp = kv.Value;
+                if (grp == null || grp.AnyTogglesOn()) continue;
+                if (ctx.radioGroupFirst.TryGetValue(kv.Key, out var first) && first != null)
+                    first.isOn = true;
+            }
 
             // The page root receives FigForgeFrame from the importer; the FigForgeFrameElement
             // the builder added to it as a structural container would just duplicate it (same
@@ -386,11 +401,19 @@ namespace FigForge
                     if (!ctx.radioGroups.TryGetValue(groupKey, out var grp) || grp == null)
                     {
                         grp = parent.gameObject.AddComponent<ToggleGroup>();
-                        grp.allowSwitchOff = true;
+                        // A radio set must keep exactly one option selected: clicking the
+                        // active radio must not turn it off. (An initially all-off set stays
+                        // off until the first selection, after which it can never return to off.)
+                        grp.allowSwitchOff = false;
                         ctx.radioGroups[groupKey] = grp;
                     }
                     var tg = inst.GetComponentInChildren<Toggle>(true);
-                    if (tg != null) tg.group = grp;
+                    if (tg != null)
+                    {
+                        tg.group = grp;
+                        if (!ctx.radioGroupFirst.ContainsKey(groupKey))
+                            ctx.radioGroupFirst[groupKey] = tg;
+                    }
                 }
                 ApplyTransform(inst.GetComponent<RectTransform>() ?? inst.AddComponent<RectTransform>(), e, ctx);
 
@@ -2800,12 +2823,15 @@ namespace FigForge
             trt.anchorMin = new Vector2(0, 0); trt.anchorMax = new Vector2(1, 0); trt.pivot = new Vector2(0.5f, 1);
             trt.anchoredPosition = new Vector2(0, 2 * sf);
             trt.sizeDelta = new Vector2(0, Mathf.Max(itemHeight, itemHeight * Mathf.Min(Mathf.Max(c.options != null ? c.options.Count : 3, 1), 6)));
+            // Visible popup background — the captured menu shape (fill/border/gradient/
+            // shadow). It is the VISUAL only; the rounded clip is a dedicated stencil
+            // source on the Viewport below. (It used to double as the Mask graphic here,
+            // but a Mask only writes the stencil where its graphic draws opaque pixels —
+            // so a popup shape that came through fill-less wrote NO stencil and clipped
+            // the entire option list to nothing.)
             var popupShape = c.popupShape ?? c.shape ?? c.optionShape;
             if (popupShape != null)
-            {
                 AddShapeGraphic(template, popupShape, ctx);
-                template.AddComponent<Mask>().showMaskGraphic = true;
-            }
             else
                 template.AddComponent<Image>().color = Color.white;
             var scroll = template.AddComponent<ScrollRect>();
@@ -2814,8 +2840,25 @@ namespace FigForge
             var viewport = NewRect("Viewport", template.transform);
             var vrt = viewport.GetComponent<RectTransform>();
             vrt.anchorMin = Vector2.zero; vrt.anchorMax = Vector2.one; vrt.sizeDelta = Vector2.zero; vrt.pivot = new Vector2(0, 1);
-            viewport.AddComponent<Image>().color = Color.white;
-            viewport.AddComponent<Mask>().showMaskGraphic = false;
+            // Rounded clip via a DEDICATED stencil source — same pattern as the List/Table
+            // viewport (BuildScrollShell). A near-invisible solid-fill SDF rounded-rect
+            // ALWAYS draws, so it ALWAYS writes the stencil; the option rows then clip to
+            // the popup's rounded silhouette (schema v14: square row fills must not poke
+            // past the rounded popup corners) regardless of whether the captured popup
+            // background carries a fill. Vanilla has no shader → square rectangular Mask.
+            float popupClipR = popupShape != null ? Mathf.Max(0f, popupShape.cornerRadius) * sf : 0f;
+            if (!ctx.vanilla && popupClipR > 0.5f)
+            {
+                var clip = viewport.AddComponent<FigForgeRoundedRect>();
+                clip.Configure(FigForgeFill.Solid(new Color(1f, 1f, 1f, 0.004f)), FigForgeStroke.None,
+                    new Vector4(popupClipR, popupClipR, popupClipR, popupClipR));
+                viewport.AddComponent<Mask>().showMaskGraphic = true;
+            }
+            else
+            {
+                viewport.AddComponent<Image>().color = Color.white;
+                viewport.AddComponent<Mask>().showMaskGraphic = false;
+            }
             scroll.viewport = vrt;
 
             var content = NewRect("Content", viewport.transform);
@@ -4268,11 +4311,16 @@ namespace FigForge
         // v59: canonical Modal/Dialog and Toast/Notification controls.
         // v60: canonical controls capture a child named Icon as a reusable sprite
         //      and wire it through FigForgeBindings.icon / generated Icon slots.
+        // v64: dropdown popup clips its option rows with a DEDICATED rounded stencil
+        //      source (a near-invisible solid-fill SDF rect) on the Viewport, like
+        //      List/Table. The old path reused the captured popup background as the
+        //      Mask graphic, so a fill-less popup shape wrote no stencil and hid the
+        //      whole option list.
         //
         // Counterpart constant: plugin/src/types.ts CANONICAL_SCHEMA — the plugin
         // stamps its number into the manifest (canonicalSchema) and ManifestParser
         // warns when the two differ. Bump BOTH together.
-        internal const int CanonicalSchema = 63; // bumped: forces frames to rebuild so vanilla shadow/fill fixes re-apply
+        internal const int CanonicalSchema = 64; // bumped: dropdown popup uses a dedicated stencil source (regen to re-apply)
 
         // Invariant culture for every signature number: signatures persist in the
         // committed library asset, so a comma-decimal locale (de-DE, fr-FR, …) must

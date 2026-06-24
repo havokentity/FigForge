@@ -17,6 +17,12 @@ namespace FigForge
         [Tooltip("If true this screen mounts inside its shell's content slot; the matching shell stays visible. If false it's full-screen and shells hide.")]
         public bool usesShell;
 
+        [Tooltip("If true this frame is NOT auto-hidden when another screen is shown — it's an " +
+                 "independent overlay you control. It starts HIDDEN; reveal it with Show() / " +
+                 "SetVisible(true) (which overlays the current screen WITHOUT hiding it) and take " +
+                 "it down with Hide() / SetVisible(false). Preserved across re-imports.")]
+        public bool persistent;
+
         [Tooltip("Importer shell group key. For shell frames this identifies the shell; for shell-mounted screens this identifies which shell to show.")]
         [ReadOnly]
         public string shellKey;
@@ -33,13 +39,21 @@ namespace FigForge
         public bool IsBound => _bound;
         public string ScreenKey => name;
 
-        // Typed navigation: Frames.Settings.Show() — shows this frame (hiding the rest)
-        // via the active manager. Internal string key is never exposed to callers.
+        // Typed navigation: Frames.Settings.Show().
+        //   • A normal screen NAVIGATES — shows this frame and hides the rest.
+        //   • A `persistent` frame OVERLAYS — becomes visible over the current screen
+        //     without hiding it, and navigation won't auto-hide it afterward.
         public void Show()
         {
             var m = FrameManager.Resolve();
-            if (m != null) m.Show(this);
+            if (m == null) return;
+            if (persistent) m.ShowPersistent(this);
+            else m.Show(this);
         }
+
+        // Hide this frame. Meant for `persistent` overlays the user dismisses; hiding the
+        // current navigated screen just leaves nothing shown (the caller's choice).
+        public void Hide() => SetVisible(false);
 
         // Gate navigation INTO this screen: Frames.Settings.Guard(ctx => ...).
         public void Guard(NavGuard guard)
@@ -90,7 +104,9 @@ namespace FigForge
             OnBind();
         }
 
-        internal void SetVisible(bool visible)
+        // Public so consumer code can directly toggle a frame's visibility (e.g. dismiss a
+        // `persistent` overlay). FrameManager also drives this during navigation.
+        public void SetVisible(bool visible)
         {
             BindOnce();
             if (gameObject.activeSelf == visible) return;

@@ -377,6 +377,12 @@ namespace FigForge
             sb.AppendLine("        // Typed + null-safe navigation: Frames.Show(Frames.Settings). (Or Frames.Settings.Show().)");
             sb.AppendLine("        public static void Show(FigForgeFrame frame) { if (frame != null) frame.Show(); }");
             sb.AppendLine();
+            sb.AppendLine("        // Hide / toggle a frame — mainly for `persistent` overlay frames the end-user");
+            sb.AppendLine("        // dismisses: Frames.Hide(Frames.SidePanel). (Or Frames.SidePanel.Hide().) Hiding the");
+            sb.AppendLine("        // current navigated screen just leaves nothing shown.");
+            sb.AppendLine("        public static void Hide(FigForgeFrame frame) { if (frame != null) frame.Hide(); }");
+            sb.AppendLine("        public static void SetVisible(FigForgeFrame frame, bool visible) { if (frame != null) frame.SetVisible(visible); }");
+            sb.AppendLine();
             sb.AppendLine("        // ---- navigation guards (preconditions) -------------------------------");
             sb.AppendLine("        // Gate entry to a screen with real C#. Register once at runtime, e.g. in a");
             sb.AppendLine("        // bootstrap component's Start():");

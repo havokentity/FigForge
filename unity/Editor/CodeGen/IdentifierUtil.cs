@@ -99,9 +99,9 @@ namespace FigForge
         public static readonly IReadOnlyCollection<string> ReservedFrameMembers = new[]
         {
             // FigForgeFrame public/protected members
-            "isShell", "usesShell", "shellKey", "generatedType",
+            "isShell", "usesShell", "persistent", "shellKey", "generatedType",
             "isVisible", "IsBound", "ScreenKey",
-            "Show", "Guard", "OnShow", "OnHide", "OnBind",
+            "Show", "Hide", "SetVisible", "Guard", "OnShow", "OnHide", "OnBind",
             "__WireFrame", "__Get", "__GetList",
             // Common inherited Unity (Component/Behaviour/MonoBehaviour/Object) members
             // a Figma layer could realistically be named after.
