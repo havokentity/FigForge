@@ -20,6 +20,10 @@ namespace FigForge
         public float rowHeight = 40f;
         public int columns = 1;
         public string labelPrefix = "Item";
+        [Tooltip("Optional explicit column header names. When left empty, GetColumnNames() " +
+                 "scrapes the captured Header strip's Cell1..CellM texts; set this to override " +
+                 "(e.g. when there's no designed Header, or the captured titles are placeholders).")]
+        public string[] columnNames;
         public FigForgeListRowStyle itemStyle = new FigForgeListRowStyle();
         public Color itemRollover = Color.white;
         public bool hasItemRollover;
@@ -38,7 +42,23 @@ namespace FigForge
 
         readonly List<List<string>> _rows = new List<List<string>>();
 
-        public IReadOnlyList<IReadOnlyList<string>> Rows => _rows;
+        /// <summary>The table's rows. Normally the data model you set via SetRows/AddRow; if
+        /// that's empty but the table is showing design-time preview rows, returns those rows'
+        /// visible cell text instead — so Rows always matches what's on screen (and Rows.Count
+        /// == RowCount). Once you SetRows, it's the data model verbatim.</summary>
+        public IReadOnlyList<IReadOnlyList<string>> Rows
+            => (_rows.Count > 0 || content == null) ? (IReadOnlyList<IReadOnlyList<string>>)_rows : ReadRenderedRows();
+
+        // Scrape every rendered row into cell lists — the preview-row fallback for Rows,
+        // mirroring GetRow's per-row fallback. Only hit when the model is empty but rows render.
+        IReadOnlyList<IReadOnlyList<string>> ReadRenderedRows()
+        {
+            int n = content.childCount;
+            var rows = new List<IReadOnlyList<string>>(n);
+            for (int i = 0; i < n; i++)
+                rows.Add(ReadRenderedRow(i) ?? new List<string>());
+            return rows;
+        }
 
         /// <summary>Show/hide the whole control — `table.isVisible = false`. Drives
         /// GameObject.SetActive, so a hidden control stops rendering, receiving input,
@@ -76,6 +96,173 @@ namespace FigForge
             if (rows != null)
                 foreach (var r in rows)
                     _rows.Add(r != null ? new List<string>(r) : new List<string>());
+            Rebuild();
+        }
+
+        // --- Granular row/column accessors ------------------------------------
+        // The accessors below address the data model set via SetRows/AddRow/… —
+        // NOT preview rows (CreatePreviewRows holds no backing data). Reads return
+        // null for out-of-range; single-cell/row writes patch the rendered text IN
+        // PLACE (no Rebuild, so scroll + selection survive). Add/Insert/Remove change
+        // the row count, so they Rebuild.
+
+        /// <summary>Number of rows the table currently shows — the range Select accepts and
+        /// GetRow/GetCell address. This is the rendered row count (so design-time preview rows
+        /// count too); it equals the data-model size once you SetRows/AddRow.</summary>
+        public int RowCount => content != null ? content.childCount : _rows.Count;
+
+        /// <summary>Columns the table renders to. Short rows pad blank; cells past this
+        /// are dropped on render. (Read-only view of the `columns` field, floored at 1.)</summary>
+        public int ColumnCount => Mathf.Max(1, columns);
+
+        /// <summary>Column header names, length == ColumnCount. Uses the explicit
+        /// `columnNames` override where set, otherwise scrapes the captured Header strip's
+        /// Cell1..CellM texts; any name still missing falls back to "Column {n}". So a row
+        /// can be printed against its headers without re-declaring them.</summary>
+        public string[] GetColumnNames()
+        {
+            int cols = ColumnCount;
+            var names = new string[cols];
+            for (int c = 0; c < cols; c++)
+            {
+                string n = (columnNames != null && c < columnNames.Length) ? columnNames[c] : null;
+                if (string.IsNullOrEmpty(n)) n = GetHeaderCellText(c);
+                names[c] = !string.IsNullOrEmpty(n) ? n : "Column " + (c + 1);
+            }
+            return names;
+        }
+
+        /// <summary>One column's header name, or null if `col` is out of range. See
+        /// GetColumnNames for the override/scrape/fallback resolution.</summary>
+        public string GetColumnName(int col)
+            => (col >= 0 && col < ColumnCount) ? GetColumnNames()[col] : null;
+
+        // The captured Header is a render-only 'Header' child pinned at the top; the plugin
+        // builds its column titles as TMP cells named Cell1..CellM (same naming as the data
+        // rows). Read one here so GetColumnNames works without the caller re-declaring the
+        // headers. Null for a header-less table or a missing/blank cell.
+        string GetHeaderCellText(int col)
+        {
+            var headerT = FindByName(transform, "Header");
+            if (headerT == null) return null;
+            var cellT = FindByName(headerT, "Cell" + (col + 1));
+            var tmp = cellT != null ? cellT.GetComponent<TMP_Text>() : null;
+            return tmp != null ? tmp.text : null;
+        }
+
+        /// <summary>The currently-selected row's cells, or null when nothing is selected.
+        /// Handy in an onSelectionChanged handler: `var row = table.SelectedRow;`.</summary>
+        public IReadOnlyList<string> SelectedRow => GetRow(_selected);
+
+        /// <summary>Read one cell's text. Returns "" for a valid cell a short row never
+        /// filled, and null when row/col is out of range.</summary>
+        public string GetCell(int row, int col)
+        {
+            if (col < 0 || col >= ColumnCount) return null;
+            var cells = GetRow(row);
+            if (cells == null) return null;
+            return col < cells.Count ? (cells[col] ?? "") : "";
+        }
+
+        /// <summary>Read a whole row's cells (read-only), or null if `row` is out of range.
+        /// Reads the data model (SetRows/AddRow); for a row that's rendered but has no backing
+        /// data — design-time preview rows — it falls back to the row's visible cell text, so a
+        /// validly-selected row never returns null.</summary>
+        public IReadOnlyList<string> GetRow(int row)
+        {
+            if (row < 0) return null;
+            if (row < _rows.Count) return _rows[row];
+            return ReadRenderedRow(row); // preview rows: scrape what's on screen
+        }
+
+        // Reconstruct a row's cells from the rendered Cell1..CellM TMP text. Used when the
+        // data model doesn't cover `row` (preview rows render but never populate _rows).
+        // Null when the row isn't rendered either.
+        IReadOnlyList<string> ReadRenderedRow(int row)
+        {
+            if (content == null || row >= content.childCount) return null;
+            int cols = ColumnCount;
+            var cells = new List<string>(cols);
+            for (int c = 0; c < cols; c++)
+            {
+                var tmp = GetCellText(row, c);
+                cells.Add(tmp != null ? tmp.text : "");
+            }
+            return cells;
+        }
+
+        /// <summary>Set one cell's text. Updates the model AND patches the live cell in
+        /// place (no Rebuild). No-op if row/col is out of range; a short stored row is
+        /// padded up to `col` so any column in [0, ColumnCount) is writable.</summary>
+        public void SetCell(int row, int col, string text)
+        {
+            if (row < 0 || row >= _rows.Count || col < 0 || col >= ColumnCount) return;
+            var cells = _rows[row];
+            while (cells.Count <= col) cells.Add("");
+            cells[col] = text ?? "";
+            var tmp = GetCellText(row, col);
+            if (tmp != null) tmp.text = cells[col];
+        }
+
+        /// <summary>Replace one row's cells, re-rendering just that row's text in place
+        /// (no Rebuild). No-op if `row` is out of range.</summary>
+        public void SetRow(int row, IEnumerable<string> cells)
+        {
+            if (row < 0 || row >= _rows.Count) return;
+            var newCells = cells != null ? new List<string>(cells) : new List<string>();
+            _rows[row] = newCells;
+            int cols = ColumnCount;
+            for (int c = 0; c < cols; c++)
+            {
+                var tmp = GetCellText(row, c);
+                if (tmp != null) tmp.text = c < newCells.Count ? (newCells[c] ?? "") : "";
+            }
+        }
+
+        /// <summary>The live TMP cell for a rendered row — use to restyle a cell at
+        /// runtime (colour, font, alignment). Null if the row/col isn't rendered. For
+        /// text changes prefer SetCell (keeps the model in sync).</summary>
+        public TMP_Text GetCellText(int row, int col)
+        {
+            if (content == null || row < 0 || row >= content.childCount || col < 0 || col >= ColumnCount) return null;
+            var cellT = FindByName(content.GetChild(row), "Cell" + (col + 1));
+            return cellT != null ? cellT.GetComponent<TMP_Text>() : null;
+        }
+
+        /// <summary>The live FigForgeTableRow for a rendered row (state fills, selection,
+        /// GameObject), or null if not rendered.</summary>
+        public FigForgeTableRow GetRowObject(int row)
+        {
+            if (content == null || row < 0 || row >= content.childCount) return null;
+            return content.GetChild(row).GetComponent<FigForgeTableRow>();
+        }
+
+        /// <summary>Append a row. Row count changed, so the table Rebuilds.</summary>
+        public void AddRow(params string[] cells) => AddRow((IEnumerable<string>)cells);
+
+        public void AddRow(IEnumerable<string> cells)
+        {
+            _rows.Add(cells != null ? new List<string>(cells) : new List<string>());
+            Rebuild();
+        }
+
+        /// <summary>Insert a row at `index` (clamped to 0..RowCount). Rebuilds. Note this
+        /// shifts later indices — a held SelectedIndex now points at a different row.</summary>
+        public void InsertRow(int index, IEnumerable<string> cells)
+        {
+            index = Mathf.Clamp(index, 0, _rows.Count);
+            _rows.Insert(index, cells != null ? new List<string>(cells) : new List<string>());
+            Rebuild();
+        }
+
+        /// <summary>Remove the row at `index`. No-op if out of range. Rebuilds. Clears the
+        /// selection if the removed row was selected (Rebuild clamps a now-stale index).</summary>
+        public void RemoveRow(int index)
+        {
+            if (index < 0 || index >= _rows.Count) return;
+            _rows.RemoveAt(index);
+            if (_selected == index) _selected = -1;
+            else if (_selected > index) _selected--;
             Rebuild();
         }
 

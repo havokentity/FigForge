@@ -73,7 +73,23 @@ namespace FigForge
 
         readonly List<FigForgeListItem> _items = new List<FigForgeListItem>();
 
-        public IReadOnlyList<FigForgeListItem> Items => _items;
+        /// <summary>The list's items. Normally the data model you set via SetItems/AddItem;
+        /// if that's empty but the list is showing design-time preview rows, returns those
+        /// rows' visible content instead — so Items always matches what's on screen (and
+        /// Items.Count == ItemCount). Once you SetItems, it's the data model verbatim.</summary>
+        public IReadOnlyList<FigForgeListItem> Items
+            => (_items.Count > 0 || content == null) ? _items : ReadRenderedItems();
+
+        // Scrape every rendered row into items — the preview-row fallback for Items, mirroring
+        // GetItem's per-row fallback. Only hit when the data model is empty but rows render.
+        IReadOnlyList<FigForgeListItem> ReadRenderedItems()
+        {
+            int n = content.childCount;
+            var items = new List<FigForgeListItem>(n);
+            for (int i = 0; i < n; i++)
+                items.Add(ReadRenderedItem(i) ?? default);
+            return items;
+        }
 
         /// <summary>Show/hide the whole control — `list.isVisible = false`. Drives
         /// GameObject.SetActive, so a hidden control stops rendering, receiving input,
@@ -124,6 +140,130 @@ namespace FigForge
             if (titles != null)
                 foreach (var t in titles)
                     _items.Add(new FigForgeListItem(t != null ? t.ToString() : ""));
+            Rebuild();
+        }
+
+        // --- Granular item accessors ------------------------------------------
+        // List-shaped counterpart to the Table's cell accessors: a List row is one
+        // FigForgeListItem (Title + optional Subtitle), not a cell grid. Reads address the
+        // data model set via SetItems/AddItem/…, and fall back to a row's visible text when
+        // it's rendered but has no backing data (design-time preview rows), so a validly-
+        // selected row never returns null. Single-item writes patch the rendered text IN
+        // PLACE (no Rebuild, so scroll + selection survive); Add/Insert/Remove Rebuild.
+
+        /// <summary>Number of rows the list currently shows — the range Select accepts and
+        /// GetItem addresses. This is the rendered row count (so design-time preview rows
+        /// count too); it equals the data-model size once you SetItems/AddItem.</summary>
+        public int ItemCount => content != null ? content.childCount : _items.Count;
+
+        /// <summary>The currently-selected item, or null when nothing is selected. Handy in
+        /// an onSelectionChanged handler: `var item = list.SelectedItem;`.</summary>
+        public FigForgeListItem? SelectedItem => GetItem(_selected);
+
+        /// <summary>Read one item, or null when `index` is out of range. Reads the data model
+        /// (SetItems/AddItem); for a rendered row with no backing data — preview rows — it
+        /// falls back to the row's visible Title/Subtitle text.</summary>
+        public FigForgeListItem? GetItem(int index)
+        {
+            if (index < 0) return null;
+            if (index < _items.Count) return _items[index];
+            return ReadRenderedItem(index); // preview rows: scrape what's on screen
+        }
+
+        /// <summary>Read an item's title — "" if blank, null if `index` is out of range.</summary>
+        public string GetTitle(int index)
+        {
+            var it = GetItem(index);
+            return it.HasValue ? (it.Value.title ?? "") : null;
+        }
+
+        /// <summary>Read an item's subtitle — "" if blank, null if `index` is out of range.</summary>
+        public string GetSubtitle(int index)
+        {
+            var it = GetItem(index);
+            return it.HasValue ? (it.Value.subtitle ?? "") : null;
+        }
+
+        // Reconstruct an item from the rendered Title/Subtitle (or styled-row Label) text.
+        // Used when the data model doesn't cover `index` (preview rows render but never
+        // populate _items). Null when the row isn't rendered either.
+        FigForgeListItem? ReadRenderedItem(int index)
+        {
+            if (content == null || index >= content.childCount) return null;
+            var titleT = GetTitleText(index);
+            var subT = GetSubtitleText(index);
+            return new FigForgeListItem(titleT != null ? titleT.text : "", subT != null ? subT.text : null);
+        }
+
+        /// <summary>Replace one item, re-rendering its Title (and Subtitle, on captured rows
+        /// that have one) in place — no Rebuild. No-op if `index` is out of range.</summary>
+        public void SetItem(int index, FigForgeListItem item)
+        {
+            if (index < 0 || index >= _items.Count) return;
+            _items[index] = item;
+            var titleT = GetTitleText(index);
+            if (titleT != null) titleT.text = item.title ?? "";
+            var subT = GetSubtitleText(index);
+            if (subT != null) subT.text = item.subtitle ?? "";
+        }
+
+        /// <summary>Replace one item by title (+ optional subtitle) — convenience overload.</summary>
+        public void SetItem(int index, string title, string subtitle = null)
+            => SetItem(index, new FigForgeListItem(title, subtitle));
+
+        /// <summary>The live Title TMP for a rendered row — use to restyle (colour, font).
+        /// Null if the row isn't rendered. Falls back to the styled-row "Label". For text
+        /// changes prefer SetItem (keeps the model in sync).</summary>
+        public TMP_Text GetTitleText(int index)
+        {
+            if (content == null || index < 0 || index >= content.childCount) return null;
+            var row = content.GetChild(index);
+            // Captured rows name it "Title"; the styled fallback renders the title in "Label".
+            var t = FindByName(row, "Title");
+            if (t == null) t = FindByName(row, "Label");
+            return t != null ? t.GetComponent<TMP_Text>() : null;
+        }
+
+        /// <summary>The live Subtitle TMP for a rendered row — null if the row isn't rendered
+        /// or has no Subtitle (the styled fallback renders title only).</summary>
+        public TMP_Text GetSubtitleText(int index)
+        {
+            if (content == null || index < 0 || index >= content.childCount) return null;
+            var t = FindByName(content.GetChild(index), "Subtitle");
+            return t != null ? t.GetComponent<TMP_Text>() : null;
+        }
+
+        /// <summary>The live FigForgeListRow for a rendered row (state fills, selection,
+        /// GameObject), or null if not rendered.</summary>
+        public FigForgeListRow GetRowObject(int index)
+        {
+            if (content == null || index < 0 || index >= content.childCount) return null;
+            return content.GetChild(index).GetComponent<FigForgeListRow>();
+        }
+
+        /// <summary>Append an item. Row count changed, so the list Rebuilds.</summary>
+        public void AddItem(FigForgeListItem item) { _items.Add(item); Rebuild(); }
+
+        /// <summary>Append a title (+ optional subtitle).</summary>
+        public void AddItem(string title, string subtitle = null) { _items.Add(new FigForgeListItem(title, subtitle)); Rebuild(); }
+
+        /// <summary>Insert an item at `index` (clamped to 0..ItemCount). Rebuilds. Note this
+        /// shifts later indices — a held SelectedIndex now points at a different row.</summary>
+        public void InsertItem(int index, FigForgeListItem item)
+        {
+            index = Mathf.Clamp(index, 0, _items.Count);
+            _items.Insert(index, item);
+            Rebuild();
+        }
+
+        /// <summary>Remove the item at `index`. No-op if out of range. Rebuilds, and fixes up
+        /// the selection (clears it if the removed row was selected, else shifts it down).</summary>
+        public void RemoveItem(int index)
+        {
+            if (index < 0 || index >= _items.Count) return;
+            _items.RemoveAt(index);
+            if (_selected == index) _selected = -1;
+            else if (_selected > index) _selected--;
             Rebuild();
         }
 
