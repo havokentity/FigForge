@@ -41,7 +41,7 @@ namespace FigForge
         public static NavDecision Block(string reason = null)
             => new NavDecision(NavVerdict.Deny, reason, null, null, null, null, null);
 
-        /// <summary>Block and ask the handler to show this dialog frame (e.g. Frames.CompleteProfileDialog).</summary>
+        /// <summary>Block and ask the handler to show this dialog frame (e.g. UIFrames.CompleteProfileDialog).</summary>
         public static NavDecision BlockDialog(FigForgeFrame dialog, string reason = null)
             => new NavDecision(NavVerdict.Deny, reason, dialog, null, null, null, null);
 

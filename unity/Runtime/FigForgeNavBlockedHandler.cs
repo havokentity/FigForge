@@ -13,12 +13,12 @@ namespace FigForge
     [DisallowMultipleComponent]
     public class FigForgeNavBlockedHandler : MonoBehaviour
     {
-        FrameManager _manager;
+        UIFrameManager _manager;
 
         void OnEnable()
         {
-            if (_manager == null) _manager = GetComponentInParent<FrameManager>();
-            if (_manager == null) _manager = FrameManager.Resolve();
+            if (_manager == null) _manager = GetComponentInParent<UIFrameManager>();
+            if (_manager == null) _manager = UIFrameManager.Resolve();
             if (_manager != null) _manager.AddBlockedHandler(HandleBlocked);
         }
 
@@ -41,7 +41,7 @@ namespace FigForge
         }
 
         // Overlay the dialog frame on top of the current screen WITHOUT routing through
-        // FrameManager.Show (which would hide the current page). Override for custom UX.
+        // UIFrameManager.Show (which would hide the current page). Override for custom UX.
         protected virtual void ShowDialog(FigForgeFrame dialog)
         {
             dialog.SetVisible(true);

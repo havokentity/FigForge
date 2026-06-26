@@ -4,7 +4,7 @@
 // Problem: in edit mode every imported page (FigForgeFrame) is rolled out as a
 // visible sibling, so the Scene view renders AND the FigForge components run for
 // the WHOLE design at once — thousands of GameObjects. Play mode is smooth
-// because FrameManager shows one frame and deactivates the rest. (Proven: with
+// because UIFrameManager shows one frame and deactivates the rest. (Proven: with
 // all-but-one frame deactivated, the editor is buttery.)
 //
 // Fix: keep the whole-design overview, but make every IDLE frame cheap. Each idle

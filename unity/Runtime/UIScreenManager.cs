@@ -1,6 +1,6 @@
 // =============================================================================
 // FigForge — UI Toolkit multi-page manager (the UITK counterpart of
-// FrameManager/FigForgeFrame). Sits next to a UIDocument and shows one generated
+// UIFrameManager/FigForgeFrame). Sits next to a UIDocument and shows one generated
 // page (a VisualTreeAsset) at a time by cloning it into the document root.
 // =============================================================================
 

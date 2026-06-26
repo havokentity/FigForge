@@ -3,8 +3,8 @@
 // canonical controls and plain elements (Image panels, TMP texts, empty
 // RectTransform containers) alike:
 //
-//     Frames.LaunchPage.Title.SetVisible(false);
-//     if (Frames.LaunchPage.MySlider.GetVisible()) { ... }
+//     UIFrames.LaunchPage.Title.SetVisible(false);
+//     if (UIFrames.LaunchPage.MySlider.GetVisible()) { ... }
 //
 // Backed by GameObject.SetActive, so a hidden element stops rendering, receiving
 // input, and contributing to layout. The FigForge control classes' `isVisible`

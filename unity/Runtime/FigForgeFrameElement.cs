@@ -1,7 +1,7 @@
 // =============================================================================
 // FigForge — lightweight component for imported structural Figma containers.
 //
-// Root screens use FigForgeFrame and are managed by FrameManager. Nested Figma
+// Root screens use FigForgeFrame and are managed by UIFrameManager. Nested Figma
 // FRAME/GROUP nodes use this component: they are addressable elements with
 // visibility helpers, but they are not navigable pages.
 // =============================================================================

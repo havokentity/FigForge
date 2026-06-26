@@ -248,7 +248,7 @@ namespace FigForge
             }
         }
 
-        public static void DrawManagerToolbar(FrameManager manager)
+        public static void DrawManagerToolbar(UIFrameManager manager)
         {
             EditorGUILayout.LabelField("FigForge Refs", EditorStyles.boldLabel);
             using (new EditorGUILayout.HorizontalScope())
@@ -279,7 +279,7 @@ namespace FigForge
                 $"Re-wired refs on {n} component(s) across {frames.Length} frame(s).", "OK");
         }
 
-        public static void ValidateManagerRefs(FrameManager manager)
+        public static void ValidateManagerRefs(UIFrameManager manager)
         {
             var frames = ManagerFrames(manager);
             var all = new List<MissingRef>();
@@ -288,7 +288,7 @@ namespace FigForge
             if (Report(all, ManagerReportName(manager, frames.Length))) PopulateManagerRefs(manager);
         }
 
-        public static void PopulateManagerRefs(FrameManager manager)
+        public static void PopulateManagerRefs(UIFrameManager manager)
         {
             var frames = ManagerFrames(manager);
             int n = 0;
@@ -300,7 +300,7 @@ namespace FigForge
         static FigForgeFrame[] SceneFrames()
             => UnityEngine.Object.FindObjectsByType<FigForgeFrame>(FindObjectsInactive.Include, FindObjectsSortMode.None);
 
-        static FigForgeFrame[] ManagerFrames(FrameManager manager)
+        static FigForgeFrame[] ManagerFrames(UIFrameManager manager)
         {
             if (manager == null) return Array.Empty<FigForgeFrame>();
             var frames = new List<FigForgeFrame>();
@@ -317,7 +317,7 @@ namespace FigForge
             if (frame != null && !frames.Contains(frame)) frames.Add(frame);
         }
 
-        static string ManagerReportName(FrameManager manager, int frameCount)
+        static string ManagerReportName(UIFrameManager manager, int frameCount)
             => manager != null ? manager.name + " (" + frameCount + " frame(s))" : frameCount + " frame(s)";
 
         // ---- populate (re-invoke generated wiring + persist) ----

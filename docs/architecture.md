@@ -54,7 +54,7 @@ call triggers a takeover.
 
 - **Editor** — `FigForgeImporterWindow` (UI), `ManifestParser`, `TextureImportHelper`,
   `SpriteAtlasHelper`, `HierarchyBuilder`, procedural sprite caches.
-- **Runtime** — `FrameManager`, `FigForgeScreen`, `CanonicalLibrary` (so built scenes
+- **Runtime** — `UIFrameManager`, `FigForgeScreen`, `CanonicalLibrary` (so built scenes
   and prefabs work at runtime without the editor assembly).
 
 ## The contract

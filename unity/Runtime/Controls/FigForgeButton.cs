@@ -5,7 +5,7 @@
 // the family with controls Unity doesn't ship (see FigForgeList).
 //
 // Extend behaviour by subclassing or via extension methods — generated frame
-// classes expose this directly: Frames.LaunchPage.save.label.text = "Go".
+// classes expose this directly: UIFrames.LaunchPage.save.label.text = "Go".
 //
 // Beyond Unity's `onClick`, FigForge surfaces the pointer/selection moments code
 // usually wants (hover SFX, tooltips, press feedback): onPointerEnter/Exit/Down/

@@ -1,7 +1,7 @@
 // =============================================================================
 // FigForge — a navigation guard and the context it receives. A NavGuard is just a
 // function (NavContext -> NavDecision); register one per screen (or globally) to
-// gate navigation before FrameManager switches frames.
+// gate navigation before UIFrameManager switches frames.
 // =============================================================================
 
 namespace FigForge

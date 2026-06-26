@@ -2,7 +2,7 @@
 // FigForge — frame code generator. Emits the strongly-typed accessor layer:
 //   • <Frame>.g.cs   — `public partial class LaunchPage : FigForgeFrame` with a
 //                      [SerializeField] ref + typed property per frame-scoped element.
-//   • FrameManager.g.cs — static accessors (FrameManager.LaunchPage), grouped by
+//   • UIFrames.<Frame>.g.cs — static accessors (UIFrames.LaunchPage), grouped by
 //                      section as nested static classes.
 //   • deterministic .cs.meta GUIDs so the generated prefab YAML can reference the
 //     frame script BEFORE it compiles (one-pass import, no domain-reload wiring).
@@ -50,7 +50,7 @@ namespace FigForge
     internal struct FrameModel
     {
         public string className;   // case-preserved, e.g. "LaunchPage"
-        public string screenKey;   // runtime FrameManager.Find key (object name or sanitized object name)
+        public string screenKey;   // runtime UIFrameManager.Find key (object name or sanitized object name)
         public string section;     // enclosing section identifier, "" if none
         public string scriptGuid;  // deterministic 32-hex GUID for the generated .cs
         public bool isOverlay;     // a role=overlay layer → its FigForgeModals also emit global Dialogs.X accessors
@@ -103,7 +103,7 @@ namespace FigForge
 
             EmitAccessorsAndFields(sb, members);
 
-            // Navigation key — registry key for Frames.Guard<...>; never change it by hand.
+            // Navigation key — registry key for UIFrames.Guard<...>; never change it by hand.
             sb.AppendLine();
             sb.AppendLine("        // ──────── Navigation key (internal; do not modify) ────────");
             sb.AppendLine("        // `__`-prefixed by convention so it can't collide with an element-named member.");
@@ -244,7 +244,7 @@ namespace FigForge
             return list;
         }
 
-        // ---- FrameManager.g.cs --------------------------------------------------------
+        // ---- UIFrames.<Frame>.g.cs --------------------------------------------------------
         public static string EmitFrameManager(IList<FrameModel> frames)
         {
             var sb = new StringBuilder();
@@ -252,14 +252,14 @@ namespace FigForge
             sb.AppendLine("using FigForge;");
             sb.AppendLine("namespace " + GeneratedNamespace);
             sb.AppendLine("{");
-            sb.AppendLine("    public static partial class Frames");
+            sb.AppendLine("    public static partial class UIFrames");
             sb.AppendLine("    {");
 
             foreach (var f in frames)
                 if (string.IsNullOrEmpty(f.section))
                     sb.AppendLine("        " + Accessor(f));
 
-            // Frame class names are members of `Frames` too — a section sharing one's identifier
+            // Frame class names are members of `UIFrames` too — a section sharing one's identifier
             // would emit `class Settings` beside `Settings Settings` → CS0102. Reserve sections
             // against every frame class name and rename the colliding section.
             var frameClasses = new HashSet<string>(StringComparer.Ordinal);
@@ -279,7 +279,7 @@ namespace FigForge
                 reservedNames.Add(safe);
                 if (renamed)
                     UnityEngine.Debug.LogWarning($"[FigForge] section '{sec}' collides with frame class "
-                        + $"or sibling section → emitted as 'Frames.{safe}'.");
+                        + $"or sibling section → emitted as 'UIFrames.{safe}'.");
                 sb.AppendLine();
                 sb.AppendLine("        public static partial class " + safe);
                 sb.AppendLine("        {");
@@ -294,11 +294,11 @@ namespace FigForge
             return sb.ToString();
         }
 
-        // A single-frame `Frames` partial — one file per frame so page-by-page imports
+        // A single-frame `UIFrames` partial — one file per frame so page-by-page imports
         // don't clobber each other's accessors. Sections become a partial nested static
         // class (multiple frames in a section each contribute to it).
         // `reservedFrameClassNames` carries the frame class names owned by OTHER frames. A section
-        // shares the enclosing `partial class Frames` with every frame's `public static <Frame>
+        // shares the enclosing `partial class UIFrames` with every frame's `public static <Frame>
         // <Frame>` member, so a section identifier equal to some frame's class name collides across
         // files (CS0102) — invisible to WriteIfChanged. We rename the SECTION (never the frame
         // class, which is a real component type referenced elsewhere). The rename is a pure
@@ -318,7 +318,7 @@ namespace FigForge
             sb.AppendLine("using FigForge;");
             sb.AppendLine("namespace " + GeneratedNamespace);
             sb.AppendLine("{");
-            sb.AppendLine("    public static partial class Frames");
+            sb.AppendLine("    public static partial class UIFrames");
             sb.AppendLine("    {");
             if (string.IsNullOrEmpty(f.section))
             {
@@ -329,7 +329,7 @@ namespace FigForge
                 string safe = SafeSectionName(f.section, reservedFrameClassNames, out bool renamed);
                 if (renamed)
                     UnityEngine.Debug.LogWarning($"[FigForge] section '{f.section}' collides with frame class "
-                        + $"'{f.section}' → emitted as 'Frames.{safe}'.");
+                        + $"'{f.section}' → emitted as 'UIFrames.{safe}'.");
                 sb.AppendLine("        public static partial class " + safe);
                 sb.AppendLine("        {");
                 sb.AppendLine("            " + Accessor(f));
@@ -340,7 +340,7 @@ namespace FigForge
             return sb.ToString();
         }
 
-        // A section identifier that won't clash with a frame class name in `partial class Frames`.
+        // A section identifier that won't clash with a frame class name in `partial class UIFrames`.
         // Deterministic: if `section` is reserved, append "Section" (then _2, _3, …) until free, so
         // all frames sharing the section resolve to the same nested class. `renamed` reports a move.
         static string SafeSectionName(string section, ISet<string> reservedFrameClassNames, out bool renamed)
@@ -358,8 +358,8 @@ namespace FigForge
             return candidate;
         }
 
-        // The fixed `Frames` core — navigation that proxies the internal FrameManager.
-        // Written once (Frames.Core.g.cs); per-frame files add the typed accessors.
+        // The fixed `UIFrames` core — navigation that proxies the internal UIFrameManager.
+        // Written once (UIFrames.Core.g.cs); per-frame files add the typed accessors.
         public static string EmitFramesCore()
         {
             var sb = new StringBuilder();
@@ -367,18 +367,18 @@ namespace FigForge
             sb.AppendLine("using FigForge;");
             sb.AppendLine("namespace " + GeneratedNamespace);
             sb.AppendLine("{");
-            sb.AppendLine("    // The single public entry point. Wraps the internal FrameManager engine.");
-            sb.AppendLine("    public static partial class Frames");
+            sb.AppendLine("    // The single public entry point. Wraps the internal UIFrameManager engine.");
+            sb.AppendLine("    public static partial class UIFrames");
             sb.AppendLine("    {");
             sb.AppendLine("        // The frame currently shown (null before any Show / in edit mode).");
             sb.AppendLine("        public static FigForgeFrame Current");
-            sb.AppendLine("            => FrameManager.Resolve()?.Current;");
+            sb.AppendLine("            => UIFrameManager.Resolve()?.Current;");
             sb.AppendLine();
-            sb.AppendLine("        // Typed + null-safe navigation: Frames.Show(Frames.Settings). (Or Frames.Settings.Show().)");
+            sb.AppendLine("        // Typed + null-safe navigation: UIFrames.Show(UIFrames.Settings). (Or UIFrames.Settings.Show().)");
             sb.AppendLine("        public static void Show(FigForgeFrame frame) { if (frame != null) frame.Show(); }");
             sb.AppendLine();
             sb.AppendLine("        // Hide / toggle a frame — mainly for `persistent` overlay frames the end-user");
-            sb.AppendLine("        // dismisses: Frames.Hide(Frames.SidePanel). (Or Frames.SidePanel.Hide().) Hiding the");
+            sb.AppendLine("        // dismisses: UIFrames.Hide(UIFrames.SidePanel). (Or UIFrames.SidePanel.Hide().) Hiding the");
             sb.AppendLine("        // current navigated screen just leaves nothing shown.");
             sb.AppendLine("        public static void Hide(FigForgeFrame frame) { if (frame != null) frame.Hide(); }");
             sb.AppendLine("        public static void SetVisible(FigForgeFrame frame, bool visible) { if (frame != null) frame.SetVisible(visible); }");
@@ -386,13 +386,13 @@ namespace FigForge
             sb.AppendLine("        // ---- navigation guards (preconditions) -------------------------------");
             sb.AppendLine("        // Gate entry to a screen with real C#. Register once at runtime, e.g. in a");
             sb.AppendLine("        // bootstrap component's Start():");
-            sb.AppendLine("        //   Frames.Guard<Checkout>(ctx => PlayerState.HasProfile");
+            sb.AppendLine("        //   UIFrames.Guard<Checkout>(ctx => PlayerState.HasProfile");
             sb.AppendLine("        //       ? FigForge.NavDecision.Allow()");
-            sb.AppendLine("        //       : FigForge.NavDecision.BlockDialog(Frames.CompleteProfileDialog));");
+            sb.AppendLine("        //       : FigForge.NavDecision.BlockDialog(UIFrames.CompleteProfileDialog));");
             sb.AppendLine("        public static void Guard<TFrame>(NavGuard guard) where TFrame : FigForgeFrame");
             sb.AppendLine("            => FigForgeNavigation.AddGuard<TFrame>(guard);");
             sb.AppendLine();
-            sb.AppendLine("        // Guard a specific screen instance: Frames.Guard(Frames.Checkout, ctx => ...).");
+            sb.AppendLine("        // Guard a specific screen instance: UIFrames.Guard(UIFrames.Checkout, ctx => ...).");
             sb.AppendLine("        public static void Guard(FigForgeFrame frame, NavGuard guard)");
             sb.AppendLine("            => FigForgeNavigation.AddGuard(frame, guard);");
             sb.AppendLine();
@@ -405,11 +405,11 @@ namespace FigForge
             sb.AppendLine("            => FigForgeNavigation.AddBlockedHandler(handler);");
             sb.AppendLine();
             sb.AppendLine("        // Ensure every registered frame has run OnBind(), including inactive pages.");
-            sb.AppendLine("        public static void BindAll() { FrameManager.Resolve()?.BindAll(); }");
+            sb.AppendLine("        public static void BindAll() { UIFrameManager.Resolve()?.BindAll(); }");
             sb.AppendLine();
-            sb.AppendLine("        // Run an action after a delay, chainable: Frames.After(1f, A).After(2f, B).");
+            sb.AppendLine("        // Run an action after a delay, chainable: UIFrames.After(1f, A).After(2f, B).");
             sb.AppendLine("        public static DelayChain After(float seconds, System.Action action)");
-            sb.AppendLine("            => new DelayChain(FrameManager.Resolve()).After(seconds, action);");
+            sb.AppendLine("            => new DelayChain(UIFrameManager.Resolve()).After(seconds, action);");
             sb.AppendLine();
             sb.AppendLine("        public sealed class DelayChain");
             sb.AppendLine("        {");
@@ -420,11 +420,11 @@ namespace FigForge
             sb.AppendLine("                public Step(float seconds, System.Action action) { this.seconds = seconds; this.action = action; }");
             sb.AppendLine("            }");
             sb.AppendLine();
-            sb.AppendLine("            readonly FrameManager _manager;");
+            sb.AppendLine("            readonly UIFrameManager _manager;");
             sb.AppendLine("            readonly System.Collections.Generic.Queue<Step> _steps = new System.Collections.Generic.Queue<Step>();");
             sb.AppendLine("            UnityEngine.Coroutine _coroutine;");
             sb.AppendLine();
-            sb.AppendLine("            internal DelayChain(FrameManager manager) { _manager = manager; }");
+            sb.AppendLine("            internal DelayChain(UIFrameManager manager) { _manager = manager; }");
             sb.AppendLine("            public bool IsRunning => _coroutine != null;");
             sb.AppendLine();
             sb.AppendLine("            public DelayChain After(float seconds, System.Action action)");
@@ -464,16 +464,16 @@ namespace FigForge
         static string Accessor(FrameModel f)
         {
             // Emitted INSIDE namespace FigForge.Generated, so the frame type is unqualified;
-            // the manager is the package's FrameManager (via `using FigForge;`).
+            // the manager is the package's UIFrameManager (via `using FigForge;`).
             return "public static " + f.className + " " + f.className
-                 + " => FrameManager.Resolve()?.Find(\"" + Escape(f.screenKey) + "\") as " + f.className + ";";
+                 + " => UIFrameManager.Resolve()?.Find(\"" + Escape(f.screenKey) + "\") as " + f.className + ";";
         }
 
         // ---- global dialog accessors (overlay layers) ---------------------------------
         // Every FigForgeModal in a role=overlay frame also surfaces as a strongly-typed,
         // string-free `Dialogs.<Name>` — resolved through the lazy global FigForgeDialogHost,
         // so it works on any screen (shell or not). One file per overlay frame, mirroring
-        // Frames.<Frame>.g.cs; the fixed helpers live in Dialogs.Core.g.cs.
+        // UIFrames.<Frame>.g.cs; the fixed helpers live in Dialogs.Core.g.cs.
         public static bool HasDialogs(FrameModel f)
         {
             if (f.members == null) return false;

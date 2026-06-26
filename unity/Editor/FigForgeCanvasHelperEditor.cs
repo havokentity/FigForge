@@ -15,7 +15,7 @@ namespace FigForge
         public override void OnInspectorGUI()
         {
             var helper = (FigForgeCanvasHelper)target;
-            var manager = helper.GetComponent<FrameManager>();
+            var manager = helper.GetComponent<UIFrameManager>();
             if (manager != null)
             {
                 EditorGUI.BeginChangeCheck();
@@ -58,12 +58,12 @@ namespace FigForge
         }
     }
 
-    [CustomEditor(typeof(FrameManager))]
-    internal class FrameManagerEditor : UnityEditor.Editor
+    [CustomEditor(typeof(UIFrameManager))]
+    internal class UIFrameManagerEditor : UnityEditor.Editor
     {
         public override void OnInspectorGUI()
         {
-            var manager = (FrameManager)target;
+            var manager = (UIFrameManager)target;
             int beforeColumns = manager != null ? manager.editorColumns : 5;
 
             // Draw via SerializedProperty so we can clamp editorColumns BEFORE the edit is
@@ -102,7 +102,7 @@ namespace FigForge
             var result = new List<FigForgeFrame>();
             if (helper == null) return result;
 
-            var manager = helper.GetComponent<FrameManager>();
+            var manager = helper.GetComponent<UIFrameManager>();
             if (manager != null && manager.screens != null && manager.screens.Count > 0)
                 result.AddRange(OrderedFrames(manager.screens));
 
@@ -187,7 +187,7 @@ namespace FigForge
             return string.Join(" ", parts);
         }
 
-        internal static FigForgeCanvasHelper EnsureHelper(FrameManager manager)
+        internal static FigForgeCanvasHelper EnsureHelper(UIFrameManager manager)
         {
             if (manager == null) return null;
             var helper = manager.GetComponent<FigForgeCanvasHelper>();
@@ -206,7 +206,7 @@ namespace FigForge
             if (frames.Count == 0) return;
 
             int columns = FigForgeImporterWindow.EditorColumnsPref;
-            var manager = helper.GetComponent<FrameManager>();
+            var manager = helper.GetComponent<UIFrameManager>();
             if (manager != null)
                 columns = Mathf.Clamp(manager.editorColumns, 1, 50);
 

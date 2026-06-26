@@ -30,7 +30,7 @@ namespace FigForge
 
         // The importer calls this after (re)building screens. When the generated code is
         // UNCHANGED, no compile follows the import — [DidReloadScripts] never fires — and
-        // a rebuilt page would sit on the base FigForgeFrame forever (Frames.X casts fail,
+        // a rebuilt page would sit on the base FigForgeFrame forever (UIFrames.X casts fail,
         // resolving null). The type already exists in that case, so upgrading right away
         // works; when a compile IS pending the reload hook covers it. Idempotent.
         internal static void RequestUpgrade()
@@ -50,7 +50,7 @@ namespace FigForge
 
             var frames = Resources.FindObjectsOfTypeAll<FigForgeFrame>();
             bool any = false;
-            var managers = new System.Collections.Generic.HashSet<FrameManager>();
+            var managers = new System.Collections.Generic.HashSet<UIFrameManager>();
             var roots = new System.Collections.Generic.List<GameObject>();
             foreach (var f in frames)
             {
@@ -134,7 +134,7 @@ namespace FigForge
             return comp;
         }
 
-        static bool UpgradeFrame(FigForgeFrame baseFrame, Type t, out FrameManager manager, out FigForgeFrame upgraded)
+        static bool UpgradeFrame(FigForgeFrame baseFrame, Type t, out UIFrameManager manager, out FigForgeFrame upgraded)
         {
             manager = null;
             upgraded = null;
@@ -145,14 +145,14 @@ namespace FigForge
             string shellKey = baseFrame.shellKey;
             string genType = baseFrame.generatedType;
             var reg = go.GetComponent<FigForgeScreen>();
-            var mgr = baseFrame.GetComponentInParent<FrameManager>();
+            var mgr = baseFrame.GetComponentInParent<UIFrameManager>();
             int idx = mgr != null ? mgr.screens.IndexOf(baseFrame) : -1;
             bool wasInitial = mgr != null && mgr.initialScreen == baseFrame;
 
             // FigForgeFrame is [DisallowMultipleComponent], so the base must go before the
             // subclass can be added. If the swap fails (AddComponent throws / yields an unexpected
             // type), re-add the base so the page is never left WITHOUT a FigForgeFrame component
-            // (which would orphan it from the manager and break Frames.X navigation).
+            // (which would orphan it from the manager and break UIFrames.X navigation).
             UnityEngine.Object.DestroyImmediate(baseFrame);
             FigForgeFrame comp = null;
             try { comp = go.AddComponent(t) as FigForgeFrame; }

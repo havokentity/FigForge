@@ -89,7 +89,7 @@ importer reads. Change one side, change the other. Everything else is detail.
 | ✎ Vector / icon | rasterized PNG, hash-deduped |
 | 🅣 Text | `TextMeshProUGUI` + per-family/style font mapping |
 | 🔘 `Btn_<name>_<Ref>` / `Inp_<name>_<Ref>` layer | a real **canonical prefab** instance |
-| 🗂 Several frames | one navigable scene — `FigForgeScreen` frames under a `FrameManager` |
+| 🗂 Several frames | one navigable scene — `FigForgeScreen` frames under a `UIFrameManager` |
 | 👻 Empty/placeholder paint, failed export | falls back to the fill colour — **no junk PNG, no white box** |
 
 Plus, in the plugin itself: exclude layers, merge a container to one PNG,
@@ -128,7 +128,7 @@ Follow a single frame through the machine; every capability shows up along the w
 >
 > **5 · Unity rebuilds it.** Anchored hierarchy under a `Canvas`, fonts mapped to
 > `TMP_FontAsset`s, canonical layers swapped for prefab instances, and each frame
-> shown by a `FrameManager` as one `FigForgeScreen` — many frames → one
+> shown by a `UIFrameManager` as one `FigForgeScreen` — many frames → one
 > navigable, multi-page scene.
 
 ---

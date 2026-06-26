@@ -50,7 +50,7 @@ namespace FigForge
         float _customRefHeight = 1080f;
         bool _newCanvas = false;   // default: reuse the scene's canvas
         Canvas _existingCanvas;
-        bool _connectedScene = true;       // build under a shared FrameManager
+        bool _connectedScene = true;       // build under a shared UIFrameManager
         bool _disableRaycasts = true;
         bool _includeGroupsInAccessors = true;
         bool _componentsOnlyAccessors = true;  // accessors for controls only; labels/images need a [s] name marker
@@ -529,7 +529,7 @@ namespace FigForge
                     else
                     {
                         _output = (OutputMode)EditorGUILayout.EnumPopup("Output", _output);
-                        _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (FrameManager toggles pages)", _connectedScene, _styles.toggle);
+                        _connectedScene = EditorGUILayout.ToggleLeft("Connected scene (UIFrameManager toggles pages)", _connectedScene, _styles.toggle);
                         _newCanvas = EditorGUILayout.ToggleLeft("Create new Canvas (off = add to existing)", _newCanvas, _styles.toggle);
                         if (!_newCanvas)
                         {
@@ -712,10 +712,10 @@ namespace FigForge
                 if (!canvasCreated && !ConfirmPageForge(new List<LoadedScreen> { ls }, scope, projectName, false))
                 { Log("Forge cancelled — manual controls preserved", MessageType.Info); return; }
 
-                FrameManager mgr = null;
+                UIFrameManager mgr = null;
                 if (_connectedScene)
                 {
-                    mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
+                    mgr = canvas.GetComponent<UIFrameManager>() ?? canvas.gameObject.AddComponent<UIFrameManager>();
                     mgr.editorColumns = _editorColumns;
                 }
 
@@ -729,10 +729,10 @@ namespace FigForge
                 if (mgr != null)
                 {
                     mgr.Register(screen);
-                    Log($"registered page '{screen.ScreenKey}' on FrameManager", MessageType.Info);
+                    Log($"registered page '{screen.ScreenKey}' on UIFrameManager", MessageType.Info);
                 }
 
-                // Generate + wire the strongly-typed accessor layer (Frames.<Frame> + the
+                // Generate + wire the strongly-typed accessor layer (UIFrames.<Frame> + the
                 // FigForgeFrame subclass). Compile is deferred a tick (a mid-import reload would
                 // abort the build); the post-compile hook swaps in the subclass + wires its refs.
                 GenerateAndWireFrame(page, _manifest, ctx, screen, "");
@@ -1007,7 +1007,7 @@ namespace FigForge
                 Log($"included {customCount} Unity customization accessor(s) for frame '{model.className}'", MessageType.Info);
             // When the generated code is unchanged, no compile follows this import and the
             // [DidReloadScripts] upgrade never fires — the rebuilt page would stay on the
-            // base FigForgeFrame (Frames.X resolves null). Upgrade now; if a compile IS
+            // base FigForgeFrame (UIFrames.X resolves null). Upgrade now; if a compile IS
             // pending, the reload hook covers it instead (idempotent).
             FrameCodeGenWire.RequestUpgrade();
         }
@@ -1288,7 +1288,7 @@ namespace FigForge
         }
 
         // Lay a root frame out in an authoring grid (top-left anchored) so the frames
-        // don't overlap in the editor. Runtime FrameManager.Show still fills one frame.
+        // don't overlap in the editor. Runtime UIFrameManager.Show still fills one frame.
         void SpreadFrame(GameObject page, int index, Manifest m, int columns)
         {
             var rt = page.GetComponent<RectTransform>();
@@ -1314,7 +1314,7 @@ namespace FigForge
             EditorUtility.SetDirty(page);
         }
 
-        void WarmUpImportedFrames(FrameManager mgr)
+        void WarmUpImportedFrames(UIFrameManager mgr)
         {
             if (mgr == null) return;
             var warmed = new HashSet<GameObject>();
@@ -1375,14 +1375,14 @@ namespace FigForge
                 var canvas = ResolveCanvas(out bool canvasCreated);
                 if (!canvasCreated && !ConfirmPageForge(loaded, ImportScope(canvas.transform), proj.name, includeUnityCustomizations))
                 { Log("Forge cancelled — manual controls preserved", MessageType.Info); return false; }
-                var mgr = canvas.GetComponent<FrameManager>() ?? canvas.gameObject.AddComponent<FrameManager>();
+                var mgr = canvas.GetComponent<UIFrameManager>() ?? canvas.gameObject.AddComponent<UIFrameManager>();
                 mgr.editorColumns = _editorColumns;
                 mgr.screens.Clear();
                 RemoveStaleImported(canvas.transform, proj.name, new HashSet<string>(loaded.Select(s => s.importKey)));
 
                 // Declare the full set of frame class names this import will generate so every
                 // per-frame WriteFiles shares one reserved set (sections resolve to a single
-                // nested class) and EndBatch can sweep Frames.<Old>.g.cs left by a Figma rename/
+                // nested class) and EndBatch can sweep UIFrames.<Old>.g.cs left by a Figma rename/
                 // remove. Overlays have no frame class (see WriteFiles), so they're excluded —
                 // mirrors BuildModel's className = ToIdentifier(displayName ?? name).
                 var expectedFrameClasses = new HashSet<string>();
@@ -1460,7 +1460,7 @@ namespace FigForge
                         ovCanvas.overrideSorting = true;
                         ovCanvas.sortingOrder = 32750;
                         if (ovGo.GetComponent<GraphicRaycaster>() == null) ovGo.AddComponent<GraphicRaycaster>();
-                        // Fills the canvas at play-time (it's never FrameManager-driven), so its
+                        // Fills the canvas at play-time (it's never UIFrameManager-driven), so its
                         // dialogs cover the screen wherever the editor spread left the layer.
                         if (ovGo.GetComponent<FigForgeOverlayLayer>() == null) ovGo.AddComponent<FigForgeOverlayLayer>();
                         GenerateAndWireFrame(ovGo, ov.m, ovCtx, ovFrame, ov.ps.section, includeUnityCustomizations, isOverlay: true);
@@ -1541,7 +1541,7 @@ namespace FigForge
             // Also LogError so the failure shows in the Console even when the importer
             // window isn't focused (the per-screen inner catches already do this).
             catch (System.Exception e) { Debug.LogError($"[FigForge] page build failed: {e}"); Log($"page build failed: {e.Message}\n{e.StackTrace}", MessageType.Error); return false; }
-            // EndBatch sweeps orphan Frames.<Old>.g.cs and clears the shared reserved set. In the
+            // EndBatch sweeps orphan UIFrames.<Old>.g.cs and clears the shared reserved set. In the
             // finally so a mid-import throw can't leave the batch open (which would make the NEXT
             // single-frame import wrongly think it's still in a full run).
             finally { FrameCodeGenDriver.EndBatch(); EditorUtility.ClearProgressBar(); AssetDatabase.SaveAssets(); }
@@ -1747,7 +1747,7 @@ namespace FigForge
             var existing = Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None)
                 .FirstOrDefault(c => c.transform.parent == null && IsFigForgeCanvasMode(c.renderMode));
             if (!_newCanvas && existing != null) return existing;
-            if (_connectedScene && existing != null && existing.GetComponent<FrameManager>() != null) return existing;
+            if (_connectedScene && existing != null && existing.GetComponent<UIFrameManager>() != null) return existing;
 
             created = true;
             var go = new GameObject("FigForge Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));

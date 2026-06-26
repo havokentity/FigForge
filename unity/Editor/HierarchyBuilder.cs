@@ -4306,8 +4306,8 @@ namespace FigForge
         //      accessors become scoped APIs instead of also leaking children flat.
         // v55: generated group scopes and FigForge controls expose visibility helpers.
         // v56: remove the old Visible aliases from generated groups/controls.
-        // v57: generated Frames core exposes After(seconds, action) delay helper.
-        // v58: Frames.After returns a chainable delay sequence with Cancel().
+        // v57: generated UIFrames core exposes After(seconds, action) delay helper.
+        // v58: UIFrames.After returns a chainable delay sequence with Cancel().
         // v59: canonical Modal/Dialog and Toast/Notification controls.
         // v60: canonical controls capture a child named Icon as a reusable sprite
         //      and wire it through FigForgeBindings.icon / generated Icon slots.

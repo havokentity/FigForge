@@ -4,8 +4,8 @@
 // mapped C# types) and writes the generated accessor files into the project:
 //   Assets/FigForge/Generated/
 //     FigForge.Generated.asmdef
-//     Frames/<Frame>.g.cs (+ .meta with a deterministic GUID)
-//     FrameManager.<Frame>.g.cs   (one partial per frame; no cross-import clobber)
+//     UIFrames/<Frame>.g.cs (+ .meta with a deterministic GUID)
+//     UIFrames.<Frame>.g.cs   (one partial per frame; no cross-import clobber)
 //
 // The compile is scheduled via delayCall so the script import + domain reload happen
 // AFTER the current import method returns (writing .cs + Refresh mid-import would
@@ -23,12 +23,12 @@ namespace FigForge
     internal static class FrameCodeGenDriver
     {
         const string GenRoot = "Assets/FigForge/Generated";
-        const string FramesDir = GenRoot + "/Frames";
+        const string UIFramesDir = GenRoot + "/UIFrames";
 
         // ---- import batch (full multi-frame import) -----------------------------------
         // A full project import calls WriteFiles once per frame. Without a shared notion of
         // "every frame in THIS import", each WriteFiles rebuilds its cross-frame reserved set
-        // by scanning Frames.*.g.cs on disk — which (a) varies between frames as files are
+        // by scanning UIFrames.*.g.cs on disk — which (a) varies between frames as files are
         // written, so two frames in one section can compute different section class names
         // (CS0102), and (b) harvests orphaned files left by renamed/removed frames as if they
         // were real, and never deletes them. A batch fixes both: the importer declares the
@@ -51,8 +51,8 @@ namespace FigForge
                     if (!string.IsNullOrEmpty(n)) _batchFrameClassNames.Add(n);
         }
 
-        /// <summary>Close a full-import batch and sweep orphaned Frames.&lt;Old&gt;.g.cs /
-        /// Frames/&lt;Old&gt;.g.cs left by frames renamed or removed in Figma. Only runs for a
+        /// <summary>Close a full-import batch and sweep orphaned UIFrames.&lt;Old&gt;.g.cs /
+        /// UIFrames/&lt;Old&gt;.g.cs left by frames renamed or removed in Figma. Only runs for a
         /// full import (a batch was open); a single-frame rebuild never sweeps.</summary>
         public static void EndBatch()
         {
@@ -262,7 +262,7 @@ namespace FigForge
 
         public static void WriteFiles(FrameModel f)
         {
-            Directory.CreateDirectory(FramesDir);
+            Directory.CreateDirectory(UIFramesDir);
             bool changed = false;
             changed |= WriteIfChanged(GenRoot + "/FigForge.Generated.asmdef", FrameCodeGen.EmitAsmdef());
             // Deterministic .asmdef.meta so the asmdef GUID is source-control-stable across machines
@@ -270,23 +270,23 @@ namespace FigForge
             changed |= WriteIfChanged(GenRoot + "/FigForge.Generated.asmdef.meta", FrameCodeGen.EmitAsmdefMeta());
 
             // Overlay layers are NOT navigable screens — they don't get a `<Frame> : FigForgeFrame`
-            // class or a Frames.X accessor (and a layer named "Dialogs" would collide with the static
+            // class or a UIFrames.X accessor (and a layer named "Dialogs" would collide with the static
             // `Dialogs` accessor class). They only contribute global Dialogs.<Name> accessors below.
             if (!f.isOverlay)
             {
-                string frameCs = FramesDir + "/" + f.className + ".g.cs";
+                string frameCs = UIFramesDir + "/" + f.className + ".g.cs";
                 changed |= WriteIfChanged(frameCs, FrameCodeGen.EmitFrameClass(f));
                 changed |= WriteIfChanged(frameCs + ".meta", FrameCodeGen.EmitScriptMeta(f.scriptGuid));
 
-                changed |= WriteGroupFiles(f); // one component per group, in Frames/<Frame>.g/
+                changed |= WriteGroupFiles(f); // one component per group, in UIFrames/<Frame>.g/
 
-                // A section shares `partial class Frames` with every frame's `<Frame> <Frame>`
+                // A section shares `partial class UIFrames` with every frame's `<Frame> <Frame>`
                 // member; reserve this frame's section against ALL frame class names (gathered
-                // from sibling Frames.<class>.g.cs filenames + this frame) so a section that equals
+                // from sibling UIFrames.<class>.g.cs filenames + this frame) so a section that equals
                 // a frame's class name is renamed instead of emitting a duplicate member (CS0102).
                 var frameClassNames = SiblingFrameClassNames(f.className);
-                changed |= WriteIfChanged(GenRoot + "/Frames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f, frameClassNames));
-                changed |= WriteIfChanged(GenRoot + "/Frames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
+                changed |= WriteIfChanged(GenRoot + "/UIFrames." + f.className + ".g.cs", FrameCodeGen.EmitFrameManagerForFrame(f, frameClassNames));
+                changed |= WriteIfChanged(GenRoot + "/UIFrames.Core.g.cs", FrameCodeGen.EmitFramesCore()); // navigation (Show/Current)
             }
 
             // Overlay layers also surface their FigForgeModals as global Dialogs.<Name>.
@@ -313,13 +313,13 @@ namespace FigForge
                 EditorApplication.delayCall += () => AssetDatabase.Refresh();
         }
 
-        // One generated component file per group, in a folder beside the frame: Frames/<Frame>.g/.
+        // One generated component file per group, in a folder beside the frame: UIFrames/<Frame>.g/.
         // Files are deterministically named + GUID'd (seeded by frame + group type) so prefab
         // YAML can reference the group component before it compiles. Stale files from removed or
         // renamed groups are deleted, and the folder is dropped when the frame has no groups.
         static bool WriteGroupFiles(FrameModel f)
         {
-            string dir = FramesDir + "/" + f.className + ".g";
+            string dir = UIFramesDir + "/" + f.className + ".g";
             bool changed = false;
             var expected = new HashSet<string>();
 
@@ -376,7 +376,7 @@ namespace FigForge
             return removed;
         }
 
-        // Full-import sweep (EndBatch only): delete Frames.<Old>.g.cs files and Frames/<Old>.g.cs
+        // Full-import sweep (EndBatch only): delete UIFrames.<Old>.g.cs files and UIFrames/<Old>.g.cs
         // frame classes (+ their <Old>.g group folders) whose class name is no longer expected —
         // i.e. a frame renamed or removed in Figma. The filename is the authoritative class name
         // (body-free), same convention SiblingFrameClassNames relies on. Scoped to a FULL import so
@@ -385,13 +385,13 @@ namespace FigForge
         {
             if (!Directory.Exists(GenRoot)) return;
 
-            // Stale Frames.<class>.g.cs (the per-frame accessor partial).
-            const string fmPrefix = "Frames.";
+            // Stale UIFrames.<class>.g.cs (the per-frame accessor partial).
+            const string fmPrefix = "UIFrames.";
             const string suffix = ".g.cs";
-            foreach (var file in Directory.GetFiles(GenRoot, "Frames.*.g.cs"))
+            foreach (var file in Directory.GetFiles(GenRoot, "UIFrames.*.g.cs"))
             {
                 string name = Path.GetFileName(file);
-                if (name == "Frames.Core.g.cs") continue;          // the fixed core, not a frame
+                if (name == "UIFrames.Core.g.cs") continue;          // the fixed core, not a frame
                 if (name.Length <= fmPrefix.Length + suffix.Length) continue;
                 string cls = name.Substring(fmPrefix.Length, name.Length - fmPrefix.Length - suffix.Length);
                 if (expected.Contains(cls)) continue;
@@ -400,7 +400,7 @@ namespace FigForge
 
             // Stale Dialogs.<class>.g.cs (overlay accessors whose frame was renamed/removed) —
             // keyed by the same frame className, and DialogFrameClassNames harvests these too, so
-            // an orphan would poison the reserved set just like an orphan Frames.<class>.g.cs.
+            // an orphan would poison the reserved set just like an orphan UIFrames.<class>.g.cs.
             const string dlgPrefix = "Dialogs.";
             foreach (var file in Directory.GetFiles(GenRoot, "Dialogs.*.g.cs"))
             {
@@ -412,17 +412,17 @@ namespace FigForge
                 DeleteAsset(GenRoot + "/" + name);
             }
 
-            // Stale Frames/<class>.g.cs (the FigForgeFrame subclass) + its <class>.g group folder.
-            if (Directory.Exists(FramesDir))
+            // Stale UIFrames/<class>.g.cs (the FigForgeFrame subclass) + its <class>.g group folder.
+            if (Directory.Exists(UIFramesDir))
             {
-                foreach (var file in Directory.GetFiles(FramesDir, "*.g.cs"))
+                foreach (var file in Directory.GetFiles(UIFramesDir, "*.g.cs"))
                 {
                     string name = Path.GetFileName(file);
                     if (name.Length <= suffix.Length) continue;
                     string cls = name.Substring(0, name.Length - suffix.Length);
                     if (expected.Contains(cls)) continue;
-                    DeleteAsset(FramesDir + "/" + name);
-                    string groupDir = FramesDir + "/" + cls + ".g";
+                    DeleteAsset(UIFramesDir + "/" + name);
+                    string groupDir = UIFramesDir + "/" + cls + ".g";
                     if (Directory.Exists(groupDir) && !DeleteAsset(groupDir))
                         Debug.LogWarning($"[FigForge] could not delete stale group folder '{groupDir}' — remove it manually.");
                 }
@@ -430,12 +430,12 @@ namespace FigForge
         }
 
         // ---- cross-frame identifier reservation (CS0102 guards) -----------------------
-        // Frames are generated one at a time, each writing its own `Frames.<class>.g.cs` /
+        // UIFrames are generated one at a time, each writing its own `UIFrames.<class>.g.cs` /
         // `Dialogs.<class>.g.cs` into a SHARED partial class. A duplicate member emitted by a
         // sibling file is a cross-file CS0102 that WriteIfChanged can't catch (it only diffs the
         // one file). These helpers read what siblings already own so the current file can dodge it.
 
-        // Every frame's class name, harvested from the sibling `Frames.<class>.g.cs` filenames
+        // Every frame's class name, harvested from the sibling `UIFrames.<class>.g.cs` filenames
         // (the filename is the authoritative, body-free source) plus the frame being written.
         static HashSet<string> SiblingFrameClassNames(string selfClassName)
         {
@@ -453,12 +453,12 @@ namespace FigForge
             var names = new HashSet<string>(System.StringComparer.Ordinal);
             if (!string.IsNullOrEmpty(selfClassName)) names.Add(selfClassName);
             if (!Directory.Exists(GenRoot)) return names;
-            const string prefix = "Frames.";
+            const string prefix = "UIFrames.";
             const string suffix = ".g.cs";
-            foreach (var file in Directory.GetFiles(GenRoot, "Frames.*.g.cs"))
+            foreach (var file in Directory.GetFiles(GenRoot, "UIFrames.*.g.cs"))
             {
                 string name = Path.GetFileName(file);
-                if (name == "Frames.Core.g.cs") continue;          // the fixed core, not a frame
+                if (name == "UIFrames.Core.g.cs") continue;          // the fixed core, not a frame
                 if (name.Length <= prefix.Length + suffix.Length) continue;
                 names.Add(name.Substring(prefix.Length, name.Length - prefix.Length - suffix.Length));
             }

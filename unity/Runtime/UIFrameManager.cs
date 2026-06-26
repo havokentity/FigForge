@@ -1,5 +1,5 @@
 // =============================================================================
-// FigForge — FrameManager. Sits on the shared Canvas and shows one route frame at
+// FigForge — UIFrameManager. Sits on the shared Canvas and shows one route frame at
 // a time, plus the matching shell frame when that route mounts inside shell chrome.
 // =============================================================================
 
@@ -7,17 +7,17 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using UnityEngine;
 
-// FrameManager is internal — the generated `Frames` class (project assembly) and the
-// importer/editor reach its members; consumer code goes through `Frames`, not this.
+// UIFrameManager is internal — the generated `UIFrames` class (project assembly) and the
+// importer/editor reach its members; consumer code goes through `UIFrames`, not this.
 [assembly: InternalsVisibleTo("FigForge.Editor")]
 [assembly: InternalsVisibleTo("FigForge.Generated")]
 
 namespace FigForge
 {
     // Internal engine: shows one route frame at a time, optionally with its shell.
-    // NOT the public API — the generated `Frames` class is the entry point and proxies into this.
+    // NOT the public API — the generated `UIFrames` class is the entry point and proxies into this.
     [DisallowMultipleComponent]
-    internal class FrameManager : MonoBehaviour
+    internal class UIFrameManager : MonoBehaviour
     {
         [Tooltip("All pages this manager controls (children with a FigForgeFrame).")]
         public List<FigForgeFrame> screens = new List<FigForgeFrame>();
@@ -30,9 +30,9 @@ namespace FigForge
 
         public FigForgeFrame Current { get; private set; }
 
-        // The active manager — the generated `Frames` accessors resolve through this.
+        // The active manager — the generated `UIFrames` accessors resolve through this.
         // Set in play mode; null in the editor.
-        internal static FrameManager Active { get; private set; }
+        internal static UIFrameManager Active { get; private set; }
 
         protected void Awake()
         {
@@ -42,14 +42,14 @@ namespace FigForge
         protected void OnDestroy() { if (Active == this) Active = null; }
 
         // The active manager, or — when none is set (edit mode) — the one in the open
-        // scene, so the generated `Frames` accessors resolve outside play mode too.
-        internal static FrameManager Resolve()
+        // scene, so the generated `UIFrames` accessors resolve outside play mode too.
+        internal static UIFrameManager Resolve()
         {
             if (Active != null) return Active;
 #if UNITY_2023_1_OR_NEWER
-            return Object.FindFirstObjectByType<FrameManager>();
+            return Object.FindFirstObjectByType<UIFrameManager>();
 #else
-            return Object.FindObjectOfType<FrameManager>();
+            return Object.FindObjectOfType<UIFrameManager>();
 #endif
         }
 
@@ -148,7 +148,7 @@ namespace FigForge
         {
             if (frame != null && !screens.Contains(frame))
             {
-                Debug.LogWarning($"[FigForge] FrameManager: frame '{frame.ScreenKey}' is not registered with this manager.");
+                Debug.LogWarning($"[FigForge] UIFrameManager: frame '{frame.ScreenKey}' is not registered with this manager.");
                 return false;
             }
             return ShowInternal(frame, frame != null ? frame.ScreenKey : "<none>", runGuards, 0, null);
@@ -164,7 +164,7 @@ namespace FigForge
             if (frame == null) return false;
             if (!screens.Contains(frame))
             {
-                Debug.LogWarning($"[FigForge] FrameManager: persistent frame '{frame.ScreenKey}' is not registered with this manager.");
+                Debug.LogWarning($"[FigForge] UIFrameManager: persistent frame '{frame.ScreenKey}' is not registered with this manager.");
                 return false;
             }
             FillParent(frame.GetComponent<RectTransform>());
@@ -190,7 +190,7 @@ namespace FigForge
             BindAll();
             if (target == null)
             {
-                Debug.LogWarning($"[FigForge] FrameManager: no screen named '{label}'.");
+                Debug.LogWarning($"[FigForge] UIFrameManager: no screen named '{label}'.");
                 return false;
             }
 
@@ -208,13 +208,13 @@ namespace FigForge
                 {
                     if (redirectDepth >= MaxRedirectDepth)
                     {
-                        Debug.LogWarning($"[FigForge] FrameManager: navigation redirect loop (>{MaxRedirectDepth}) at '{label}' — aborting.");
+                        Debug.LogWarning($"[FigForge] UIFrameManager: navigation redirect loop (>{MaxRedirectDepth}) at '{label}' — aborting.");
                         return false;
                     }
                     var redirect = decision.RedirectFrame ?? Find(decision.RedirectKey);
                     if (redirect == null)
                     {
-                        Debug.LogWarning($"[FigForge] FrameManager: guard redirect target '{decision.RedirectKey ?? "<frame>"}' not found.");
+                        Debug.LogWarning($"[FigForge] UIFrameManager: guard redirect target '{decision.RedirectKey ?? "<frame>"}' not found.");
                         return false;
                     }
                     // Forward the originating link so the redirected target's guards keep
@@ -226,7 +226,7 @@ namespace FigForge
             var activeShell = target.usesShell ? FindShell(target.shellKey) : null;
             if (target.usesShell && activeShell == null)
             {
-                Debug.LogWarning($"[FigForge] FrameManager: screen '{target.ScreenKey}' requires shell '{target.shellKey}', but no matching shell is registered.");
+                Debug.LogWarning($"[FigForge] UIFrameManager: screen '{target.ScreenKey}' requires shell '{target.shellKey}', but no matching shell is registered.");
                 return false;
             }
             // Claim a generation after all early-return guards: any nested Show triggered
@@ -265,7 +265,7 @@ namespace FigForge
         // ---- navigation guards (preconditions) ----------------------------------------
         // Checked before Show switches frames. Guards live on THIS manager instance (not
         // static), so nothing survives a domain reload. Public entry: FigForgeNavigation
-        // and the generated Frames.Guard helpers.
+        // and the generated UIFrames.Guard helpers.
         readonly Dictionary<string, List<NavGuard>> _guards = new Dictionary<string, List<NavGuard>>();
         readonly List<NavGuard> _globalGuards = new List<NavGuard>();
         internal event System.Action<NavContext, NavDecision> NavigationBlocked;
